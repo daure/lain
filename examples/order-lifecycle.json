@@ -1,0 +1,767 @@
+{
+  "schemaVersion": 1,
+  "title": "Order lifecycle",
+  "description": "Follow payment callbacks through capture, duplicate acknowledgement, and issuer decline. Walk parcels through first-attempt delivery, redelivery, and return to sender. Inspect the three payment exchanges as ordered messages with concrete recorded state.",
+  "domain": {
+    "entities": [
+      { "id": "order", "label": "Order", "attributes": [{ "id": "number", "label": "Order number" }, { "id": "paymentStatus", "label": "Payment status" }, { "id": "total", "label": "Total (EUR)" }] },
+      { "id": "payment", "label": "Payment", "attributes": [{ "id": "status", "label": "Status" }, { "id": "amount", "label": "Amount (EUR)" }, { "id": "failureReason", "label": "Failure reason" }] },
+      { "id": "fulfillment", "label": "Fulfillment", "attributes": [{ "id": "status", "label": "Work status" }, { "id": "warehouse", "label": "Warehouse" }] },
+      { "id": "receipt", "label": "Receipt", "attributes": [{ "id": "eventId", "label": "Callback event ID" }, { "id": "handled", "label": "Event handled" }, { "id": "lookupCount", "label": "Receipt lookups" }, { "id": "responseStatus", "label": "HTTP response status" }] },
+      { "id": "shipment", "label": "Shipment", "attributes": [{ "id": "status", "label": "Parcel status" }, { "id": "trackingNumber", "label": "Tracking number" }, { "id": "deliveredAt", "label": "Delivered at" }, { "id": "carrier", "label": "Carrier" }, { "id": "destinationCity", "label": "Destination city" }, { "id": "deliveryAttempts", "label": "Delivery attempts" }, { "id": "deliveryIssue", "label": "Delivery issue" }, { "id": "returnReason", "label": "Return reason" }, { "id": "returnedAt", "label": "Returned at" }] }
+    ],
+    "relationships": [
+      { "id": "order-payments", "label": "has payment", "sourceEntityId": "order", "targetEntityId": "payment", "sourceCardinality": "one", "targetCardinality": "many" },
+      { "id": "order-fulfillments", "label": "queues work", "sourceEntityId": "order", "targetEntityId": "fulfillment", "sourceCardinality": "one", "targetCardinality": "many" },
+      { "id": "payment-receipts", "label": "records callback", "sourceEntityId": "payment", "targetEntityId": "receipt", "sourceCardinality": "one", "targetCardinality": "many" },
+      { "id": "fulfillment-shipment", "label": "packs parcel", "sourceEntityId": "fulfillment", "targetEntityId": "shipment", "sourceCardinality": "one", "targetCardinality": "one" },
+      { "id": "order-shipments", "label": "tracks parcel", "sourceEntityId": "order", "targetEntityId": "shipment", "sourceCardinality": "one", "targetCardinality": "many" }
+    ]
+  },
+  "diagrams": [
+    {
+      "id": "payment-flow", "title": "Payment handling", "kind": "flow",
+      "nodes": [
+        { "id": "callback", "label": "Callback received", "entityIds": ["payment", "receipt"] },
+        { "id": "check", "label": "Receipt checked", "entityIds": ["receipt"] },
+        { "id": "capture", "label": "Capture the payment", "entityIds": ["order", "payment"] },
+        { "id": "fulfill", "label": "Queue fulfillment", "entityIds": ["fulfillment", "receipt"] },
+        { "id": "existing", "label": "Event already handled", "entityIds": ["receipt"] },
+        { "id": "ignore", "label": "Ignore the duplicate callback", "entityIds": ["order", "payment", "fulfillment", "receipt"] },
+        { "id": "decline", "label": "Record the declined payment", "entityIds": ["order", "payment", "receipt"] }
+      ],
+      "edges": [
+        { "id": "callback-check", "sourceNodeId": "callback", "targetNodeId": "check", "label": "Look up event ID" },
+        { "id": "check-capture", "sourceNodeId": "check", "targetNodeId": "capture", "label": "New successful callback" },
+        { "id": "capture-fulfill", "sourceNodeId": "capture", "targetNodeId": "fulfill", "label": "Payment captured" },
+        { "id": "check-existing", "sourceNodeId": "check", "targetNodeId": "existing", "label": "Receipt already handled" },
+        { "id": "existing-check", "sourceNodeId": "existing", "targetNodeId": "check", "label": "Verify saved receipt" },
+        { "id": "check-ignore", "sourceNodeId": "check", "targetNodeId": "ignore", "label": "Return HTTP 200" },
+        { "id": "check-decline", "sourceNodeId": "check", "targetNodeId": "decline", "label": "Issuer declined" }
+      ]
+    },
+    {
+      "id": "shipment-state", "title": "Shipment lifecycle", "kind": "state",
+      "nodes": [
+        { "id": "packed", "label": "Parcel packed", "entityIds": ["fulfillment", "shipment"] },
+        { "id": "transit", "label": "In transit", "entityIds": ["shipment", "fulfillment"] },
+        { "id": "delivered", "label": "Parcel delivered", "entityIds": ["shipment", "fulfillment"] },
+        { "id": "closed", "label": "Fulfillment work closed", "entityIds": ["order", "fulfillment", "shipment"] },
+        { "id": "delivery-failed", "label": "Delivery attempt failed", "entityIds": ["shipment", "fulfillment"] },
+        { "id": "returned", "label": "Returned to sender", "entityIds": ["shipment", "fulfillment"] }
+      ],
+      "edges": [
+        { "id": "packed-transit", "sourceNodeId": "packed", "targetNodeId": "transit", "label": "Carrier pickup" },
+        { "id": "transit-delivered", "sourceNodeId": "transit", "targetNodeId": "delivered", "label": "Delivery confirmed" },
+        { "id": "delivered-closed", "sourceNodeId": "delivered", "targetNodeId": "closed", "label": "Acknowledge completed work" },
+        { "id": "transit-delivery-failed", "sourceNodeId": "transit", "targetNodeId": "delivery-failed", "label": "Recipient unavailable" },
+        { "id": "delivery-failed-transit", "sourceNodeId": "delivery-failed", "targetNodeId": "transit", "label": "Redelivery scheduled" },
+        { "id": "delivery-failed-returned", "sourceNodeId": "delivery-failed", "targetNodeId": "returned", "label": "Recipient declines redelivery" },
+        { "id": "returned-closed", "sourceNodeId": "returned", "targetNodeId": "closed", "label": "Acknowledge returned parcel" }
+      ]
+    },
+    {
+      "id": "payment-sequence", "title": "Payment callback sequence", "kind": "sequence",
+      "nodes": [
+        { "id": "callback", "label": "Callback received", "entityIds": ["payment", "receipt"] },
+        { "id": "check", "label": "Receipt checked", "entityIds": ["receipt"] },
+        { "id": "capture", "label": "Capture the payment", "entityIds": ["order", "payment"] },
+        { "id": "fulfill", "label": "Queue fulfillment", "entityIds": ["fulfillment", "receipt"] },
+        { "id": "existing", "label": "Event already handled", "entityIds": ["receipt"] },
+        { "id": "ignore", "label": "Ignore the duplicate callback", "entityIds": ["order", "payment", "fulfillment", "receipt"] },
+        { "id": "decline", "label": "Record the declined payment", "entityIds": ["order", "payment", "receipt"] }
+      ],
+      "edges": [
+        { "id": "callback-check", "sourceNodeId": "callback", "targetNodeId": "check", "label": "Look up event ID" },
+        { "id": "check-capture", "sourceNodeId": "check", "targetNodeId": "capture", "label": "New successful callback" },
+        { "id": "capture-fulfill", "sourceNodeId": "capture", "targetNodeId": "fulfill", "label": "Payment captured" },
+        { "id": "check-existing", "sourceNodeId": "check", "targetNodeId": "existing", "label": "Receipt already handled" },
+        { "id": "existing-check", "sourceNodeId": "existing", "targetNodeId": "check", "label": "Verify saved receipt" },
+        { "id": "check-ignore", "sourceNodeId": "check", "targetNodeId": "ignore", "label": "Return HTTP 200" },
+        { "id": "check-decline", "sourceNodeId": "check", "targetNodeId": "decline", "label": "Issuer declined" }
+      ],
+      "sequence": {
+        "participants": [
+          { "id": "gateway", "label": "Gateway" },
+          { "id": "payment-service", "label": "Payment service" },
+          { "id": "receipt-store", "label": "Receipt store" },
+          { "id": "fulfillment-queue", "label": "Fulfillment queue" }
+        ],
+        "messages": [
+          { "nodeId": "callback", "fromParticipantId": "gateway", "toParticipantId": "payment-service" },
+          { "nodeId": "check", "fromParticipantId": "payment-service", "toParticipantId": "receipt-store" },
+          { "nodeId": "capture", "fromParticipantId": "payment-service", "toParticipantId": "payment-service" },
+          { "nodeId": "fulfill", "fromParticipantId": "payment-service", "toParticipantId": "fulfillment-queue" },
+          { "nodeId": "existing", "fromParticipantId": "receipt-store", "toParticipantId": "payment-service" },
+          { "nodeId": "ignore", "fromParticipantId": "payment-service", "toParticipantId": "gateway" },
+          { "nodeId": "decline", "fromParticipantId": "payment-service", "toParticipantId": "payment-service" }
+        ],
+        "body": [
+          { "kind": "message", "nodeId": "callback" },
+          { "kind": "loop", "id": "receipt-verification", "guard": "Until receipt verification is complete", "body": [
+            { "kind": "message", "nodeId": "check" },
+            { "kind": "opt", "id": "handled-receipt", "guard": "Receipt was already handled", "body": [
+              { "kind": "message", "nodeId": "existing" }
+            ] }
+          ] },
+          { "kind": "alt", "id": "payment-outcome", "operands": [
+            { "id": "new-success", "guard": "New successful callback", "body": [
+              { "kind": "message", "nodeId": "capture" },
+              { "kind": "message", "nodeId": "fulfill" }
+            ] },
+            { "id": "duplicate-event", "guard": "Receipt was already handled", "body": [
+              { "kind": "message", "nodeId": "ignore" }
+            ] },
+            { "id": "issuer-decline", "guard": "Issuer declined payment", "body": [
+              { "kind": "message", "nodeId": "decline" }
+            ] }
+          ] }
+        ]
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "successful-callback", "title": "Successful callback", "diagramId": "payment-flow",
+      "occurrences": [
+        {
+          "id": "success-received", "nodeId": "callback", "incomingEdgeId": null,
+          "trigger": "POST /payments/callback · evt_481",
+          "narration": "A callback arrives for order ORD-1042. The service creates a receipt for evt_481. No payment or fulfillment work has been completed yet.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 0, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] }
+        },
+        {
+          "id": "success-checked", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "trigger": "receipt.lookup(evt_481)",
+          "narration": "The receipt has not been handled. The callback says the issuer authorized EUR 89.90, so this traversal takes the new-successful-callback branch.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 0, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] }
+        },
+        {
+          "id": "success-captured", "nodeId": "capture", "incomingEdgeId": "check-capture",
+          "trigger": "payment.capture(pay-72)",
+          "narration": "The payment is captured and the order becomes paid. A captured null failure reason means there is no failure. At the preceding occurrence that attribute was uncaptured.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] }
+        },
+        {
+          "id": "success-fulfilled", "nodeId": "fulfill", "incomingEdgeId": "capture-fulfill",
+          "trigger": "fulfillment.enqueue(ord-1042)",
+          "narration": "One fulfillment work item is created for the paid order. The receipt is marked handled and HTTP 200 acknowledges the callback. The order is ready for packing.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": 200 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        }
+      ]
+    },
+    {
+      "id": "duplicate-callback", "title": "Duplicate callback", "diagramId": "payment-flow",
+      "occurrences": [
+        {
+          "id": "duplicate-received", "nodeId": "callback", "incomingEdgeId": null,
+          "trigger": "POST /payments/callback · retry evt_481",
+          "narration": "The gateway retries an already handled callback. The order is paid and one fulfillment item exists. The response status is not captured before this retry; null after receipt means no response has been sent for this request yet.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 0 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 0, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        },
+        {
+          "id": "duplicate-first-check", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "trigger": "receipt.lookup(evt_481)",
+          "narration": "The first lookup finds the handled receipt. This occurrence belongs to the first visit to Receipt checked. The lookup count becomes one.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 0, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        },
+        {
+          "id": "duplicate-existing", "nodeId": "existing", "incomingEdgeId": "check-existing",
+          "trigger": "receipt.found(evt_481)",
+          "narration": "The service takes the already-handled branch. It does not capture a second payment or enqueue a second fulfillment. A verification read will revisit Receipt checked.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        },
+        {
+          "id": "duplicate-verification", "nodeId": "check", "incomingEdgeId": "existing-check",
+          "trigger": "receipt.verify(evt_481)",
+          "narration": "A second read verifies the saved receipt before acknowledgement. This is a separate occurrence at the same diagram node: its lookup count changes from one to two, not from zero to one.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 2, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        },
+        {
+          "id": "duplicate-ignored", "nodeId": "ignore", "incomingEdgeId": "check-ignore",
+          "trigger": "response.send(200)",
+          "narration": "HTTP 200 acknowledges the retry and stops further retries. The order remains paid, the payment remains captured, and exactly one fulfillment work item remains. No new work is created.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 2, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 2, "responseStatus": 200 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        }
+      ]
+    },
+    {
+      "id": "declined-payment", "title": "Declined payment", "diagramId": "payment-flow",
+      "occurrences": [
+        {
+          "id": "decline-received", "nodeId": "callback", "incomingEdgeId": null,
+          "trigger": "POST /payments/callback · evt_482",
+          "narration": "The issuer sends a declined-payment callback for a different order, ORD-1043. The service records the incoming event before deciding which branch to take.",
+          "before": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }] },
+          "after": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": false, "lookupCount": 0, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] }
+        },
+        {
+          "id": "decline-checked", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "trigger": "receipt.lookup(evt_482)",
+          "narration": "The receipt is new and unhandled. The issuer response is insufficient_funds, so this path takes the declined branch rather than capturing the payment.",
+          "before": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": false, "lookupCount": 0, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] },
+          "after": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] }
+        },
+        {
+          "id": "decline-recorded", "nodeId": "decline", "incomingEdgeId": "check-decline",
+          "trigger": "payment.decline(pay-73, insufficient_funds)",
+          "narration": "The order and payment become declined. The failure reason is captured as insufficient_funds. The handled receipt gets HTTP 200; the failed payment is acknowledged without creating fulfillment work.",
+          "before": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] },
+          "after": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "declined", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "declined", "amount": 44.5, "failureReason": "insufficient_funds" } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": true, "lookupCount": 1, "responseStatus": 200 } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] }
+        }
+      ]
+    },
+    {
+      "id": "parcel-delivered", "title": "Parcel delivered", "diagramId": "shipment-state",
+      "occurrences": [
+        {
+          "id": "shipment-packed", "nodeId": "packed", "incomingEdgeId": null,
+          "trigger": "warehouse.pack(ful-31)",
+          "narration": "Rotterdam packs the paid order for Utrecht with DemoParcel. The shipment is linked to the order and fulfillment work. Tracking is uncaptured; zero delivery attempts and null delivery and return metadata record a parcel awaiting pickup.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "packed", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "shipment-transit", "nodeId": "transit", "incomingEdgeId": "packed-transit",
+          "trigger": "carrier.pickup(ship-88)",
+          "narration": "DemoParcel collects the parcel in Rotterdam for Utrecht and assigns NL-003488. Fulfillment becomes dispatched and the shipment becomes in_transit. Pickup is not a delivery attempt, so the count remains zero.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "packed", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "in_transit", "trackingNumber": "NL-003488", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "shipment-delivered", "nodeId": "delivered", "incomingEdgeId": "transit-delivered",
+          "trigger": "carrier.delivered(ship-88)",
+          "narration": "DemoParcel confirms delivery in Utrecht on the first attempt at 2026-10-09T14:32:00Z. The shipment becomes delivered with one attempt and no delivery issue. Fulfillment becomes complete; the order remains paid.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "in_transit", "trackingNumber": "NL-003488", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "complete", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivered", "trackingNumber": "NL-003488", "deliveredAt": "2026-10-09T14:32:00Z", "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "shipment-closed", "nodeId": "closed", "incomingEdgeId": "delivered-closed",
+          "trigger": "fulfillment.acknowledge(ful-31)",
+          "narration": "The queue removes the completed fulfillment work item and its links. The delivered shipment remains linked directly to the order as the durable delivery record. Absent after means the work item has been removed, not that its attributes became null.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "complete", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivered", "trackingNumber": "NL-003488", "deliveredAt": "2026-10-09T14:32:00Z", "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivered", "trackingNumber": "NL-003488", "deliveredAt": "2026-10-09T14:32:00Z", "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        }
+      ]
+    },
+    {
+      "id": "sequence-successful-callback", "title": "Successful payment exchange", "diagramId": "payment-sequence",
+      "occurrences": [
+        {
+          "id": "sequence-received", "nodeId": "callback", "incomingEdgeId": null,
+          "trigger": "POST /payments/callback · evt_481",
+          "narration": "A callback arrives for order ORD-1042. The service creates a receipt for evt_481. No payment or fulfillment work has been completed yet.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 0, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] }
+        },
+        {
+          "id": "sequence-checked", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "trigger": "receipt.lookup(evt_481)",
+          "narration": "The receipt has not been handled. The callback says the issuer authorized EUR 89.90, so this traversal takes the new-successful-callback branch.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 0, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] }
+        },
+        {
+          "id": "sequence-captured", "nodeId": "capture", "incomingEdgeId": "check-capture",
+          "trigger": "payment.capture(pay-72)",
+          "narration": "The payment is captured and the order becomes paid. A captured null failure reason means there is no failure. At the preceding occurrence that attribute was uncaptured.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] }
+        },
+        {
+          "id": "sequence-fulfilled", "nodeId": "fulfill", "incomingEdgeId": "capture-fulfill",
+          "trigger": "fulfillment.enqueue(ord-1042)",
+          "narration": "One fulfillment work item is created for the paid order. The receipt is marked handled and HTTP 200 acknowledges the callback. The order is ready for packing.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": 200 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        }
+      ]
+    },
+    {
+      "id": "delivery-retry", "title": "Delivery after redelivery", "diagramId": "shipment-state",
+      "occurrences": [
+        {
+          "id": "retry-packed", "nodeId": "packed", "incomingEdgeId": null,
+          "trigger": "warehouse.pack(ful-31)",
+          "narration": "Rotterdam packs ORD-1042 for Utrecht with DemoParcel. The new shipment has zero delivery attempts and captured null delivery and return metadata. Tracking will be assigned at pickup.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "packed", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "retry-transit", "nodeId": "transit", "incomingEdgeId": "packed-transit",
+          "trigger": "carrier.pickup(ship-88)",
+          "narration": "DemoParcel collects the Utrecht parcel and assigns NL-003489. Fulfillment becomes dispatched and the shipment becomes in_transit. The carrier has not attempted delivery yet.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "packed", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "in_transit", "trackingNumber": "NL-003489", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "retry-failed", "nodeId": "delivery-failed", "incomingEdgeId": "transit-delivery-failed",
+          "trigger": "carrier.deliveryFailed(ship-88, recipient unavailable)",
+          "narration": "DemoParcel reaches Utrecht but the recipient is unavailable. The first attempt increments deliveryAttempts to one and records the delivery issue. The shipment becomes delivery_failed and fulfillment becomes exception; deliveredAt remains null.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "in_transit", "trackingNumber": "NL-003489", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "exception", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivery_failed", "trackingNumber": "NL-003489", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "retry-rescheduled", "nodeId": "transit", "incomingEdgeId": "delivery-failed-transit",
+          "trigger": "carrier.scheduleRedelivery(ship-88)",
+          "narration": "The recipient arranges another delivery with DemoParcel. The parcel returns to In transit and fulfillment becomes dispatched. This separate visit retains one completed attempt and its issue; scheduling does not count as a second attempt.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "exception", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivery_failed", "trackingNumber": "NL-003489", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "in_transit", "trackingNumber": "NL-003489", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "retry-delivered", "nodeId": "delivered", "incomingEdgeId": "transit-delivered",
+          "trigger": "carrier.delivered(ship-88)",
+          "narration": "DemoParcel delivers NL-003489 in Utrecht on the second attempt at 2026-10-10T14:32:00Z. The attempt count becomes two and the delivery issue clears to a captured null. Fulfillment becomes complete; return metadata remains null.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "in_transit", "trackingNumber": "NL-003489", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "complete", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivered", "trackingNumber": "NL-003489", "deliveredAt": "2026-10-10T14:32:00Z", "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 2, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "retry-closed", "nodeId": "closed", "incomingEdgeId": "delivered-closed",
+          "trigger": "fulfillment.acknowledge(ful-31)",
+          "narration": "The queue acknowledges completed work and removes ful-31 with its links. The paid order retains its direct link to the delivered parcel, including both delivery attempts and the final delivery timestamp.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "complete", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivered", "trackingNumber": "NL-003489", "deliveredAt": "2026-10-10T14:32:00Z", "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 2, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivered", "trackingNumber": "NL-003489", "deliveredAt": "2026-10-10T14:32:00Z", "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 2, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        }
+      ]
+    },
+    {
+      "id": "returned-to-sender", "title": "Returned to sender", "diagramId": "shipment-state",
+      "occurrences": [
+        {
+          "id": "return-packed", "nodeId": "packed", "incomingEdgeId": null,
+          "trigger": "warehouse.pack(ful-31)",
+          "narration": "Rotterdam packs the paid order for Utrecht with DemoParcel. The shipment is created with zero attempts and null delivery and return metadata. The order and fulfillment links identify the parcel's work item.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "packed", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "return-transit", "nodeId": "transit", "incomingEdgeId": "packed-transit",
+          "trigger": "carrier.pickup(ship-88)",
+          "narration": "DemoParcel picks up the parcel and assigns NL-003490 for Utrecht. The shipment becomes in_transit and fulfillment becomes dispatched. Delivery attempts remain zero because pickup does not reach the recipient.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "packed", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "in_transit", "trackingNumber": "NL-003490", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "return-failed", "nodeId": "delivery-failed", "incomingEdgeId": "transit-delivery-failed",
+          "trigger": "carrier.deliveryFailed(ship-88, recipient unavailable)",
+          "narration": "The recipient is unavailable when DemoParcel attempts delivery in Utrecht. The shipment records one attempt and recipient unavailable, with status delivery_failed. Fulfillment becomes exception while delivery and return timestamps remain null.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "in_transit", "trackingNumber": "NL-003490", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 0, "deliveryIssue": null, "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "exception", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivery_failed", "trackingNumber": "NL-003490", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "return-returned", "nodeId": "returned", "incomingEdgeId": "delivery-failed-returned",
+          "trigger": "recipient.declineRedelivery(ship-88) · carrier.returned(ship-88)",
+          "narration": "The recipient declines redelivery, so DemoParcel returns NL-003490 to Rotterdam at 2026-10-10T10:18:00Z. Shipment and fulfillment become returned. The record keeps one attempt, its delivery issue, and returnReason redelivery declined; deliveredAt stays null.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "exception", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "delivery_failed", "trackingNumber": "NL-003490", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": null, "returnedAt": null } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "returned", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "returned", "trackingNumber": "NL-003490", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": "redelivery declined", "returnedAt": "2026-10-10T10:18:00Z" } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        },
+        {
+          "id": "return-closed", "nodeId": "closed", "incomingEdgeId": "returned-closed",
+          "trigger": "fulfillment.acknowledge(ful-31)",
+          "narration": "The queue acknowledges the returned parcel and removes ful-31 with its links. The order keeps the returned shipment as a durable record. Payment status remains paid because this traversal records parcel handling, with no refund event.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "returned", "warehouse": "Rotterdam" } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "returned", "trackingNumber": "NL-003490", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": "redelivery declined", "returnedAt": "2026-10-10T10:18:00Z" } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }, { "relationshipId": "fulfillment-shipment", "sourceInstanceId": "ful-31", "targetInstanceId": "ship-88" }, { "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ship-88", "entityId": "shipment", "values": { "status": "returned", "trackingNumber": "NL-003490", "deliveredAt": null, "carrier": "DemoParcel", "destinationCity": "Utrecht", "deliveryAttempts": 1, "deliveryIssue": "recipient unavailable", "returnReason": "redelivery declined", "returnedAt": "2026-10-10T10:18:00Z" } }
+          ], "links": [{ "relationshipId": "order-shipments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ship-88" }] }
+        }
+      ]
+    },
+    {
+      "id": "sequence-duplicate-callback", "title": "Duplicate payment exchange", "diagramId": "payment-sequence",
+      "occurrences": [
+        {
+          "id": "sequence-duplicate-received", "nodeId": "callback", "incomingEdgeId": null,
+          "trigger": "POST /payments/callback · retry evt_481",
+          "narration": "The gateway retries an already handled callback. The order is paid and one fulfillment item exists. The response status is not captured before this retry; null after receipt means no response has been sent for this request yet.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 0 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 0, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        },
+        {
+          "id": "sequence-duplicate-first-check", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "trigger": "receipt.lookup(evt_481)",
+          "narration": "The first lookup finds the handled receipt. This occurrence belongs to the first visit to Receipt checked. The lookup count becomes one.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 0, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        },
+        {
+          "id": "sequence-duplicate-existing", "nodeId": "existing", "incomingEdgeId": "check-existing",
+          "trigger": "receipt.found(evt_481)",
+          "narration": "The service takes the already-handled branch. It does not capture a second payment or enqueue a second fulfillment. A verification read will revisit Receipt checked.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        },
+        {
+          "id": "sequence-duplicate-verification", "nodeId": "check", "incomingEdgeId": "existing-check",
+          "trigger": "receipt.verify(evt_481)",
+          "narration": "A second read verifies the saved receipt before acknowledgement. This is a separate occurrence at the same diagram node: its lookup count changes from one to two, not from zero to one.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 1, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 2, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        },
+        {
+          "id": "sequence-duplicate-ignored", "nodeId": "ignore", "incomingEdgeId": "check-ignore",
+          "trigger": "response.send(200)",
+          "narration": "HTTP 200 acknowledges the retry and stops further retries. The order remains paid, the payment remains captured, and exactly one fulfillment work item remains. No new work is created.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 2, "responseStatus": null } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } },
+            { "id": "rcpt-481", "entityId": "receipt", "values": { "eventId": "evt_481", "handled": true, "lookupCount": 2, "responseStatus": 200 } },
+            { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-72", "targetInstanceId": "rcpt-481" }, { "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }
+        }
+      ]
+    },
+    {
+      "id": "sequence-declined-payment", "title": "Declined payment exchange", "diagramId": "payment-sequence",
+      "occurrences": [
+        {
+          "id": "sequence-decline-received", "nodeId": "callback", "incomingEdgeId": null,
+          "trigger": "POST /payments/callback · evt_482",
+          "narration": "The issuer sends a declined-payment callback for a different order, ORD-1043. The service records the incoming event before deciding which branch to take.",
+          "before": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }] },
+          "after": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": false, "lookupCount": 0, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] }
+        },
+        {
+          "id": "sequence-decline-checked", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "trigger": "receipt.lookup(evt_482)",
+          "narration": "The receipt is new and unhandled. The issuer response is insufficient_funds, so this path takes the declined branch rather than capturing the payment.",
+          "before": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": false, "lookupCount": 0, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] },
+          "after": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] }
+        },
+        {
+          "id": "sequence-decline-recorded", "nodeId": "decline", "incomingEdgeId": "check-decline",
+          "trigger": "payment.decline(pay-73, insufficient_funds)",
+          "narration": "The order and payment become declined. The failure reason is captured as insufficient_funds. The handled receipt gets HTTP 200; the failed payment is acknowledged without creating fulfillment work.",
+          "before": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "pending", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "pending", "amount": 44.5 } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": false, "lookupCount": 1, "responseStatus": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] },
+          "after": { "instances": [
+            { "id": "ord-1043", "entityId": "order", "values": { "number": "ORD-1043", "paymentStatus": "declined", "total": 44.5 } },
+            { "id": "pay-73", "entityId": "payment", "values": { "status": "declined", "amount": 44.5, "failureReason": "insufficient_funds" } },
+            { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": true, "lookupCount": 1, "responseStatus": 200 } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] }
+        }
+      ]
+    }
+  ]
+}
