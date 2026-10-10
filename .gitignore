@@ -1,5 +1,6 @@
 /target/
 /.lain-dev/
+/mockups/
 /frontend/node_modules/
 /frontend/dist/
 /frontend/test-results/
