@@ -90,10 +90,76 @@ async function noOverflow(target) {
   assert.ok(dimensions.scroll <= dimensions.width, `horizontal page overflow: ${JSON.stringify(dimensions)}`);
 }
 
+async function showData(target = page) {
+  const toggle = target.getByRole('button', { name: 'Toggle data inspector', exact: true });
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  await target.locator('.inspector-tabs').getByRole('tab', { name: 'Changes', exact: true }).click();
+  const unchanged = target.getByRole('button', { name: 'Show unchanged values', exact: true });
+  if (await unchanged.count()) await unchanged.click();
+  await target.waitForFunction(() => getComputedStyle(document.querySelector('.inspector-slot')).transform === 'matrix(1, 0, 0, 1, 0, 0)');
+}
+
+async function dataInspector() {
+  const pane = page.locator('#step-inspector');
+  const toggle = page.getByRole('button', { name: 'Toggle data inspector', exact: true });
+  const cursor = new URL(page.url()).search;
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+  const motion = await page.locator('.inspector-slot').evaluate(async slot => {
+    const duration = getComputedStyle(slot).transitionDuration;
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', bubbles: true }));
+    const positions = [];
+    const start = performance.now();
+    do {
+      await new Promise(requestAnimationFrame);
+      positions.push(new DOMMatrix(getComputedStyle(slot).transform).m41);
+    } while (performance.now() - start < 320);
+    return { duration, positions, width: slot.getBoundingClientRect().width };
+  });
+  assert.equal(motion.duration, '0.15s');
+  assert.ok(motion.positions.some(x => x > 1 && x < motion.width - 1), 'the inspector slides through intermediate positions');
+  assert.ok(Math.abs(motion.positions.at(-1) - motion.width) < 1);
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(await pane.evaluate(element => !!element.closest('[inert]')), true);
+  await page.keyboard.press('n');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.inspector-slot')).transform === 'matrix(1, 0, 0, 1, 0, 0)');
+  for (const label of ['Before', 'After', 'Calls']) {
+    await page.keyboard.press('.');
+    assert.equal(await pane.getByRole('tab', { name: label, exact: true }).getAttribute('aria-selected'), 'true');
+  }
+  await page.keyboard.press('.');
+  assert.equal(await pane.getByRole('tab', { name: 'Calls', exact: true }).getAttribute('aria-selected'), 'true');
+  for (const view of ['Diagram', 'Domain', 'Details']) {
+    await page.locator('.event-tablist').getByRole('tab', { name: view, exact: true }).click();
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    assert.equal(await pane.getByRole('tab', { name: 'Calls', exact: true }).getAttribute('aria-selected'), 'true');
+  }
+  await page.getByRole('button', { name: 'Duplicate callback', exact: true }).click();
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+  await page.getByRole('button', { name: 'Successful callback', exact: true }).click();
+  assert.equal(new URL(page.url()).search, cursor);
+  await page.keyboard.press(','); await page.keyboard.press(','); await page.keyboard.press(',');
+  for (const tab of ['Changes', 'Before', 'After', 'Calls']) {
+    await pane.getByRole('tab', { name: tab, exact: true }).click();
+    const body = pane.locator('.inspector-body');
+    const bounds = await body.evaluate(element => ({ height: element.clientHeight, max: Math.max(0, element.scrollHeight - element.clientHeight) }));
+    await page.keyboard.press('/');
+    assert.equal(await body.evaluate(element => element.scrollTop), Math.min(bounds.height, bounds.max));
+    await page.keyboard.press("'");
+    assert.equal(await body.evaluate(element => element.scrollTop), 0);
+    assert.equal(new URL(page.url()).search, cursor);
+  }
+  await pane.getByRole('tab', { name: 'Changes', exact: true }).click();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.keyboard.press('n');
+  assert.equal(await page.locator('.inspector-slot').evaluate(element => getComputedStyle(element).transitionDuration), '0s');
+  await page.keyboard.press('n');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+}
+
 async function fullWidthTabs() {
   const geometry = await page.locator('.event-view').evaluate(element => {
     const panel = element.getBoundingClientRect();
-    const tabs = element.querySelector('.event-tablist').getBoundingClientRect();
+    const tabs = element.querySelector('.event-tabbar').getBoundingClientRect();
     return { panelLeft: panel.left, panelRight: panel.right, tabsLeft: tabs.left, tabsRight: tabs.right };
   });
   assert.equal(geometry.tabsLeft, geometry.panelLeft);
@@ -181,9 +247,9 @@ async function stepNavigator() {
   assert.ok(Math.abs(motion.positions.at(-1).center - motion.center) < 1);
   await text(page.locator('.path-hint'), '2/4');
   await page.screenshot({ path: path.join(artifacts, 'step-navigator-middle.png') });
-  await page.getByRole('tab', { name: 'Data', exact: true }).click();
+  await page.getByRole('tab', { name: 'Domain', exact: true }).click();
   await next.click();
-  assert.equal(await page.getByRole('tab', { name: 'Data', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.getByRole('tab', { name: 'Domain', exact: true }).getAttribute('aria-selected'), 'true');
   await page.keyboard.press('G');
   await text(page.locator('.path-hint'), '4/4');
   await fullWidthTabs();
@@ -208,14 +274,23 @@ async function canvasControls(selector) {
   const canvas = panel.locator('.viewport-enabled');
   const scroller = canvas.locator('.viewport-scroll');
   const cursor = new URL(page.url()).searchParams.get('occurrence');
-  assert.equal(Number(await canvas.getAttribute('data-scale')), 1, 'canvases open at 100%');
+  const fitButton = panel.getByRole('button', { name: 'Fit diagram', exact: true });
+  const actualSizeButton = panel.getByRole('button', { name: 'Zoom to 100% and focus', exact: true });
+  await fitButton.click();
+  assert.equal(await fitButton.getAttribute('aria-pressed'), 'true');
+  assert.equal(await actualSizeButton.getAttribute('aria-pressed'), 'false');
+  const fitColor = await fitButton.evaluate(element => getComputedStyle(element).color);
+  await page.keyboard.press(';');
+  assert.equal(Number(await canvas.getAttribute('data-scale')), 1);
+  assert.equal(await actualSizeButton.getAttribute('aria-pressed'), 'true');
+  assert.equal(await actualSizeButton.evaluate(element => getComputedStyle(element).color), fitColor);
   await page.keyboard.press('=');
   assert.equal(Number(await canvas.getAttribute('data-scale')), 1.25);
   await page.keyboard.press('-');
   assert.equal(Number(await canvas.getAttribute('data-scale')), 1);
   await page.keyboard.press(';');
   assert.ok(Number(await canvas.getAttribute('data-scale')) <= 1);
-  await page.keyboard.press("'");
+  await page.keyboard.press(';');
   assert.equal(Number(await canvas.getAttribute('data-scale')), 1);
   await panel.getByRole('button', { name: 'Zoom in', exact: true }).click();
   await panel.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
@@ -288,7 +363,7 @@ async function canvasControls(selector) {
     const current = heldMotion.positions[index];
     if (previous.elapsed < 300) continue;
     const movement = current.left - previous.left;
-    assert.ok(movement > 0 && movement <= (current.elapsed - previous.elapsed) * 1.5 + 1, 'held panning stays continuous across keyboard repeats');
+    assert.ok(movement > 0 && movement <= (current.elapsed - previous.elapsed) * 1.5 + 1, `held panning stays continuous across keyboard repeats: ${JSON.stringify({ previous, current, heldMotion })}`);
   }
   assert.equal(heldMotion.final, heldMotion.stopped, 'releasing the key stops the pan');
   assert.equal(new URL(page.url()).searchParams.get('occurrence'), cursor);
@@ -362,6 +437,7 @@ async function focusedGraphStep() {
 }
 
 async function followGraphSteps() {
+  await page.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
   await page.locator('.history-link').nth(0).click();
   await focusedGraphStep();
   const positions = await page.evaluate(async () => {
@@ -412,11 +488,12 @@ async function followGraphSteps() {
   await page.keyboard.press('ArrowLeft');
   await focusedGraphStep();
   assert.equal((await framing()).scale, fitted.scale);
-  await page.keyboard.press("'");
+  await page.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
   await focusedGraphStep();
 }
 
 async function scaledSequenceContext() {
+  await page.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
   const canvas = page.locator('.diagram-panel .viewport-enabled');
   await page.waitForFunction(() => {
     const panel = document.querySelector('.diagram-panel');
@@ -498,7 +575,9 @@ async function main() {
   assert.equal(await page.locator('html').evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(9, 9, 11)');
   await page.locator('.explanation-card').click();
   await page.getByRole('tab', { name: 'Details', exact: true }).waitFor();
-  assert.deepEqual(await page.getByRole('tab').allTextContents(), ['Details', 'Diagram', 'Data', 'Domain']);
+  assert.deepEqual(await page.locator('.event-tablist').getByRole('tab').allTextContents(), ['Details', 'Diagram', 'Domain']);
+  stage = 'persistent data inspector, slide motion and tab shortcuts';
+  await dataInspector();
   await fullWidthTabs();
   await text(page.locator('.path-hint'), '1/4');
   assert.equal(await page.locator('.history-link').count(), 4);
@@ -514,8 +593,9 @@ async function main() {
      const { left, width } = element.getBoundingClientRect();
      return { left, width };
    });
-   await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.setViewportSize({ width: 1440, height: 2200 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+     const spaciousHeight = await sidebar.evaluate(element => Math.ceil(element.scrollHeight / .35) + document.querySelector('.app-header').getBoundingClientRect().height + 2);
+     await page.setViewportSize({ width: 1440, height: spaciousHeight });
    await page.waitForFunction(() => {
       const region = document.querySelector('.scenarios-scroll');
      return region.scrollHeight <= region.clientHeight && region.style.getPropertyValue('--sidebar-scrollbar-width') === '0px';
@@ -587,7 +667,7 @@ async function main() {
   await page.getByRole('button', { name: 'Next event' }).click();
   await text(page.locator('.path-hint'), '3/4');
   assert.equal(await page.locator('.history-link.future').count(), 1);
-  await page.getByRole('tab', { name: 'Data', exact: true }).click();
+   await showData();
   const paymentStatus = page.locator('.value-row').filter({ hasText: 'Payment status' });
   await values(paymentStatus.locator('pre'), ['"pending"', '"paid"']);
   const failureReason = page.locator('.value-row').filter({ hasText: 'Failure reason' });
@@ -606,22 +686,20 @@ async function main() {
    assert.equal(await page.locator('.domain-entity[data-entity-id="order"] .domain-method').count(), 1);
    await page.screenshot({ path: path.join(artifacts, 'domain-methods.png'), fullPage: true });
    const domainGeometry = await page.locator('.domain-entity').evaluateAll(entities => entities.map(entity => entity.getAttribute('transform')));
-   await text(page.locator('.domain-activity summary'), 'This step · 1 property difference · No method calls recorded');
+    await text(page.locator('.inspector-metrics'), '1 property0 link changes0 calls');
    await page.getByRole('button', { name: 'Next event', exact: true }).click();
-   await text(page.locator('.domain-activity summary'), 'This step · 3 property differences · 2 recorded calls');
+    await text(page.locator('.inspector-metrics'), '3 properties0 link changes2 calls');
    assert.equal(await page.locator('.domain-method.called').count(), 2);
    assert.match(await page.locator('[data-entity-id="order"] [data-attribute-id="paymentStatus"] title').textContent(), /"pending" → "paid"/);
    assert.match(await page.locator('[data-entity-id="payment"] [data-attribute-id="failureReason"] title').textContent(), /Capture changed · Uncaptured → null/);
    assert.deepEqual(await page.locator('.domain-entity').evaluateAll(entities => entities.map(entity => entity.getAttribute('transform'))), domainGeometry);
-   await page.locator('.domain-activity summary').click();
-   await page.locator('.domain-panel').getByRole('button', { name: 'Fit diagram', exact: true }).click();
+    await page.locator('.domain-panel').getByRole('button', { name: 'Fit diagram', exact: true }).click();
    const activityWasDark = await themeToggle.getAttribute('aria-pressed') === 'true';
    if (activityWasDark) await themeToggle.click();
    await page.screenshot({ path: path.join(artifacts, 'domain-step-activity-light.png'), fullPage: true });
    await themeToggle.click();
    await page.screenshot({ path: path.join(artifacts, 'domain-step-activity-dark.png'), fullPage: true });
-   if (!activityWasDark) await themeToggle.click();
-   await page.locator('.domain-activity summary').click();
+    if (!activityWasDark) await themeToggle.click();
    await page.getByRole('button', { name: 'Previous event', exact: true }).click();
     assert.equal(await page.locator('.domain-method.called').count(), 0);
     await page.getByRole('tab', { name: 'Details', exact: true }).click();
@@ -647,8 +725,8 @@ async function main() {
   await page.getByRole('combobox', { name: 'Recorded occurrence', exact: true }).click();
   await page.getByRole('option', { name: /duplicate-verification/ }).click();
   await page.getByRole('button', { name: 'Go to occurrence', exact: true }).click();
-     await text(page.locator('.diagram-panel .node-visit-badge text'), '2');
-    await page.getByRole('tab', { name: 'Data', exact: true }).click();
+       await text(page.locator('.diagram-panel .node-visit-badge text'), '2');
+     await showData();
    await text(page.locator('.path-hint'), '4/5');
     await values(page.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
      await page.getByRole('tab', { name: 'Details', exact: true }).click();
@@ -687,7 +765,7 @@ async function main() {
    await deepPage.goto(deepLaunch.href);
     await text(deepPage.locator('.path-hint'), '4/5');
     assert.equal(new URL(deepPage.url()).hash, '');
-    await deepPage.getByRole('tab', { name: 'Data', exact: true }).click();
+     await showData(deepPage);
     await values(deepPage.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
    await deepContext.close();
    stage = 'live revision automatically updates and preserves occurrence ID';
@@ -705,13 +783,20 @@ async function main() {
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow(page);
   await fullWidthTabs();
-  await page.getByRole('tab', { name: 'Data', exact: true }).click();
-  await values(page.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
-  assert.equal(await page.locator('.data-panel').evaluate(element => element.scrollHeight > element.clientHeight), true);
+    await showData();
+   await values(page.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
+    const inspectorGeometry = await page.locator('#step-inspector').evaluate(element => {
+      const workspace = element.closest('.event-workspace');
+      return { workspace: workspace.getBoundingClientRect().toJSON(), heading: element.querySelector('h2').getBoundingClientRect().toJSON(), body: element.querySelector('.inspector-body').getBoundingClientRect().toJSON(), scroll: workspace.scrollTop };
+    });
+    assert.ok(inspectorGeometry.heading.top >= inspectorGeometry.workspace.top && inspectorGeometry.body.height >= 60, `mobile inspector keeps its heading and data visible: ${JSON.stringify(inspectorGeometry)}`);
+   assert.equal(await page.locator('.inspector-body').evaluate(element => element.scrollHeight > element.clientHeight), true);
    assert.equal(await title.isVisible(), true);
    await text(title, stored.document.title);
-   await page.screenshot({ path: path.join(artifacts, 'mobile.png'), fullPage: true });
-   await page.getByRole('tab', { name: 'Domain', exact: true }).click();
+    await page.screenshot({ path: path.join(artifacts, 'mobile.png'), fullPage: true });
+    await page.getByRole('tab', { name: 'Domain', exact: true }).click();
+     await page.keyboard.press('n');
+    await page.waitForFunction(() => document.querySelector('.inspector-shell').getBoundingClientRect().width === 0);
    await canvasControls('.domain-panel');
    await page.screenshot({ path: path.join(artifacts, 'mobile-domain-canvas.png'), fullPage: true });
    stage = 'sequence message selects the exact recorded snapshot';
@@ -723,8 +808,8 @@ async function main() {
     await scaledSequenceContext();
     await page.locator('.diagram-panel [data-occurrence-id="sequence-captured"]').click();
     await text(page.locator('.path-hint'), '3/4');
-    assert.equal(new URL(page.url()).searchParams.get('occurrence'), 'sequence-captured');
-     await page.getByRole('tab', { name: 'Data', exact: true }).click();
+     assert.equal(new URL(page.url()).searchParams.get('occurrence'), 'sequence-captured');
+      await showData();
      await values(paymentStatus.locator('pre'), ['"pending"', '"paid"']);
     stage = 'redelivery records separate transit visits and attempt snapshots';
     await page.getByRole('button', { name: 'Delivery after redelivery', exact: true }).click();
@@ -743,21 +828,21 @@ async function main() {
       assert.deepEqual(await shipmentPanel.locator('.node-visit-badge text').allTextContents(), ['2']);
       assert.deepEqual(await shipmentPanel.locator('.graph-group.current').evaluateAll(groups => groups.map(group => group.dataset.groupId)), ['carrier-handling', 'delivery-in-progress']);
       await groupedFrames(stored.document.diagrams[1]);
-    await page.screenshot({ path: path.join(artifacts, 'redelivery-transit.png'), fullPage: true });
-      await page.getByRole('tab', { name: 'Data', exact: true }).click();
+     await page.screenshot({ path: path.join(artifacts, 'redelivery-transit.png'), fullPage: true });
+       await showData();
      await page.getByRole('button', { name: 'Next event', exact: true }).click();
     await values(attempts, ['1', '2']);
     await values(issue, ['"recipient unavailable"', 'null']);
     await values(page.locator('.value-row').filter({ hasText: 'Delivered at' }).locator('pre'), ['null', '"2026-10-10T14:32:00Z"']);
-     await page.locator('.data-panel').evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await page.locator('.inspector-body').evaluate(element => { element.scrollTop = element.scrollHeight; });
     await page.screenshot({ path: path.join(artifacts, 'redelivery-delivered.png'), fullPage: true });
     stage = 'returned parcel persists beside paid order after work removal';
-    await page.getByRole('button', { name: 'Returned to sender', exact: true }).click();
+     await page.getByRole('navigation', { name: 'Scenarios', exact: true }).getByRole('button', { name: 'Returned to sender', exact: true }).click();
     await page.locator('.history-link').nth(3).click();
     await values(page.locator('.value-row').filter({ hasText: 'Return reason' }).locator('pre'), ['null', '"redelivery declined"']);
     await values(page.locator('.value-row').filter({ hasText: 'Returned at' }).locator('pre'), ['null', '"2026-10-10T10:18:00Z"']);
     await values(page.locator('.value-row').filter({ hasText: 'Delivered at' }).locator('pre'), ['null', 'null']);
-     await page.locator('.data-panel').evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await page.locator('.inspector-body').evaluate(element => { element.scrollTop = element.scrollHeight; });
     await page.screenshot({ path: path.join(artifacts, 'returned-to-sender.png'), fullPage: true });
     await page.getByRole('button', { name: 'Next event', exact: true }).click();
     await values(paymentStatus.locator('pre'), ['"paid"', '"paid"']);

@@ -218,7 +218,7 @@ it('cancels invalid and interrupted prefixes and respects viewer input guards', 
     await press('1'); window.dispatchEvent(new Event('blur'));
     await vi.advanceTimersByTimeAsync(500); await settle();
     expect(selected()).toBe(10);
-    await press('1'); tab('Data').click(); await settle();
+    await press('1'); tab('Details').click(); await settle();
     await vi.advanceTimersByTimeAsync(500); tab('Domain').click(); await settle();
     expect(selected()).toBe(10);
     await press('1');

@@ -6,7 +6,7 @@ export type CapturedValue =
   | { kind: 'value'; value: unknown };
 export type ValueChange = 'unchanged' | 'changed' | 'created' | 'removed';
 export type AttributeChange = { id: string; label: string; before: CapturedValue; after: CapturedValue; change: ValueChange };
-export type InstanceChange = { id: string; label: string; change: ValueChange; attributes: AttributeChange[] };
+export type InstanceChange = { id: string; entityId: string; label: string; change: ValueChange; attributes: AttributeChange[] };
 export type LinkChange = { id: string; label: string; change: ValueChange };
 
 function canonical(value: unknown): string {
@@ -53,7 +53,7 @@ export function compareInstances(entities: Entity[], before: Snapshot, after: Sn
     });
     const change: ValueChange = !previous ? 'created' : !next ? 'removed'
       : attributes.some(attribute => attribute.change !== 'unchanged') ? 'changed' : 'unchanged';
-    return { id, label: entity.label, change, attributes };
+    return { id, entityId: entity.id, label: entity.label, change, attributes };
   });
 }
 

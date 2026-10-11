@@ -71,9 +71,10 @@ it('preserves zoom and clamps manual panning when the current layout shrinks', a
   } finally { view.app.unmount(); }
 });
 
-it.each([980, 1000, 2000])('defaults to 1:1 and centers fitting axes while hugging overflowing bounds at layout width %i', async width => {
+it.each([980, 1000, 2000])('centers fitting axes and hugs overflowing bounds at 1:1 at layout width %i', async width => {
   const view = await mountGraph(width);
   try {
+    await view.click('Zoom to 100% and focus');
     expect(view.canvas.dataset.scale).toBe('1');
     expect(view.position()).toEqual([width <= 1000 ? width / 2 : 480, 150]);
     view.selected.value = 'b'; await settle();
@@ -83,12 +84,14 @@ it.each([980, 1000, 2000])('defaults to 1:1 and centers fitting axes while huggi
   } finally { view.app.unmount(); }
 });
 
-it.each([800, 2000])('keeps fit mode and its viewport across event navigation at layout width %i', async width => {
+it.each([800, 2000])('defaults to fit mode and preserves its viewport across event navigation at layout width %i', async width => {
   const view = await mountGraph(width);
   try {
-    await view.click('Fit diagram');
     const scale = view.canvas.dataset.scale;
     const position = view.position();
+    expect(view.canvas.dataset.fitted).toBe('true');
+    expect(view.canvas.querySelector('[aria-label="Fit diagram"]')!.getAttribute('aria-pressed')).toBe('true');
+    expect(view.canvas.querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('false');
     expect(scale).toBe(width === 800 ? '1' : '0.48');
     const node = view.canvas.querySelector('.graph-node')!;
     node.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
@@ -103,6 +106,20 @@ it.each([800, 2000])('keeps fit mode and its viewport across event navigation at
     window.dispatchEvent(new Event('resize')); await settle();
     expect(view.canvas.dataset.fitted).toBe('true');
     expect(view.position()).toEqual(position);
+  } finally { view.app.unmount(); }
+});
+
+it('opens each scene fitted to its content after using 1:1 in another scene', async () => {
+  const scene = ref('first');
+  const view = await mountViewport(() => h(DiagramViewport, { width: 2000, height: 300, title: 'Scene', sceneKey: scene.value }));
+  try {
+    expect(view.canvas.dataset.scale).toBe('0.48');
+    await view.click('Zoom to 100% and focus');
+    expect(view.canvas.dataset.scale).toBe('1');
+    scene.value = 'second'; await settle();
+    expect(view.canvas.dataset.fitted).toBe('true');
+    expect(view.canvas.dataset.scale).toBe('0.48');
+    expect(view.position()).toEqual([480, 72]);
   } finally { view.app.unmount(); }
 });
 
@@ -136,9 +153,14 @@ it('resumes following after zooming or restoring 1:1 from fit', async () => {
     await view.click('Zoom to 100% and focus');
     expect(view.canvas.dataset.fitted).toBe('false');
     expect(view.canvas.dataset.scale).toBe('1');
+    expect(view.canvas.querySelector('[aria-label="Fit diagram"]')!.getAttribute('aria-pressed')).toBe('false');
+    expect(view.canvas.querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('true');
     expect(view.position()).toEqual([1000, 150]);
     view.selected.value = 'a'; await settle();
     expect(view.position()).toEqual([480, 150]);
+    await view.click('Zoom in');
+    expect(view.canvas.querySelector('[aria-label="Fit diagram"]')!.getAttribute('aria-pressed')).toBe('false');
+    expect(view.canvas.querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('false');
   } finally { view.app.unmount(); }
 });
 
@@ -170,6 +192,8 @@ it('centers complete sequence rows horizontally and preserves fitted framing acr
   const selected = ref(scenario.occurrences[0]!.id);
   const view = await mountViewport(() => h(SequenceView, { diagram, scenario, currentOccurrenceId: selected.value }));
   try {
+    expect(view.canvas.dataset.fitted).toBe('true');
+    await view.click('Zoom to 100% and focus');
     const width = Number(view.canvas.querySelector('.sequence')!.getAttribute('viewBox')!.split(' ')[2]);
     expect(view.scroller.scrollLeft).toBe(width / 2);
     selected.value = scenario.occurrences[1]!.id; await settle();

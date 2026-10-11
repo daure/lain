@@ -247,14 +247,14 @@ it.each(['.quick-actions-trigger', '.history-link.current', '.event-controls but
     await press('m');
     expect(document.querySelector('.app-header')!.closest('[inert]')).toBeNull();
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    button('Data').click(); await settle();
+    button('Domain').click(); await settle();
     const cursor = location.search;
     const origin = document.querySelector<HTMLElement>(selector)!;
     origin.focus();
     await press('m', {}, origin);
     expect(chrome().every(element => element.closest('[inert]'))).toBe(true);
     expect(document.querySelector('.workspace')!.classList.contains('focus-mode')).toBe(true);
-    expect(document.activeElement).toBe(button('Data'));
+    expect(document.activeElement).toBe(button('Domain'));
     expect(location.search).toBe(cursor);
     expect(document.querySelector('.step-navigator')).not.toBeNull();
     const breadcrumb = document.querySelector('.focus-breadcrumb')!;
@@ -267,7 +267,7 @@ it.each(['.quick-actions-trigger', '.history-link.current', '.event-controls but
     expect(document.querySelector('.workspace')!.classList.contains('focus-mode')).toBe(true);
     await press('l');
     expect(currentEvent()).toContain('02 / 04');
-    expect(button('Data').getAttribute('aria-selected')).toBe('true');
+    expect(button('Domain').getAttribute('aria-selected')).toBe('true');
     await press('j');
     expect(currentScenario()).toBe('Duplicate callback');
     expect(breadcrumb.querySelector('.crumb-title[aria-label^="Scenario:"]')!.textContent).toBe('Duplicate callback');
@@ -357,9 +357,9 @@ it('navigates adjacent occurrence IDs above every tab and reserves empty boundar
     expect(current().querySelector('.step-label')!.textContent).toBe('Receipt checked');
     expect(current().style.transform).toBe('translateX(100%)');
     expect(neighbor('Next')!.querySelector('.step-marker')!.textContent).toBe('□');
-    button('Data').click(); await settle();
+    button('Domain').click(); await settle();
     neighbor('Previous')!.click(); await settle();
-    expect(button('Data').getAttribute('aria-selected')).toBe('true');
+    expect(button('Domain').getAttribute('aria-selected')).toBe('true');
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(recorded[2]!.id);
     expect(current().querySelector('.step-trigger code')!.textContent).toBe(recorded[2]!.trigger);
     await press('G', { shiftKey: true });
@@ -410,7 +410,7 @@ it.each(['Escape', '['])('opens the overview with %s only when no control has fo
   const app = await mountFixture();
   try {
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    button('Data').focus();
+    button('Details').focus();
     const route = location.search;
     await press(key, { ctrlKey: key === '[' }, document.activeElement!);
     expect(document.activeElement).toBe(document.body);
@@ -674,7 +674,7 @@ it('renders entity methods as safe definitions in the domain compartment and ins
     expect(document.querySelector('.entity-methods p')!.textContent).toBe(description);
     expect(document.querySelector('.entity-methods small')!.textContent).toBe('capture-payment');
     expect(document.querySelector('.domain-methods img, .entity-methods img')).toBeNull();
-    expect(document.querySelector('.state-panel')!.textContent).not.toContain(signature);
+    expect(document.querySelector('.inspector-body')!.textContent).not.toContain(signature);
     const before = order.getAttribute('transform');
     await press('j');
     expect(document.querySelector('.domain-entity[data-entity-id="order"]')!.getAttribute('transform')).toBe(before);
@@ -683,10 +683,10 @@ it('renders entity methods as safe definitions in the domain compartment and ins
 
 it('switches embedded views with bounded tab shortcuts and preserves keyboard focus', async () => {
   const app = await mountFixture();
-  const selected = () => document.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+  const selected = () => document.querySelector<HTMLButtonElement>('.event-tablist [role="tab"][aria-selected="true"]')!;
   try {
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    expect([...document.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['Details', 'Diagram', 'Data', 'Domain']);
+    expect([...document.querySelectorAll('.event-tablist [role="tab"]')].map(tab => tab.textContent)).toEqual(['Details', 'Diagram', 'Domain']);
     await press('[');
     expect(selected().textContent).toBe('Details');
     const cursor = new URLSearchParams(location.search).get('occurrence');
@@ -699,22 +699,17 @@ it('switches embedded views with bounded tab shortcuts and preserves keyboard fo
     for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) await press(']', options);
     expect(selected().textContent).toBe('Diagram');
     await press(']', { repeat: true });
-    expect(selected().textContent).toBe('Data');
-    const dataPanel = document.querySelector<HTMLElement>('.data-panel')!;
-    expect(dataPanel.getAttribute('aria-labelledby')).toBe(selected().id);
-    expect(dataPanel.querySelector('h2')!.textContent).toBe('At this event');
-    await press('l', {}, dataPanel);
+    expect(selected().textContent).toBe('Domain');
+    const domainPanel = document.querySelector<HTMLElement>('.domain-panel')!;
+    expect(domainPanel.getAttribute('aria-labelledby')).toBe(selected().id);
+    await press('l', {}, domainPanel);
     expect(currentEvent()).toContain('02 / 04');
-    expect(selected().textContent).toBe('Data');
-    const lookup = [...dataPanel.querySelectorAll('.value-row')].find(row => row.textContent?.includes('Receipt lookups'))!;
-    expect([...lookup.querySelectorAll('pre')].map(value => value.textContent)).toEqual(['0', '1']);
-    await press('h', {}, dataPanel);
+    expect(selected().textContent).toBe('Domain');
+    await press('h', {}, domainPanel);
     await press(']'); await press(']');
     expect(selected().textContent).toBe('Domain');
     expect(document.querySelector('.domain-panel .domain-erd')).not.toBeNull();
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(cursor);
-    await press('ArrowLeft', {}, selected());
-    expect(selected().textContent).toBe('Data');
     await press('ArrowLeft', {}, selected());
     expect(selected().textContent).toBe('Diagram');
     await press('Home', {}, selected());
@@ -730,7 +725,7 @@ it('switches embedded views with bounded tab shortcuts and preserves keyboard fo
     search.value = 'Previous tab'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle();
     await press('Enter', {}, search);
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-    expect(selected().textContent).toBe('Data');
+    expect(selected().textContent).toBe('Diagram');
   } finally { app.unmount(); }
 });
 
@@ -871,7 +866,7 @@ it('bounds keyboard traversal in sidebar group order and preserves each scenario
     await press('j'); await press('j');
     expect(entity('payment').classList.contains('unrelated')).toBe(true);
     expect(currentEvent()).toBe(event); expect(currentScenario()).toBe(title);
-    await press('['); await press('[');
+    await press('[');
     expect(button('Diagram').getAttribute('aria-selected')).toBe('true');
   } finally { app.unmount(); }
   await press('k', { ctrlKey: true });
@@ -959,7 +954,7 @@ it('jumps to scenario endpoints with G and gg while preserving shortcut input bo
   } finally { app.unmount(); }
 });
 
-it.each(['Details', 'Data'])('resets every scenario and selects the first sidebar scenario from %s with Shift+H', async tab => {
+it('resets every scenario and selects the first sidebar scenario from Details with Shift+H', async () => {
   const documentFixture = structuredClone(fixture) as Explanation;
   documentFixture.scenarios.unshift(documentFixture.scenarios.pop()!);
   const app = await mountFixture(documentFixture);
@@ -971,7 +966,7 @@ it.each(['Details', 'Data'])('resets every scenario and selects the first sideba
       button(scenario.title).click(); await settle();
       await press('G', { shiftKey: true });
     }
-    button(tab).click(); await settle();
+    button('Details').click(); await settle();
     const push = vi.spyOn(history, 'pushState');
     const fetchCount = vi.mocked(fetch).mock.calls.length;
     await press('H', { shiftKey: true }, document.querySelector('[role="tabpanel"]:not([style*="display: none"])')!);
@@ -996,7 +991,7 @@ it('guards Shift+H in inputs and overlays and exposes reset through quick action
   try {
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
     await press('j'); await press('l');
-    button('Data').click(); await settle();
+    button('Details').click(); await settle();
     const before = currentEvent();
     for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { isComposing: true }, { repeat: true }]) {
       await press('H', { shiftKey: true, ...options });
@@ -1022,7 +1017,7 @@ it('guards Shift+H in inputs and overlays and exposes reset through quick action
     await press('H', { shiftKey: true }, search);
     expect(currentEvent()).toBe(before);
     expect(currentScenario()).toBe('Duplicate callback');
-    expect(button('Data').getAttribute('aria-selected')).toBe('true');
+    expect(button('Details').getAttribute('aria-selected')).toBe('true');
     search.value = 'Reset explanation'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle();
     expect(document.querySelector('#quick-action-H kbd')!.textContent).toBe('Shift+H');
     await press('Enter', {}, search);
@@ -1035,42 +1030,62 @@ it('guards Shift+H in inputs and overlays and exposes reset through quick action
   } finally { app.unmount(); }
 });
 
-it.each(['Diagram', 'Domain'])('zooms %s through guarded shortcuts, the 100%% button, and quick actions', async tab => {
+it.each(['Diagram', 'Domain'])('zooms %s and toggles fit / 1:1 through guarded shortcuts and quick actions', async tab => {
   const app = await mountFixture();
   try {
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
     button(tab).click(); await settle();
     const canvas = () => document.querySelector<HTMLElement>('.viewport-enabled')!;
     const zoom = () => Number(canvas().dataset.scale);
+    const scroller = canvas().querySelector<HTMLElement>('.viewport-scroll')!;
+    Object.defineProperties(scroller, {
+      clientWidth: { value: 1000 }, clientHeight: { value: 600 },
+      scrollWidth: { value: 10000 }, scrollHeight: { value: 10000 },
+    });
+    window.dispatchEvent(new Event('resize')); await settle();
     const cursor = new URLSearchParams(location.search).get('occurrence');
+    expect(canvas().dataset.fitted).toBe('true');
+    expect(canvas().querySelector('[aria-label="Fit diagram"]')!.getAttribute('aria-pressed')).toBe('true');
+    await press(';');
     expect(zoom()).toBe(1);
     await press('='); expect(zoom()).toBe(1.25);
     await press('-'); expect(zoom()).toBe(1);
     await press('=');
     const input = document.createElement('input'); document.body.append(input);
-    for (const key of ['=', '-', ';', "'"]) {
+    for (const key of ['=', '-', ';']) {
       await press(key, {}, input);
       for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) await press(key, options);
     }
     expect(zoom()).toBe(1.25); input.remove();
     const modal = document.createElement('div'); modal.setAttribute('aria-modal', 'true'); document.body.append(modal);
-    await press("'"); expect(zoom()).toBe(1.25); modal.remove();
-    await press("'"); expect(zoom()).toBe(1);
+    await press(';'); expect(zoom()).toBe(1.25); modal.remove();
+    await press(';'); expect(canvas().dataset.fitted).toBe('true');
+    const fitZoom = zoom();
+    const fitPosition = [scroller.scrollLeft, scroller.scrollTop];
+    await press(';', { repeat: true });
+    expect(canvas().dataset.fitted).toBe('true');
+    expect(zoom()).toBe(fitZoom);
+    await press(';');
+    expect(canvas().dataset.fitted).toBe('false');
+    expect(zoom()).toBe(1);
     await press('=');
     canvas().querySelector<HTMLButtonElement>('[aria-label="Zoom to 100% and focus"]')!.click(); await settle();
     expect(zoom()).toBe(1);
     await press('='); await press('k', { ctrlKey: true });
-    expect([...document.querySelectorAll('[role="group"][aria-label="Diagram"] kbd')].map(key => key.textContent)).toEqual(['=', '-', ';', "'", 'Shift+H', 'Shift+J', 'Shift+K', 'Shift+L']);
+    expect([...document.querySelectorAll('[role="group"][aria-label="Diagram"] kbd')].map(key => key.textContent)).toEqual(['=', '-', ';', 'Shift+H', 'Shift+J', 'Shift+K', 'Shift+L']);
     const search = document.querySelector<HTMLInputElement>('[aria-label="Search quick actions"]')!;
-    await press("'", {}, search); expect(zoom()).toBe(1.25);
-    search.value = '100% and focus'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    await press(';', {}, search); expect(zoom()).toBe(1.25);
+    search.value = 'Toggle fit'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle();
     await press('Enter', {}, search);
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-    expect(zoom()).toBe(1);
+    expect(canvas().dataset.fitted).toBe('true');
+    expect(zoom()).toBe(fitZoom);
+    expect([scroller.scrollLeft, scroller.scrollTop]).toEqual(fitPosition);
+    await press(';'); expect(zoom()).toBe(1);
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(cursor);
-    button('Data').click(); await settle();
-    for (const key of ['=', '-', ';', "'"]) await press(key);
-    expect(button('Data').getAttribute('aria-selected')).toBe('true');
+    button('Details').click(); await settle();
+    for (const key of ['=', '-', ';']) await press(key);
+    expect(button('Details').getAttribute('aria-selected')).toBe('true');
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(cursor);
   } finally { app.unmount(); }
 });
@@ -1187,8 +1202,8 @@ it('searches all quick actions, skips disabled options, executes selection, and 
     await press('k', { ctrlKey: true }, origin);
     const search = () => document.querySelector<HTMLInputElement>('[aria-label="Search quick actions"]')!;
     expect(document.activeElement).toBe(search());
-    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(23);
-    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(23);
+    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(27);
+    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(27);
     await closeDialog();
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
     await press('k', { ctrlKey: true });
@@ -1395,7 +1410,7 @@ it('shares sequence fragments across scenarios and preserves occurrence selectio
     expect(successHeading().classList.contains('highlighted')).toBe(false);
     await press('l'); await press(']'); await press(']');
     expect(document.querySelector('.domain-panel .domain-erd')).not.toBeNull();
-    await press('['); await press('[');
+    await press('[');
     expect(panel().querySelector('.sequence')).not.toBeNull();
     await press('j');
     expect(currentScenario()).toBe('Duplicate payment exchange');

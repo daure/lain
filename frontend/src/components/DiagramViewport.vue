@@ -19,8 +19,8 @@ const emit = defineEmits<{ change: [] }>();
 const root = ref<HTMLElement>();
 const region = ref<HTMLElement>();
 const scale = ref(1);
-const fitted = ref(false);
-let following = true;
+const fitted = ref(true);
+let following = false;
 let selectedFocusPoint: { x: number; y: number } | undefined;
 const view = ref({ width: 0, height: 0, left: 0, top: 0 });
 const inset = 20;
@@ -209,6 +209,8 @@ async function fit() {
     offset.value.y + props.height * scale.value / 2 - view.value.height / 2);
 }
 
+function toggleFit() { return fitted.value ? actualSize() : fit(); }
+
 async function zoom(factor: number) {
   interact();
   const center = { x: (view.value.left + view.value.width / 2 - offset.value.x) / scale.value,
@@ -278,7 +280,11 @@ function onMapKeydown(event: KeyboardEvent) {
   else void zoom(event.key === '-' ? .8 : 1.25);
 }
 
-watch(() => props.sceneKey, () => { void actualSize(); }, { flush: 'post' });
+watch(() => props.sceneKey, () => {
+  selectedFocusPoint = undefined;
+  fitted.value = true;
+  void fit();
+}, { flush: 'post' });
 watch(() => [props.width, props.height], () => {
   cancelMotion();
   selectedFocusPoint = undefined;
@@ -298,7 +304,7 @@ onMounted(() => {
   resize();
 });
 onUnmounted(() => { observer?.disconnect(); window.removeEventListener('resize', resize); cancelMotion(); });
-defineExpose({ region, scale, offset, fit, zoom, actualSize, focusAt, panBy, releasePan, cancelPan });
+defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt, panBy, releasePan, cancelPan });
 </script>
 
 <template>
@@ -325,8 +331,8 @@ defineExpose({ region, scale, offset, fit, zoom, actualSize, focusAt, panBy, rel
         <button aria-label="Zoom out" title="Zoom out (-)" :disabled="scale <= minScale" @click="zoom(.8)"><i class="pi pi-minus" aria-hidden="true" /></button>
         <output aria-label="Zoom level">{{ Math.round(scale * 100) }}%</output>
         <button aria-label="Zoom in" title="Zoom in (=)" :disabled="scale >= 8" @click="zoom(1.25)"><i class="pi pi-plus" aria-hidden="true" /></button>
-        <button aria-label="Fit diagram" title="Fit diagram (;)" @click="fit()"><i class="pi pi-expand" aria-hidden="true" /></button>
-        <button class="actual-size" aria-label="Zoom to 100% and focus" title="100% and focus (')" @click="actualSize()">1:1</button>
+        <button aria-label="Fit diagram" title="Fit diagram" :aria-pressed="fitted" @click="fit()"><i class="pi pi-expand" aria-hidden="true" /></button>
+        <button class="actual-size" aria-label="Zoom to 100% and focus" title="100% and focus" :aria-pressed="!fitted && scale === 1" @click="actualSize()">1:1</button>
       </div>
     </div>
   </div>
@@ -350,6 +356,7 @@ defineExpose({ region, scale, offset, fit, zoom, actualSize, focusAt, panBy, rel
 .viewport-buttons{display:flex;align-items:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);box-shadow:0 2px 8px #0002;padding:3px;gap:2px}
 .viewport-buttons button{display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:4px;background:transparent;color:var(--text)}
 .viewport-buttons button:hover{background:var(--soft)}
+.viewport-buttons button[aria-pressed="true"]{color:var(--blue);background:color-mix(in srgb,var(--blue) 12%,transparent)}
 .viewport-buttons button:disabled{opacity:.4;cursor:default}
 .viewport-buttons .actual-size{font-size:.75rem;font-weight:600}
 .viewport-buttons output{min-width:46px;text-align:center;font-size:.75rem;color:var(--muted);font-variant-numeric:tabular-nums}

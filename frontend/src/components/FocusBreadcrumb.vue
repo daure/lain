@@ -21,13 +21,13 @@ const crumbs = computed(() => [
 </template>
 
 <style scoped>
-.focus-breadcrumb{display:flex;align-items:center;justify-content:center;height:48px;flex-shrink:0;min-width:0;padding:16px 26px 0;background:var(--surface);color:var(--muted);font-size:.86rem;animation:focus-breadcrumb-in 250ms ease-out}
+.focus-breadcrumb{display:flex;align-items:center;justify-content:center;height:40px;flex-shrink:0;min-width:0;padding:12px 20px 0;background:var(--surface);color:var(--muted);font-size:.86rem;animation:focus-breadcrumb-in 250ms ease-out}
 @keyframes focus-breadcrumb-in{from{opacity:0}to{opacity:1}}
-ol{display:flex;align-items:center;justify-content:center;min-width:0;max-width:100%;list-style:none;margin:0;padding:0;gap:12px}
-li{display:flex;align-items:center;gap:12px;min-width:0}
+ol{display:flex;align-items:center;justify-content:center;min-width:0;max-width:100%;list-style:none;margin:0;padding:0;gap:10px}
+li{display:flex;align-items:center;gap:10px;min-width:0}
 .crumb-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .crumb-slash{flex-shrink:0;opacity:.65}
 [aria-current="location"] .crumb-title{color:var(--text);font-weight:600}
-@media(max-width:700px){.focus-breadcrumb{padding:14px 12px 0;font-size:.78rem}ol,li{gap:8px}}
+@media(max-width:700px){.focus-breadcrumb{padding:12px 10px 0;font-size:.78rem}ol,li{gap:6px}}
 @media(prefers-reduced-motion:reduce){.focus-breadcrumb{animation:none!important}}
 </style>

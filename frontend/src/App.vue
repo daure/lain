@@ -9,7 +9,7 @@ import DrillLink from './components/DrillLink.vue';
 import ScenarioDetails from './components/ScenarioDetails.vue';
 import DomainView from './components/DomainView.vue';
 import SequenceView from './components/SequenceView.vue';
-import StateView from './components/StateView.vue';
+import StepInspector from './components/StepInspector.vue';
 import SidebarContext from './components/SidebarContext.vue';
 import StepNavigator from './components/StepNavigator.vue';
 import QuickActionsDialog from './components/QuickActionsDialog.vue';
@@ -35,12 +35,15 @@ const { summaries, active, loading, selecting, error, selectionError, connection
 const navigation = useNavigation();
 const routes = useBrowserNavigation(library, navigation);
 const { scenario, diagram, occurrence, index, history: walkedHistory, scenarioId } = navigation;
-const tabs = ['Details', 'Diagram', 'Data', 'Domain'] as const;
+const tabs = ['Details', 'Diagram', 'Domain'] as const;
 const selectedTab = ref(0);
+const dataOpen = ref(true);
+const dataInspector = ref<InstanceType<typeof StepInspector>>();
+const dataToggleButton = ref<HTMLButtonElement>();
 const focusMode = ref(false);
 const diagramView = ref<{ canvas?: InstanceType<typeof DiagramViewport> }>();
 const domainView = ref<InstanceType<typeof DomainView>>();
-const activeCanvas = computed(() => selectedTab.value === 1 ? diagramView.value?.canvas : selectedTab.value === 3 ? domainView.value?.canvas : undefined);
+const activeCanvas = computed(() => selectedTab.value === 1 ? diagramView.value?.canvas : selectedTab.value === 2 ? domainView.value?.canvas : undefined);
 const quickDialog = ref(false);
 const quickActionsDialog = ref<InstanceType<typeof QuickActionsDialog>>();
 const libraryView = ref<InstanceType<typeof ExplanationLibrary>>();
@@ -60,10 +63,14 @@ const actions = computed(() => quickActions.map(action => ({ ...action, ...(acti
    j: scenarioPosition.value === visualScenarios.value.length - 1, k: scenarioPosition.value <= 0,
    i: !navigation.canDrillBack.value, o: !navigation.canDrillForward.value,
   H: false,
-  m: false,
+   m: false,
+   n: false,
+   ',': !dataOpen.value || !dataInspector.value?.canPrevious,
+    '.': !dataOpen.value || !dataInspector.value?.canNext,
+   "'": !dataOpen.value, '/': !dataOpen.value,
   '[': selectedTab.value === 0, ']': selectedTab.value === tabs.length - 1,
   ys: !scenario.value, yp: !occurrence.value, yd: !diagram.value,
-  '=': !activeCanvas.value, '-': !activeCanvas.value, ';': !activeCanvas.value, "'": !activeCanvas.value,
+  '=': !activeCanvas.value, '-': !activeCanvas.value, ';': !activeCanvas.value,
   'pan-left': !activeCanvas.value, 'pan-down': !activeCanvas.value, 'pan-up': !activeCanvas.value, 'pan-right': !activeCanvas.value,
 })[action.id] })));
 watch(quickDialog, (next, previous) => {
@@ -176,6 +183,23 @@ function selectTab(position: number, focus = false) {
   if (focus || focusedInTabs) void nextTick(() => document.querySelector<HTMLButtonElement>('.event-tabs [role="tab"][aria-selected="true"]')?.focus({ preventScroll: true }));
 }
 
+function toggleData() {
+  const focusedInInspector = document.activeElement?.closest('#step-inspector');
+  dataOpen.value = !dataOpen.value;
+  if (!dataOpen.value && focusedInInspector) void nextTick(() => dataToggleButton.value?.focus({ preventScroll: true }));
+}
+
+function selectDataEntity(id: string) {
+  inspectedEntityId.value = id;
+  domainView.value?.focusEntity(id);
+}
+
+function inspectProperty(entityId: string, attributeId: string) {
+  inspectedEntityId.value = entityId;
+  dataOpen.value = true;
+  void dataInspector.value?.focusProperty(entityId, attributeId);
+}
+
 function openDetail(targetScenarioId: string) {
   if (navigation.openDetail(targetScenarioId)) selectTab(1, true);
 }
@@ -189,6 +213,13 @@ function onTabKeydown(event: KeyboardEvent) {
 
 function executeAction(id: QuickActionId, heldKey?: string) {
   if (actions.value.find(action => action.id === id)?.disabled !== false) return;
+  if (id === 'n' || id === ',' || id === '.' || id === "'" || id === '/') {
+    if (id === 'n') toggleData();
+    else if (id === "'" || id === '/') dataInspector.value?.page(id === "'" ? -1 : 1);
+    else dataInspector.value?.selectRelativeTab(id === ',' ? -1 : 1);
+    if (quickDialog.value) quickDialog.value = false;
+    return;
+  }
   if (id === 'm') {
     const focusedChrome = document.activeElement?.closest('.app-header, .sidebar, .event-controls');
     focusMode.value = !focusMode.value;
@@ -202,9 +233,8 @@ function executeAction(id: QuickActionId, heldKey?: string) {
     if (quickDialog.value) quickDialog.value = false;
     return;
   }
-  if (id === '=' || id === '-' || id === ';' || id === "'") {
-    if (id === ';') void activeCanvas.value?.fit();
-    else if (id === "'") void activeCanvas.value?.actualSize();
+  if (id === '=' || id === '-' || id === ';') {
+    if (id === ';') void activeCanvas.value?.toggleFit();
     else void activeCanvas.value?.zoom(id === '=' ? 1.25 : .8);
     if (quickDialog.value) quickDialog.value = false;
     return;
@@ -281,7 +311,7 @@ function isSelectionOverlayTarget(target: EventTarget | null) {
 
 function canUseDomainNumbers(target: EventTarget | null) {
   const leavingTarget = isLeavingDialogTarget(target);
-  return selectedTab.value === 3 && !!active.value && !!scenario.value && !quickDialog.value && !pendingDialog && !hasUnknownModal()
+  return selectedTab.value === 2 && !!active.value && !!scenario.value && !quickDialog.value && !pendingDialog && !hasUnknownModal()
     && (!isEditableTarget(target) || leavingTarget) && (!isSelectionOverlayTarget(target) || leavingTarget)
     && !document.querySelector('.p-select-overlay');
 }
@@ -326,7 +356,7 @@ function onOwnedKeydown(event: KeyboardEvent) {
   }
   const ownedTarget = event.target instanceof Element && event.target.closest(ownedDialogSelector);
   const key = arrowKeyActions[event.key] ?? event.key;
-  if (ownedTarget && ['h', 'j', 'k', 'l', 'i', 'o', '[', ']', 'g', 'G', 'H', 'J', 'K', 'L', 'm', '=', '-', ';', "'"].includes(key)) {
+  if (ownedTarget && ['h', 'j', 'k', 'l', 'i', 'o', '[', ']', 'g', 'G', 'H', 'J', 'K', 'L', 'm', 'n', ',', '.', "'", '/', '=', '-', ';'].includes(key)) {
     onGlobalKeydown(event);
     if (event.defaultPrevented) event.stopPropagation();
     return;
@@ -340,7 +370,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
   if (event.defaultPrevented || event.isComposing) return;
   const leavingTarget = isLeavingDialogTarget(event.target);
   if (event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && event.key !== 'G' && !shiftedPanActions[event.key]) || (isEditableTarget(event.target) && !leavingTarget)
-    || (isSelectionOverlayTarget(event.target) && !leavingTarget) || quickDialog.value || pendingDialog || hasUnknownModal()) return;
+    || (isSelectionOverlayTarget(event.target) && !leavingTarget) || document.querySelector('.p-select-overlay') || quickDialog.value || pendingDialog || hasUnknownModal()) return;
   if (!active.value) {
     if (!event.shiftKey) libraryView.value?.handleKeydown(event);
     return;
@@ -377,7 +407,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
       drillRepeatSkipped[action.id] = event.repeat && !drillRepeatSkipped[action.id];
       if (drillRepeatSkipped[action.id]) return;
     }
-    if (!event.repeat || !['G', 'H', 'm'].includes(action.id)) executeAction(action.id);
+    if (!event.repeat || !['G', 'H', 'm', 'n', ';'].includes(action.id)) executeAction(action.id);
   }
 }
 
@@ -487,9 +517,14 @@ onUnmounted(() => {
       </div>
         <StepNavigator :key="`${active.id}/${scenario.id}`" :diagram="diagram" :scenario="scenario" :index="index" :links="detailLinks" @select="navigation.selectOccurrence" @open="openDetail" />
         <section class="event-tabs" aria-label="Event views">
+          <div class="event-tabbar">
           <div class="event-tablist" role="tablist" aria-label="Event views" @keydown="onTabKeydown">
             <button v-for="(tab, position) in tabs" :id="`event-tab-${position}`" :key="tab" role="tab" :aria-selected="selectedTab === position" :aria-controls="`event-panel-${position}`" :tabindex="selectedTab === position ? 0 : -1" @click="selectTab(position)">{{ tab }}</button>
           </div>
+          <button ref="dataToggleButton" type="button" class="data-toggle" aria-label="Toggle data inspector" aria-controls="step-inspector" :aria-expanded="dataOpen" title="Toggle data inspector (n)" @click="toggleData"><i class="pi pi-table" aria-hidden="true" />{{ dataOpen ? 'Hide data' : 'Show data' }}<kbd>n</kbd></button>
+          </div>
+          <div class="event-workspace">
+          <div class="event-panels">
           <ScenarioDetails v-show="selectedTab === 0" id="event-panel-0" role="tabpanel" aria-labelledby="event-tab-0" tabindex="0" :document="active.document" :scenario="scenario" :occurrence="occurrence" />
           <div v-if="selectedTab === 1" id="event-panel-1" class="diagram-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-1" tabindex="0">
             <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" :links="detailLinks" @inspect="inspectNode" @open="openDetail" />
@@ -500,11 +535,8 @@ onUnmounted(() => {
               <p v-else class="muted">Showing this node’s recorded occurrence.</p>
             </div>
           </div>
-          <div v-show="selectedTab === 2" id="event-panel-2" class="data-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-2" tabindex="0">
-            <StateView :document="active.document" :occurrence="occurrence" />
-          </div>
-          <div v-if="selectedTab === 3" id="event-panel-3" class="domain-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-3" tabindex="0">
-            <DomainView ref="domainView" :domain="active.document.domain" :diagram="diagram" :scenario="scenario" :occurrence="occurrence" :selected-entity-id="inspectedEntityId" @select="id => inspectedEntityId = id" />
+          <div v-if="selectedTab === 2" id="event-panel-2" class="domain-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-2" tabindex="0">
+            <DomainView ref="domainView" :domain="active.document.domain" :diagram="diagram" :scenario="scenario" :occurrence="occurrence" :selected-entity-id="inspectedEntityId" @select="id => inspectedEntityId = id" @inspect="inspectProperty" />
             <div v-if="inspectedEntity" class="node-inspector"><h3>{{ inspectedEntity.label }}</h3><p class="eyebrow">{{ inspectedEntity.id }}</p><dl class="entity-attributes"><template v-for="attribute in inspectedEntity.attributes" :key="attribute.id"><dt>{{ attribute.label }}</dt><dd>{{ attribute.id }}</dd></template></dl>
               <section v-if="inspectedEntity.methods?.length" class="entity-methods" aria-label="Entity methods">
                 <h4>Methods</h4>
@@ -513,6 +545,11 @@ onUnmounted(() => {
                 </div>
               </section>
             </div>
+          </div>
+          </div>
+          <div :class="['inspector-shell', { open: dataOpen }]" :inert="dataOpen ? undefined : true" :aria-hidden="!dataOpen">
+            <div class="inspector-slot"><StepInspector ref="dataInspector" :document="active.document" :occurrence="occurrence" :node-label="currentNode?.label ?? occurrence.nodeId" :position="index + 1" :selected-entity-id="inspectedEntityId" @close="toggleData" @select="selectDataEntity" /></div>
+          </div>
           </div>
         </section>
       </div>

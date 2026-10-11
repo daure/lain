@@ -76,7 +76,7 @@ it('traverses only drill-down visits and restores the source and destination ste
   await drill();
   await press('l');
   expectLocation('capture-authorized-payment', 1);
-  button('Data').click(); await settle();
+  button('Details').click(); await settle();
   await press('i');
   expectLocation('successful-callback', 2);
   expect(button('Diagram').getAttribute('aria-selected')).toBe('true');

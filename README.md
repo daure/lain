@@ -2,7 +2,27 @@
 
 A local web viewer for agent-published software explanations. Agents publish a domain model, behavioral diagrams, and concrete scenarios through MCP. The browser walks each scenario's recorded path and shows the values before and after every event.
 
-## Build
+## Install a release
+
+Supports x86-64 Linux with glibc 2.39+ (Ubuntu 24.04 or newer). Requires `curl` and `tar`; systemd user services are needed for `lain setup`. Rust, Node, and a database server are not required.
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/daure/lain/releases/latest/download/lain-installer.sh -o /tmp/lain-installer.sh
+sh /tmp/lain-installer.sh
+export PATH="$HOME/.local/bin:$PATH"
+lain setup
+lain status
+lain demo
+lain
+```
+
+The installer downloads the release executable to `~/.local/bin`. Follow its shell PATH instructions for future terminals. `lain demo` seeds an example once; agents publish your own explanations through [MCP](#agent-connection). On a machine without systemd, run `lain serve` in a terminal and `lain open --print-url` in another.
+
+To upgrade, run the installer again, then `systemctl --user restart lain.service` and `lain status`. Runtime data and credentials remain under `LAIN_HOME`. The installer places the executable; `lain setup` manages the service explicitly.
+
+Versioned archives, SHA-256 checksums, and installers are on the [releases page](https://github.com/daure/lain/releases). The pinned installer URL uses `/releases/download/v0.1.0/lain-installer.sh`.
+
+## Build from source
 
 Requirements: Rust 1.96+, Node 24+, npm, and Linux for systemd setup.
 
@@ -14,7 +34,7 @@ lain demo
 lain
 ```
 
-The installer copies one executable to your user bin directory. The executable embeds the production Vue frontend. Node and PostgreSQL are not required after installation.
+The source installer copies one executable to `~/.local/bin` by default. The executable embeds the production Vue frontend.
 
 `lain setup` installs and starts a systemd user service. The service starts at login and restarts after a crash. Setup preserves configuration and credentials. Starting before login requires user lingering; setup reports the relevant `loginctl` command without invoking sudo.
 
@@ -116,9 +136,13 @@ The header's Diagram button opens the full map with muted off-scenario elements,
 
 Sequence diagrams share one ordered interaction across their scenarios. The full view shows participant lifelines and alt/opt/loop frames with every alternative visible. Select a message to inspect its snapshots; repeated messages offer an occurrence picker. The compact view shows the previous and current recorded messages.
 
+The right-side data inspector shows Changes, Before, After, and recorded Calls for the current occurrence. It stays open across views and scenarios until you close it. Heading chips count recorded instances and nested array items or object fields. Select an ERD property to focus its value in the inspector.
+
 The sun/moon button to the right of Quick actions switches between light and dark mode. The browser remembers the choice; light mode is the default.
 
 ### Keyboard actions
+
+Diagram and Domain canvases open fitted to their content. The active Fit or 1:1 control is blue.
 
 | Shortcut | Action |
 | --- | --- |
@@ -127,6 +151,10 @@ The sun/moon button to the right of Quick actions switches between light and dar
 | J / K | Next / previous scenario in sidebar order |
 | I | Toggle the current scenario's diagram |
 | O | Toggle the domain ERD |
+| n | Open / close the data inspector with a 150ms slide |
+| , / . | Previous / next inspector tab while open |
+| `'` / `/` | Page up / down in the active inspector tab while open |
+| ; | Toggle fit-to-screen / 1:1 with current-step focus in Diagram or Domain |
 
 Type to filter quick actions, use ↑/↓ to select a result, and press Enter to run it. Escape closes the dialog and restores navigation immediately, including during its closing animation. H/L works inside the scenario diagram. J/K works inside both diagram views. I/O switches between those views instantly. Single-letter shortcuts pause while typing, using quick actions or selection overlays, or interacting with unrelated modals. Scenario navigation preserves each scenario's event position and stops at the first/last item.
 
@@ -163,3 +191,22 @@ node tests/browser-smoke.cjs
 ```
 
 The harness exercises the actual daemon, live updates, restart persistence, and mobile layout. It cleans up its processes and retains diagnostic artifacts under `/tmp/opencode`.
+
+## Release
+
+GitHub Actions checks pushes to `main`. A stable `vX.Y.Z` tag matching `Cargo.toml` also builds and publishes an x86-64 Linux archive, SHA-256 checksum, and cargo-dist shell installer. The frontend production build precedes Rust compilation. An isolated smoke test installs the packaged executable and checks embedded assets, authenticated commands, and restart persistence without installing a service.
+
+From a clean, verified `main` checkout with the release version committed in `Cargo.toml` and `Cargo.lock`:
+
+```sh
+git tag -a v0.1.0 -m 'Release v0.1.0'
+git push --atomic origin main v0.1.0
+gh run list --workflow release.yml
+```
+
+Use the matching new version for later tags. Local packaging requires cargo-dist 0.32.0 after `./scripts/build.sh`:
+
+```sh
+dist build --artifacts=all --target=x86_64-unknown-linux-gnu --tag=v0.1.0
+node tests/release-smoke.mjs target/release/lain
+```

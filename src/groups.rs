@@ -48,87 +48,116 @@ impl Diagram {
         if self.kind == DiagramKind::Sequence {
             return Err("groups require kind flow or state".into());
         }
-        let groups: Vec<_> = self.groups.iter().map(|group| GroupDefinition {
-            id: &group.id, label: &group.label, members: &group.node_ids,
-            parent: group.parent_group_id.as_deref(),
-        }).collect();
+        let groups: Vec<_> = self
+            .groups
+            .iter()
+            .map(|group| GroupDefinition {
+                id: &group.id,
+                label: &group.label,
+                members: &group.node_ids,
+                parent: group.parent_group_id.as_deref(),
+            })
+            .collect();
         validate_containment(&groups, nodes, "diagram", "node", "nodes", "a node")
     }
 }
 
 impl Domain {
     pub(crate) fn validate_groups(&self, entities: &HashMap<&str, &Entity>) -> Result<(), String> {
-        let groups: Vec<_> = self.groups.iter().map(|group| GroupDefinition {
-            id: &group.id, label: &group.label, members: &group.entity_ids,
-            parent: group.parent_group_id.as_deref(),
-        }).collect();
-        validate_containment(&groups, entities, "domain", "entity", "entities", "an entity")
+        let groups: Vec<_> = self
+            .groups
+            .iter()
+            .map(|group| GroupDefinition {
+                id: &group.id,
+                label: &group.label,
+                members: &group.entity_ids,
+                parent: group.parent_group_id.as_deref(),
+            })
+            .collect();
+        validate_containment(
+            &groups,
+            entities,
+            "domain",
+            "entity",
+            "entities",
+            "an entity",
+        )
     }
 }
 
-fn validate_containment<T>(definitions: &[GroupDefinition<'_>], items: &HashMap<&str, &T>, scope: &str, member: &str, plural: &str, conflict: &str) -> Result<(), String> {
-        if definitions.len() > 100 {
-            return Err(format!("{scope} groups exceeds limit of 100"));
+fn validate_containment<T>(
+    definitions: &[GroupDefinition<'_>],
+    items: &HashMap<&str, &T>,
+    scope: &str,
+    member: &str,
+    plural: &str,
+    conflict: &str,
+) -> Result<(), String> {
+    if definitions.len() > 100 {
+        return Err(format!("{scope} groups exceeds limit of 100"));
+    }
+    let mut groups = HashMap::new();
+    for group in definitions {
+        validate_id(group.id).map_err(|error| format!("group: {error}"))?;
+        if groups.insert(group.id, group).is_some() {
+            return Err(format!("duplicate group ID {:?}", group.id));
         }
-        let mut groups = HashMap::new();
-        for group in definitions {
-            validate_id(group.id).map_err(|error| format!("group: {error}"))?;
-            if groups.insert(group.id, group).is_some() {
-                return Err(format!("duplicate group ID {:?}", group.id));
-            }
-            if items.contains_key(group.id) {
-                return Err(format!("group {:?}: ID conflicts with {conflict}", group.id));
-            }
-            if group.label.trim().is_empty() {
-                return Err(format!("group {:?}: label must not be blank", group.id));
-            }
-            if group.members.len() > 200 {
-                return Err(format!("group {plural} exceeds limit of 200"));
-            }
+        if items.contains_key(group.id) {
+            return Err(format!(
+                "group {:?}: ID conflicts with {conflict}",
+                group.id
+            ));
         }
-        let mut members = HashSet::new();
-        let mut populated = HashSet::new();
-        for group in definitions {
-            for node_id in group.members {
-                if !items.contains_key(node_id.as_str()) {
-                    return Err(format!("unknown group {member} reference {node_id:?}"));
-                }
-                if !members.insert(node_id) {
-                    return Err(format!(
-                        "{member} {node_id:?} belongs to more than one group membership"
-                    ));
-                }
-            }
-            let mut ancestors = HashSet::new();
-            let mut current = Some(group);
-            while let Some(ancestor) = current {
-                if !ancestors.insert(ancestor.id) {
-                    return Err(format!("group {:?}: cyclic parentGroupId", group.id));
-                }
-                if ancestors.len() > 8 {
-                    return Err("group nesting exceeds limit of 8".into());
-                }
-                if !group.members.is_empty() {
-                    populated.insert(ancestor.id);
-                }
-                current = ancestor
-                    .parent
-                    .map(|id| {
-                        groups
-                            .get(id)
-                            .copied()
-                            .ok_or_else(|| format!("unknown parent group reference {id:?}"))
-                    })
-                    .transpose()?;
-            }
+        if group.label.trim().is_empty() {
+            return Err(format!("group {:?}: label must not be blank", group.id));
         }
-        for group in definitions {
-            if !populated.contains(group.id) {
+        if group.members.len() > 200 {
+            return Err(format!("group {plural} exceeds limit of 200"));
+        }
+    }
+    let mut members = HashSet::new();
+    let mut populated = HashSet::new();
+    for group in definitions {
+        for node_id in group.members {
+            if !items.contains_key(node_id.as_str()) {
+                return Err(format!("unknown group {member} reference {node_id:?}"));
+            }
+            if !members.insert(node_id) {
                 return Err(format!(
-                    "group {:?} requires at least one descendant {member}",
-                    group.id
+                    "{member} {node_id:?} belongs to more than one group membership"
                 ));
             }
         }
-        Ok(())
+        let mut ancestors = HashSet::new();
+        let mut current = Some(group);
+        while let Some(ancestor) = current {
+            if !ancestors.insert(ancestor.id) {
+                return Err(format!("group {:?}: cyclic parentGroupId", group.id));
+            }
+            if ancestors.len() > 8 {
+                return Err("group nesting exceeds limit of 8".into());
+            }
+            if !group.members.is_empty() {
+                populated.insert(ancestor.id);
+            }
+            current = ancestor
+                .parent
+                .map(|id| {
+                    groups
+                        .get(id)
+                        .copied()
+                        .ok_or_else(|| format!("unknown parent group reference {id:?}"))
+                })
+                .transpose()?;
+        }
+    }
+    for group in definitions {
+        if !populated.contains(group.id) {
+            return Err(format!(
+                "group {:?} requires at least one descendant {member}",
+                group.id
+            ));
+        }
+    }
+    Ok(())
 }

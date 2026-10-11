@@ -196,14 +196,14 @@ it('keeps the current document, cursor, and tab after a failed automatic update 
     ? Response.json({ error: 'Revision unavailable' }, { status: 500 })
     : Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision, { ...fixture, title: `Revision ${revision}` })));
   await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
-  await click('Data');
+  await click('Domain');
   const previousRoute = location.search;
   revision = 2; fail = true;
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision }) });
   await vi.waitFor(() => expect(document.querySelector('.inline-error')?.textContent).toContain('Revision unavailable'));
   expect(document.querySelector('.explanation-title')!.textContent).toBe('Revision 1');
   expect(document.body.textContent).toContain('Explanation update failed');
-  expect(document.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe('Data');
+  expect(document.querySelector('.event-tablist [role="tab"][aria-selected="true"]')!.textContent).toBe('Domain');
   expect(location.search).toBe(previousRoute);
   fail = false;
   await click('Retry');

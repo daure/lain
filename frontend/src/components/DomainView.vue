@@ -4,10 +4,9 @@ import { domainLayout, scenarioDomain } from '../domain';
 import { domainActivity } from '../domain-activity';
 import type { Cardinality, Diagram, Explanation, Occurrence, Scenario } from '../model';
 import DiagramViewport from './DiagramViewport.vue';
-import DomainActivity from './DomainActivity.vue';
 
 const props = defineProps<{ domain: Explanation['domain']; diagram: Diagram; scenario: Scenario; selectedEntityId: string; occurrence?: Occurrence }>();
-const emit = defineEmits<{ select: [id: string] }>();
+const emit = defineEmits<{ select: [id: string]; inspect: [entityId: string, attributeId: string] }>();
 const canvas = ref<InstanceType<typeof DiagramViewport>>();
 const svg = ref<SVGSVGElement>();
 const numberPrefix = ref('');
@@ -15,6 +14,12 @@ let numberTimer: ReturnType<typeof setTimeout> | undefined;
 const layout = computed(() => domainLayout(props.domain));
 const relevance = computed(() => scenarioDomain(props.diagram, props.scenario));
 const activity = computed(() => domainActivity(props.domain, props.occurrence));
+const instanceCounts = computed(() => {
+  const instances = new Map([...props.occurrence?.before.instances ?? [], ...props.occurrence?.after.instances ?? []].map(instance => [instance.id, instance]));
+  const counts = new Map<string, number>();
+  for (const instance of instances.values()) counts.set(instance.entityId, (counts.get(instance.entityId) ?? 0) + 1);
+  return counts;
+});
 const endpointNotation: Record<Cardinality, { maximumPath: string; minimum: 'zero' | 'one'; label: string }> = {
   zeroOrOne: { maximumPath: 'M8,-8 V8', minimum: 'zero', label: 'zero or one (0..1)' },
   exactlyOne: { maximumPath: 'M8,-8 V8', minimum: 'one', label: 'exactly one (1..1)' },
@@ -35,7 +40,7 @@ const focusPoint = computed(() => {
   return { x: (Math.min(...entities.map(entity => entity.x - entity.width / 2)) + Math.max(...entities.map(entity => entity.x + entity.width / 2))) / 2,
     y: (Math.min(...entities.map(entity => entity.y - entity.height / 2)) + Math.max(...entities.map(entity => entity.y + entity.height / 2))) / 2 };
 });
-defineExpose({ canvas, handleNumberShortcut, cancelNumberShortcut });
+defineExpose({ canvas, handleNumberShortcut, cancelNumberShortcut, focusEntity });
 
 function entityDescription(id: string, label: string, shortcutNumber: number) {
   const current = activity.value.entities.get(id);
@@ -107,7 +112,6 @@ onUnmounted(cancelNumberShortcut);
 </script>
 
 <template>
-  <DomainActivity v-if="occurrence" :domain="domain" v-bind="activity" @select="focusEntity" />
   <DiagramViewport ref="canvas" :width="layout.width" :height="layout.height" title="Shared domain entity relationship diagram" :focus-point="focusPoint" :focus-key="`${scenario.id}/${occurrence?.id ?? ''}`" scroll-class="domain-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges">
     <svg ref="svg" class="domain-erd" :viewBox="`0 0 ${layout.width} ${layout.height}`" :style="{ width: `${layout.width}px`, height: `${layout.height}px` }" role="group" aria-label="Domain entity definitions and relationships">
       <title>Shared domain · {{ scenario.title }}</title>
@@ -150,9 +154,16 @@ onUnmounted(cancelNumberShortcut);
         <text class="domain-entity-name" :x="entity.titleX" y="25">
           <tspan v-for="(line, index) in entity.titleLines" :key="index" :x="entity.titleX" :dy="index ? 20 : 0">{{ line }}</tspan>
         </text>
-        <text class="domain-type-label" :x="entity.width - 16" y="25" text-anchor="end">TYPE</text>
-        <g v-for="row in entity.rows" :key="row.id" :class="['domain-property', propertyState(entity.id, row.id)]" :data-attribute-id="row.id" :transform="`translate(0,${row.y})`">
+        <g v-if="occurrence" class="domain-instance-count" :transform="`translate(${entity.width - 54},12)`" :aria-label="`${instanceCounts.get(entity.id) ?? 0} recorded instances`">
+          <title>{{ instanceCounts.get(entity.id) ?? 0 }} instances captured before or after this occurrence</title>
+          <rect width="38" height="22" rx="5" />
+          <text x="19" y="11" text-anchor="middle" dominant-baseline="central">{{ instanceCounts.get(entity.id) ?? 0 }}</text>
+        </g>
+        <text v-else class="domain-type-label" :x="entity.width - 16" y="25" text-anchor="end">TYPE</text>
+        <g v-for="row in entity.rows" :key="row.id" :class="['domain-property', propertyState(entity.id, row.id)]" :data-attribute-id="row.id" :transform="`translate(0,${row.y})`" role="button" tabindex="0" :aria-label="`Inspect ${entity.label} ${row.label}`"
+           @click.stop="emit('inspect', entity.id, row.id)" @keydown.enter.stop.prevent="emit('inspect', entity.id, row.id)" @keydown.space.stop.prevent="emit('inspect', entity.id, row.id)">
           <title>{{ row.label }} · {{ row.id }}{{ propertyEffects(entity.id, row.id).map(effect => `\n${effect.description}`).join('') }}</title>
+          <rect class="domain-property-hit-area" :width="entity.width" :height="row.height" />
           <rect v-if="propertyEffects(entity.id, row.id).length" class="domain-activity-surface" :width="entity.width" :height="row.height" />
           <line x1="0" :x2="entity.width" y1="0" y2="0" />
           <text class="domain-property-label" x="16" y="21">
@@ -202,7 +213,10 @@ onUnmounted(cancelNumberShortcut);
 .domain-shortcut-divider{stroke:var(--graph-line,#c6d2e1);stroke-width:1}
 .domain-shortcut-status{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .domain-type-label{fill:var(--muted);font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.6px}
+.domain-instance-count rect{fill:var(--surface);stroke:var(--line);stroke-width:1}.domain-instance-count text{fill:var(--muted);font-family:ui-monospace,monospace;font-size:11px}
+.domain-entity.step-active .domain-instance-count text{fill:var(--blue)}
 .domain-property line,.domain-methods line{stroke:var(--line);stroke-width:1}
+.domain-property-hit-area{fill:transparent}
 .domain-property-label{fill:var(--text);font-family:ui-monospace,monospace;font-size:13px}
 .domain-property-id{fill:var(--muted);font-family:ui-monospace,monospace;font-size:11px}
 .domain-method-signature{fill:var(--text);font-family:ui-monospace,monospace;font-size:13px}

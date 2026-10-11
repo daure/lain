@@ -269,17 +269,16 @@ it('correlates each recorded visit with property differences and explicit calls 
     expect(root.querySelector('[data-attribute-id="status"] title')!.textContent).toContain('removed · removed · "old" → Absent');
     expect(root.querySelector('[data-attribute-id="status"] title')!.textContent).toContain('created · created · Absent → "new"');
     expect(root.querySelector('.domain-method.called title')!.textContent).toContain('Called 2× in this step · a · Receiver not captured');
-    expect(root.querySelector('.domain-activity summary')!.textContent).toContain('8 property differences · 2 recorded calls');
+    expect(root.querySelector('.domain-instance-count text')!.textContent).toBe('3');
     expect(root.querySelectorAll('script')).toHaveLength(0);
     occurrence.value = revisit;
     await nextTick();
     expect(root.querySelectorAll('.domain-property.changed, .domain-property.created, .domain-property.removed')).toHaveLength(0);
     expect(root.querySelector('.domain-method.called')).not.toBeNull();
-    expect(root.querySelector('.domain-activity summary')!.textContent).toContain('0 property differences · 2 recorded calls');
+    expect(root.querySelector('.domain-instance-count text')!.textContent).toBe('1');
     occurrence.value = idle;
     await nextTick();
     expect(root.querySelector('.domain-method.called')).toBeNull();
-    expect(root.querySelector('.domain-activity summary')!.textContent).toContain('No method calls recorded');
     expect(root.querySelector('.domain-entity')!.getAttribute('transform')).toBe(geometry);
   } finally { app.unmount(); root.remove(); }
 });
