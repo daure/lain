@@ -81,6 +81,15 @@ export function useBrowserNavigation(library: ReturnType<typeof useLibrary>, nav
 
   function select(id: string) { return apply('push', id); }
 
+  function reset(firstScenarioId: string) {
+    if (!library.active.value) return;
+    applying = true;
+    navigation.load(library.active.value.document);
+    navigation.selectScenario(firstScenarioId);
+    applying = false;
+    write('push');
+  }
+
   function back() {
     ++generation;
     applying = true;
@@ -96,5 +105,5 @@ export function useBrowserNavigation(library: ReturnType<typeof useLibrary>, nav
     stopActive(); stopCursor(); stopReady(); stopDeleted();
   }
 
-  return { start, stop, select, back };
+  return { start, stop, select, reset, back };
 }

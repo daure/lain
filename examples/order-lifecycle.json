@@ -4,11 +4,19 @@
   "description": "Follow payment callbacks through capture, duplicate acknowledgement, and issuer decline. Walk parcels through first-attempt delivery, redelivery, and return to sender. Inspect the three payment exchanges as ordered messages with concrete recorded state.",
   "domain": {
     "entities": [
-      { "id": "order", "label": "Order", "attributes": [{ "id": "number", "label": "Order number" }, { "id": "paymentStatus", "label": "Payment status" }, { "id": "total", "label": "Total (EUR)" }] },
-      { "id": "payment", "label": "Payment", "attributes": [{ "id": "status", "label": "Status" }, { "id": "amount", "label": "Amount (EUR)" }, { "id": "failureReason", "label": "Failure reason" }] },
+      { "id": "order", "label": "Order", "attributes": [{ "id": "number", "label": "Order number" }, { "id": "paymentStatus", "label": "Payment status" }, { "id": "total", "label": "Total (EUR)" }], "methods": [
+        { "id": "mark-paid", "signature": "markPaid(paymentId: string): void", "description": "Mark the order paid after its payment is captured." }
+      ] },
+      { "id": "payment", "label": "Payment", "attributes": [{ "id": "status", "label": "Status" }, { "id": "amount", "label": "Amount (EUR)" }, { "id": "failureReason", "label": "Failure reason" }], "methods": [
+        { "id": "capture", "signature": "capture(): void", "description": "Record successful capture of the authorized payment." },
+        { "id": "decline", "signature": "decline(reason: string): void", "description": "Record an issuer decline and its failure reason." }
+      ] },
       { "id": "fulfillment", "label": "Fulfillment", "attributes": [{ "id": "status", "label": "Work status" }, { "id": "warehouse", "label": "Warehouse" }] },
       { "id": "receipt", "label": "Receipt", "attributes": [{ "id": "eventId", "label": "Callback event ID" }, { "id": "handled", "label": "Event handled" }, { "id": "lookupCount", "label": "Receipt lookups" }, { "id": "responseStatus", "label": "HTTP response status" }] },
-      { "id": "shipment", "label": "Shipment", "attributes": [{ "id": "status", "label": "Parcel status" }, { "id": "trackingNumber", "label": "Tracking number" }, { "id": "deliveredAt", "label": "Delivered at" }, { "id": "carrier", "label": "Carrier" }, { "id": "destinationCity", "label": "Destination city" }, { "id": "deliveryAttempts", "label": "Delivery attempts" }, { "id": "deliveryIssue", "label": "Delivery issue" }, { "id": "returnReason", "label": "Return reason" }, { "id": "returnedAt", "label": "Returned at" }] }
+      { "id": "shipment", "label": "Shipment", "attributes": [{ "id": "status", "label": "Parcel status" }, { "id": "trackingNumber", "label": "Tracking number" }, { "id": "deliveredAt", "label": "Delivered at" }, { "id": "carrier", "label": "Carrier" }, { "id": "destinationCity", "label": "Destination city" }, { "id": "deliveryAttempts", "label": "Delivery attempts" }, { "id": "deliveryIssue", "label": "Delivery issue" }, { "id": "returnReason", "label": "Return reason" }, { "id": "returnedAt", "label": "Returned at" }], "methods": [
+        { "id": "record-attempt", "signature": "recordDeliveryAttempt(issue: string | null): void", "description": "Increment the delivery attempt count and record any delivery issue." },
+        { "id": "return", "signature": "returnToSender(reason: string): void", "description": "Record the return reason and move the parcel into the returned state." }
+      ] }
     ],
     "relationships": [
       { "id": "order-payments", "label": "has payment", "sourceEntityId": "order", "targetEntityId": "payment", "sourceCardinality": "one", "targetCardinality": "many" },

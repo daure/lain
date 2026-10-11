@@ -34,6 +34,19 @@ pub struct Entity {
     pub id: String,
     pub label: String,
     pub attributes: Vec<Attribute>,
+    /// Descriptive domain operations, rendered separately from captured attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<EntityMethod>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EntityMethod {
+    pub id: String,
+    /// Nonblank signature text, including parameters and return type when known; never executed.
+    pub signature: String,
+    /// Plain-text description of the operation's domain behavior.
+    pub description: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -300,6 +313,16 @@ impl Explanation {
         let mut entity_attributes = HashMap::new();
         for entity in &self.domain.entities {
             limit(entity.attributes.len(), 200, "entity attributes")?;
+            limit(entity.methods.len(), 200, "entity methods")?;
+            index(&entity.methods, |method| &method.id, "entity method")?;
+            for method in &entity.methods {
+                if method.signature.trim().is_empty() {
+                    return Err(format!(
+                        "entity {:?}, method {:?}: signature must not be blank",
+                        entity.id, method.id
+                    ));
+                }
+            }
             let attributes = index(&entity.attributes, |attribute| &attribute.id, "attribute")?;
             entity_attributes.insert(entity.id.as_str(), attributes);
         }

@@ -1,21 +1,25 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, type ComponentPublicInstance } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import Button from 'primevue/button';
-import Dialog from 'primevue/dialog';
 import Select from 'primevue/select';
-import ProgressSpinner from 'primevue/progressspinner';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import GraphView from './components/GraphView.vue';
+import DomainView from './components/DomainView.vue';
 import SequenceView from './components/SequenceView.vue';
 import StateView from './components/StateView.vue';
 import SidebarContext from './components/SidebarContext.vue';
+import StepNavigator from './components/StepNavigator.vue';
 import QuickActionsDialog from './components/QuickActionsDialog.vue';
-import { arrowKeyActions, isEditableTarget, quickActions, type QuickActionId } from './quick-actions';
+import FocusChrome from './components/FocusChrome.vue';
+import FocusBreadcrumb from './components/FocusBreadcrumb.vue';
+import ExplanationLibrary from './components/ExplanationLibrary.vue';
+import type DiagramViewport from './components/DiagramViewport.vue';
+import { arrowKeyActions, shiftedPanActions, isEditableTarget, quickActions, type QuickActionId } from './quick-actions';
 import { useLibrary } from './library';
 import { useNavigation } from './navigation';
 import { useBrowserNavigation } from './browser-navigation';
-import { diagramLayout, domainLayout } from './layout';
+import { diagramLayout } from './layout';
 import { useTheme } from './theme';
 
 const { dark, toggleTheme } = useTheme();
@@ -27,39 +31,44 @@ const { summaries, active, loading, selecting, error, selectionError, connection
 const navigation = useNavigation();
 const routes = useBrowserNavigation(library, navigation);
 const { scenario, diagram, occurrence, index, history: walkedHistory, scenarioId } = navigation;
-const graphMode = ref<'diagram' | 'domain' | null>(null);
-const lastGraphMode = ref<'diagram' | 'domain'>('diagram');
-const renderedGraphMode = computed(() => graphMode.value ?? lastGraphMode.value);
-const domainDialog = computed(() => graphMode.value === 'domain');
-const graphVisible = computed({ get: () => graphMode.value !== null, set: visible => { if (!visible) graphMode.value = null; } });
+const tabs = ['Event', 'Diagram', 'Data', 'Domain'] as const;
+const selectedTab = ref(0);
+const focusMode = ref(false);
+const diagramView = ref<{ canvas?: InstanceType<typeof DiagramViewport> }>();
+const domainView = ref<InstanceType<typeof DomainView>>();
+const activeCanvas = computed(() => selectedTab.value === 1 ? diagramView.value?.canvas : selectedTab.value === 3 ? domainView.value?.canvas : undefined);
 const quickDialog = ref(false);
 const quickActionsDialog = ref<InstanceType<typeof QuickActionsDialog>>();
+const libraryView = ref<InstanceType<typeof ExplanationLibrary>>();
+const libraryState = ref({ query: '', selectedId: '', scrollTop: 0 });
 const sidebarContext = ref<InstanceType<typeof SidebarContext>>();
 let sidebarCenterPending = false;
 const quickButton = ref<HTMLButtonElement>();
-const graphFooter = ref<ComponentPublicInstance>();
 let focusOrigin: HTMLElement | null = null;
-let pendingDialog: 'quick' | 'diagram' | 'domain' | null = null;
+let pendingDialog = false;
 let modalClosing = false;
-const ownedDialogSelector = '.quick-actions-dialog[aria-modal="true"], .recorded-graph-dialog[aria-modal="true"]';
+const ownedDialogSelector = '.quick-actions-dialog[aria-modal="true"]';
 const visualScenarios = computed(() => active.value?.document.diagrams.flatMap(group => active.value!.document.scenarios.filter(item => item.diagramId === group.id)) ?? []);
 const scenarioPosition = computed(() => visualScenarios.value.findIndex(item => item.id === scenarioId.value));
-const actions = computed(() => quickActions.map(action => ({ ...action, disabled: !active.value || !scenario.value || ({
+const actions = computed(() => quickActions.map(action => ({ ...action, ...(action.id === 'H' && activeCanvas.value ? { shortcut: 'Palette only' } : {}), disabled: !active.value || !scenario.value || ({
   h: index.value === 0, l: index.value === (scenario.value?.occurrences.length ?? 0) - 1,
   gg: index.value === 0, G: index.value === (scenario.value?.occurrences.length ?? 0) - 1,
   j: scenarioPosition.value === visualScenarios.value.length - 1, k: scenarioPosition.value <= 0,
-  i: !diagram.value, o: !domainGraph.value,
+  H: false,
+  m: false,
+  '[': selectedTab.value === 0, ']': selectedTab.value === tabs.length - 1,
   ys: !scenario.value, yp: !occurrence.value, yd: !diagram.value,
+  '=': !activeCanvas.value, '-': !activeCanvas.value, ';': !activeCanvas.value, "'": !activeCanvas.value,
+  'pan-left': !activeCanvas.value, 'pan-down': !activeCanvas.value, 'pan-up': !activeCanvas.value, 'pan-right': !activeCanvas.value,
 })[action.id] })));
-watch(graphMode, mode => { if (mode) lastGraphMode.value = mode; }, { flush: 'sync' });
-watch([quickDialog, graphVisible], (next, previous) => {
-  if (previous.some((visible, index) => visible && !next[index])) modalClosing = true;
+watch(quickDialog, (next, previous) => {
+  if (next) domainView.value?.cancelNumberShortcut();
+  if (previous && !next) modalClosing = true;
 }, { flush: 'sync' });
 const inspectedNodeId = ref('');
 const pickedOccurrenceId = ref<string | null>(null);
 const inspectedEntityId = ref('');
 const graph = computed(() => diagram.value && diagram.value.kind !== 'sequence' ? diagramLayout(diagram.value) : null);
-const domainGraph = computed(() => active.value ? domainLayout(active.value.document) : null);
 const currentNode = computed(() => diagram.value?.nodes.find(node => node.id === occurrence.value?.nodeId));
 const currentLocation = computed(() => `${currentNode.value?.label ?? ''} · ${index.value + 1} / ${scenario.value?.occurrences.length ?? 0}`);
 const yankPaths = computed(() => {
@@ -77,6 +86,15 @@ const visitedNodes = computed(() => walkedHistory.value.map(item => item.nodeId)
 const visitedEdges = computed(() => walkedHistory.value.flatMap(item => item.incomingEdgeId ? [item.incomingEdgeId] : []));
 const scenarioNodes = computed(() => scenario.value?.occurrences.map(item => item.nodeId) ?? []);
 const scenarioEdges = computed(() => scenario.value?.occurrences.flatMap(item => item.incomingEdgeId ? [item.incomingEdgeId] : []) ?? []);
+const historyVisitNumbers = computed(() => {
+  const visits = new Map<string, string[]>();
+  for (const item of scenario.value?.occurrences ?? []) {
+    const ids = visits.get(item.nodeId) ?? [];
+    ids.push(item.id);
+    visits.set(item.nodeId, ids);
+  }
+  return new Map([...visits.values()].filter(ids => ids.length > 1).flatMap(ids => ids.map((id, position) => [id, position + 1] as const)));
+});
 const compactGraph = computed(() => {
   if (!diagram.value || diagram.value.kind === 'sequence' || !occurrence.value) return null;
   const previous = scenario.value?.occurrences[index.value - 1];
@@ -87,22 +105,19 @@ const compactGraph = computed(() => {
 const connectionLabel = computed(() => ({ connected: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting · view stays pinned', offline: 'Not connected' })[connection.value]);
 
 watch(active, () => {
-  graphMode.value = null;
+  selectedTab.value = 0;
+  if (!active.value) focusMode.value = false;
 });
-watch([scenarioId, graphMode], ([nextScenario], [previousScenario]) => {
-  const focused = document.activeElement;
-  const focusedDialog = focused?.closest('.recorded-graph-dialog');
+watch(scenarioId, (nextScenario, previousScenario) => {
   const revealScenario = nextScenario !== previousScenario && !sidebarCenterPending;
   if (nextScenario !== previousScenario) { inspectedNodeId.value = ''; pickedOccurrenceId.value = null; }
   void nextTick(() => {
     if (revealScenario) document.querySelector('.scenario-link.selected')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-    if (graphVisible.value && focusedDialog?.isConnected && !focused?.isConnected && document.activeElement === document.body && !hasUnknownModal()) {
-      focusGraphFooter();
-    }
   });
 });
 
 function restoreFocus() {
+  if (!active.value) { libraryView.value?.focusSelectedCard(); return; }
   const origin = focusOrigin;
   const canRestore = origin?.isConnected && !origin.closest('[role="dialog"], [hidden], [inert]')
     && !origin.matches(':disabled, [aria-disabled="true"]') && origin.getClientRects().length;
@@ -110,60 +125,88 @@ function restoreFocus() {
     origin.focus({ preventScroll: true });
     if (document.activeElement === origin) return;
   }
-  quickButton.value?.focus({ preventScroll: true });
+  if (focusMode.value) selectTab(selectedTab.value, true);
+  else quickButton.value?.focus({ preventScroll: true });
 }
 
-function focusGraphFooter() {
-  const footer = graphFooter.value?.$el;
-  if (footer instanceof HTMLElement) footer.focus({ preventScroll: true });
-}
-
-function showDialog(target: 'quick' | 'diagram' | 'domain') {
-  if (target === 'quick' && quickDialog.value) { quickActionsDialog.value?.focusSearch(); return; }
-  if (target !== 'quick' && graphVisible.value) { graphMode.value = target; return; }
-  if (!graphVisible.value && !quickDialog.value && !modalClosing) {
+function showQuickActions() {
+  activeCanvas.value?.cancelPan();
+  if (quickDialog.value) { quickActionsDialog.value?.focusSearch(); return; }
+  if (!modalClosing) {
     focusOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    if (target === 'quick') quickDialog.value = true;
-    else graphMode.value = target;
+    quickDialog.value = true;
     return;
   }
-  pendingDialog = target;
-  modalClosing = true;
-  graphMode.value = null; quickDialog.value = false;
+  pendingDialog = true;
 }
 
 function afterDialogHide() {
   modalClosing = false;
   restoreFocus();
-  const target = pendingDialog;
-  pendingDialog = null;
-  if (target) void nextTick(() => showDialog(target));
+  const reopen = pendingDialog;
+  pendingDialog = false;
+  if (reopen) void nextTick(showQuickActions);
 }
 
-function toggleGraphDialog(target: 'diagram' | 'domain') {
-  if (pendingDialog === target || graphMode.value === target) {
-    pendingDialog = null;
-    graphMode.value = null;
-  } else showDialog(target);
+function selectTab(position: number, focus = false) {
+  if (position < 0 || position >= tabs.length) return;
+  const focusedInTabs = document.activeElement?.closest('.event-tabs');
+  selectedTab.value = position;
+  if (focus || focusedInTabs) void nextTick(() => document.querySelector<HTMLButtonElement>('.event-tabs [role="tab"][aria-selected="true"]')?.focus({ preventScroll: true }));
 }
 
-function executeAction(id: QuickActionId) {
+function onTabKeydown(event: KeyboardEvent) {
+  const position = { ArrowLeft: selectedTab.value - 1, ArrowRight: selectedTab.value + 1, Home: 0, End: tabs.length - 1 }[event.key];
+  if (position === undefined || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
+  event.preventDefault(); event.stopPropagation();
+  selectTab(position, true);
+}
+
+function executeAction(id: QuickActionId, heldKey?: string) {
   if (actions.value.find(action => action.id === id)?.disabled !== false) return;
+  if (id === 'm') {
+    const focusedChrome = document.activeElement?.closest('.app-header, .sidebar, .event-controls');
+    focusMode.value = !focusMode.value;
+    if (focusMode.value && focusedChrome) selectTab(selectedTab.value, true);
+    if (quickDialog.value) quickDialog.value = false;
+    return;
+  }
+  if (id === 'pan-left' || id === 'pan-down' || id === 'pan-up' || id === 'pan-right') {
+    const [x, y] = { 'pan-left': [-187.5, 0], 'pan-down': [0, 187.5], 'pan-up': [0, -187.5], 'pan-right': [187.5, 0] }[id];
+    void activeCanvas.value?.panBy(x!, y!, heldKey);
+    if (quickDialog.value) quickDialog.value = false;
+    return;
+  }
+  if (id === '=' || id === '-' || id === ';' || id === "'") {
+    if (id === ';') void activeCanvas.value?.fit();
+    else if (id === "'") void activeCanvas.value?.actualSize();
+    else void activeCanvas.value?.zoom(id === '=' ? 1.25 : .8);
+    if (quickDialog.value) quickDialog.value = false;
+    return;
+  }
   if (id === 'ys' || id === 'yp' || id === 'yd') {
     void yankPath(id);
     if (quickDialog.value) { modalClosing = true; quickDialog.value = false; }
     return;
   }
-  if (id === 'i' || id === 'o') { toggleGraphDialog(id === 'i' ? 'diagram' : 'domain'); return; }
+  if (id === '[' || id === ']') {
+    selectTab(selectedTab.value + (id === '[' ? -1 : 1));
+    if (quickDialog.value) quickDialog.value = false;
+    return;
+  }
   sidebarCenterPending = true;
-  if (id === 'h' || id === 'l') navigation.step(id === 'h' ? -1 : 1);
+  if (id === 'H') {
+    routes.reset(visualScenarios.value[0]!.id);
+    selectTab(0, true);
+  }
+  else if (id === 'h' || id === 'l') navigation.step(id === 'h' ? -1 : 1);
   else if (id === 'gg' || id === 'G') navigation.selectOccurrence(scenario.value!.occurrences[id === 'gg' ? 0 : scenario.value!.occurrences.length - 1]!.id);
   else {
     const target = visualScenarios.value[scenarioPosition.value + (id === 'j' ? 1 : -1)];
     if (target) navigation.selectScenario(target.id);
   }
   void nextTick(() => {
-    sidebarContext.value?.center();
+    sidebarContext.value?.center(id === 'j' || id === 'k');
     sidebarCenterPending = false;
   });
   if (quickDialog.value) { modalClosing = true; quickDialog.value = false; }
@@ -194,41 +237,66 @@ function onYankKeydown(event: KeyboardEvent): boolean {
 }
 
 function hasUnknownModal() {
-  return !!document.querySelector('[aria-modal="true"]:not(.quick-actions-dialog):not(.recorded-graph-dialog)');
+  return !!document.querySelector('[aria-modal="true"]:not(.quick-actions-dialog)');
 }
 
 function isLeavingDialogTarget(target: EventTarget | null) {
   const dialog = target instanceof Element ? target.closest(ownedDialogSelector) : null;
-  return !!dialog && (dialog.classList.contains('quick-actions-dialog') ? !quickDialog.value : !graphVisible.value);
+  return !!dialog && !quickDialog.value;
 }
 
 function isSelectionOverlayTarget(target: EventTarget | null) {
   return target instanceof Element && !!target.closest('[role="listbox"], [role="option"], .p-select-overlay');
 }
 
+function canUseDomainNumbers(target: EventTarget | null) {
+  const leavingTarget = isLeavingDialogTarget(target);
+  return selectedTab.value === 3 && !!active.value && !!scenario.value && !quickDialog.value && !pendingDialog && !hasUnknownModal()
+    && (!isEditableTarget(target) || leavingTarget) && (!isSelectionOverlayTarget(target) || leavingTarget)
+    && !document.querySelector('.p-select-overlay');
+}
+
 function onOwnedKeydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !canUseDomainNumbers(event.target)) {
+    domainView.value?.cancelNumberShortcut();
+  } else if (domainView.value?.handleNumberShortcut(event, () => canUseDomainNumbers(document.activeElement))) {
+    firstEventDeadline = 0;
+    yankDeadline = 0;
+    event.preventDefault(); event.stopPropagation();
+    return;
+  }
   if (event.key !== 'g') firstEventDeadline = 0;
   if (onYankKeydown(event)) return;
   if (event.defaultPrevented || event.isComposing) return;
-  if (event.key === 'Escape') {
+  const escapeKey = event.key === 'Escape' || (event.key === '[' && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey);
+  if (escapeKey) {
+    if (event.repeat) return;
     const quickTarget = event.target instanceof Element && event.target.closest('.quick-actions-dialog');
     if (hasUnknownModal() || (isSelectionOverlayTarget(event.target) && !quickTarget)
-      || document.querySelector('.graph-dialog [role="combobox"][aria-expanded="true"], .p-select-overlay')) return;
-    if (quickDialog.value || graphVisible.value || pendingDialog) {
-      pendingDialog = null;
-      graphMode.value = null; quickDialog.value = false;
+      || document.querySelector('.p-select-overlay')) return;
+    if (quickDialog.value || pendingDialog) {
+      pendingDialog = false;
+      quickDialog.value = false;
+      event.preventDefault(); event.stopPropagation();
+    } else if (!modalClosing) {
+      if (!active.value) libraryView.value?.focusSelectedCard(!!document.activeElement?.closest('.explanation-card'));
+      else {
+        const focused = document.activeElement;
+        if (focused && focused !== document.body && focused !== document.documentElement && (focused instanceof HTMLElement || focused instanceof SVGElement)) focused.blur();
+        else routes.back();
+      }
       event.preventDefault(); event.stopPropagation();
     }
     return;
   }
   if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
     event.preventDefault(); event.stopPropagation();
-    if (!event.repeat) showDialog('quick');
+    if (!event.repeat) showQuickActions();
     return;
   }
   const ownedTarget = event.target instanceof Element && event.target.closest(ownedDialogSelector);
   const key = arrowKeyActions[event.key] ?? event.key;
-  if (ownedTarget && ['h', 'j', 'k', 'l', 'i', 'o', 'g', 'G'].includes(key)) {
+  if (ownedTarget && ['h', 'j', 'k', 'l', '[', ']', 'g', 'G', 'H', 'J', 'K', 'L', 'm', '=', '-', ';', "'"].includes(key)) {
     onGlobalKeydown(event);
     if (event.defaultPrevented) event.stopPropagation();
     return;
@@ -241,9 +309,18 @@ function onGlobalKeydown(event: KeyboardEvent) {
   firstEventDeadline = 0;
   if (event.defaultPrevented || event.isComposing) return;
   const leavingTarget = isLeavingDialogTarget(event.target);
-  if (event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && event.key !== 'G') || (isEditableTarget(event.target) && !leavingTarget)
-    || (isSelectionOverlayTarget(event.target) && !leavingTarget) || quickDialog.value || pendingDialog || hasUnknownModal()
-    || (domainDialog.value && ['h', 'l', 'g', 'G'].includes(key))) return;
+  if (event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && event.key !== 'G' && !shiftedPanActions[event.key]) || (isEditableTarget(event.target) && !leavingTarget)
+    || (isSelectionOverlayTarget(event.target) && !leavingTarget) || quickDialog.value || pendingDialog || hasUnknownModal()) return;
+  if (!active.value) {
+    if (!event.shiftKey) libraryView.value?.handleKeydown(event);
+    return;
+  }
+  const panAction = event.shiftKey && activeCanvas.value ? shiftedPanActions[event.key] : undefined;
+  if (panAction) {
+    event.preventDefault();
+    if (!event.repeat) executeAction(panAction, event.key);
+    return;
+  }
   if (event.key === 'g') {
     if (event.repeat || !scenario.value) return;
     event.preventDefault();
@@ -255,7 +332,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
   if (action && leavingTarget) event.preventDefault();
   if (action && !action.disabled) {
     event.preventDefault();
-    if (!event.repeat || !['i', 'o', 'G'].includes(action.id)) executeAction(action.id);
+    if (!event.repeat || (action.id !== 'G' && action.id !== 'H' && action.id !== 'm')) executeAction(action.id);
   }
 }
 
@@ -266,56 +343,64 @@ function inspectNode(id: string) {
   if (visits.length === 1) navigation.selectOccurrence(visits[0]!.id);
 }
 
+function onPanKeyup(event: KeyboardEvent) {
+  if (event.key === 'Shift') activeCanvas.value?.releasePan();
+  else activeCanvas.value?.releasePan(event.key.toUpperCase());
+}
+
+function cancelKeyboardPan() { activeCanvas.value?.cancelPan(); domainView.value?.cancelNumberShortcut(); }
+
+function onPanFocus(event: FocusEvent) {
+  if (isEditableTarget(event.target) || isSelectionOverlayTarget(event.target) || hasUnknownModal()) cancelKeyboardPan();
+}
+
 onMounted(() => {
   routes.start();
   void library.start();
   document.addEventListener('keydown', onOwnedKeydown, true);
   document.addEventListener('keydown', onGlobalKeydown);
+  document.addEventListener('keyup', onPanKeyup, true);
+  document.addEventListener('focusin', onPanFocus);
+  window.addEventListener('blur', cancelKeyboardPan);
 });
 onUnmounted(() => {
   routes.stop();
   library.stop();
   document.removeEventListener('keydown', onOwnedKeydown, true);
   document.removeEventListener('keydown', onGlobalKeydown);
-  pendingDialog = null;
+  document.removeEventListener('keyup', onPanKeyup, true);
+  document.removeEventListener('focusin', onPanFocus);
+  window.removeEventListener('blur', cancelKeyboardPan);
+  pendingDialog = false;
 });
 </script>
 
 <template>
   <Toast position="top-right" />
+  <FocusChrome :hidden="focusMode">
   <header class="app-header">
-    <div class="header-identity">
-      <button class="brand" aria-label="Lain explanation library" @click="routes.back">lain</button>
-      <span v-if="active" class="identity-separator" aria-hidden="true">·</span>
-      <h1 v-if="active" class="explanation-title" :title="active.document.title">{{ active.document.title }}</h1>
-    </div>
+    <h1 v-if="active" class="header-identity">
+      <button class="brand" aria-label="Lain explanation library" title="Back to explanation library" @click="routes.back">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M19 12H5m7-7-7 7 7 7" /></svg>
+        <span class="explanation-title" :title="active.document.title">{{ active.document.title }}</span>
+      </button>
+    </h1>
     <div class="header-actions">
       <span class="connection" role="status"><i :class="['pi', connection === 'connected' ? 'pi-check-circle' : 'pi-circle', connection]" aria-hidden="true" />{{ connectionLabel }}</span>
-      <Button v-if="active" label="Diagram" severity="secondary" outlined @click="showDialog('diagram')" />
-      <Button v-if="active" label="Domain" severity="secondary" outlined @click="showDialog('domain')" />
-      <button ref="quickButton" class="quick-actions-trigger" aria-label="Quick actions" title="Quick actions (Ctrl+K)" @click="showDialog('quick')"><i class="pi pi-search" aria-hidden="true" /><span>Quick actions</span><kbd>Ctrl K</kbd></button>
+      <button ref="quickButton" class="quick-actions-trigger" aria-label="Quick actions" title="Quick actions (Ctrl+K)" @click="showQuickActions"><i class="pi pi-search" aria-hidden="true" /><span>Quick actions</span><kbd>Ctrl K</kbd></button>
       <button class="theme-toggle" aria-label="Toggle dark mode" :aria-pressed="dark" :title="dark ? 'Switch to light mode' : 'Switch to dark mode'" @click="toggleTheme"><i :class="['pi', dark ? 'pi-sun' : 'pi-moon']" aria-hidden="true" /></button>
     </div>
   </header>
+  </FocusChrome>
 
-  <main v-if="!active" class="library-view">
-    <div class="library-heading"><p class="eyebrow">Your explanation library</p><h1>Understand the path.<br><span class="muted">See the data behind it.</span></h1><p class="muted">Recorded scenarios, published by your agent. Walk through what happened, one event at a time.</p></div>
-    <div v-if="loading || selecting" class="placeholder" role="status"><ProgressSpinner style="width: 40px; height: 40px" /><h2>{{ selecting ? 'Opening explanation…' : 'Loading your library…' }}</h2></div>
-    <div v-else-if="error" class="placeholder error-state" role="alert"><i class="pi pi-exclamation-circle" /><h2>Could not load the library</h2><p>{{ error }}</p><Button label="Retry connection" icon="pi pi-refresh" @click="library.retry" /></div>
-    <template v-else>
-      <div v-if="selectionError" class="inline-error" role="alert">{{ selectionError }}</div>
-      <div v-if="!summaries.length" class="placeholder"><div class="empty-icon"><i class="pi pi-sitemap" /></div><h2>A place for the whole story</h2><p>Nothing published yet. Ask your agent to publish an explanation through Lain’s MCP tools.</p><p class="muted">To explore an example, run <code>lain demo</code>.</p></div>
-      <div v-else class="library-grid">
-        <button v-for="item in summaries" :key="item.id" class="explanation-card" @click="routes.select(item.id)">
-          <div class="card-top"><span class="card-icon"><i class="pi pi-sitemap" /></span><span class="eyebrow">Revision {{ item.revision }}</span></div>
-          <h2>{{ item.title }}</h2><p>{{ item.description }}</p>
-          <div class="card-bottom"><span>{{ item.diagramCount }} diagrams · {{ item.scenarioCount }} scenarios</span><i class="pi pi-arrow-right" /></div>
-        </button>
-      </div>
-    </template>
-  </main>
+  <FocusChrome v-if="active && diagram && scenario" :hidden="!focusMode">
+    <FocusBreadcrumb :explanation="active.document.title" :diagram="diagram.title" :scenario="scenario.title" />
+  </FocusChrome>
 
-  <div v-else-if="scenario && diagram && occurrence" class="workspace">
+  <ExplanationLibrary v-if="!active" ref="libraryView" v-model:state="libraryState" :summaries="summaries" :loading="loading" :selecting="selecting" :error="error" :selection-error="selectionError" @select="routes.select" @retry="library.retry" />
+
+  <div v-else-if="scenario && diagram && occurrence" :class="['workspace', { 'focus-mode': focusMode }]">
+    <FocusChrome class="focus-sidebar-slot" :hidden="focusMode">
     <aside class="sidebar" aria-label="Scenarios and walked history">
       <div class="sidebar-scroll" tabindex="0" role="region" aria-label="Scenarios and walked history navigation">
       <SidebarContext ref="sidebarContext" :diagram="diagram" :scenario="scenario" />
@@ -330,13 +415,16 @@ onUnmounted(() => {
           <li v-for="(item, position) in scenario.occurrences" :key="item.id">
             <button :class="['history-link', { current: item.id === occurrence.id, future: position > index }]" :aria-current="item.id === occurrence.id ? 'step' : undefined" @click="navigation.selectOccurrence(item.id)">
               <span class="history-symbol" aria-hidden="true">{{ item.id === occurrence.id ? '●' : position > index ? '○' : '✓' }}</span>
-              <span>{{ diagram.nodes.find(node => node.id === item.nodeId)?.label }}<small>{{ item.id === occurrence.id ? 'You are here' : position > index ? `Occurrence ${position + 1} · Upcoming` : `Occurrence ${position + 1}` }}</small></span>
+              <span class="history-title">{{ diagram.nodes.find(node => node.id === item.nodeId)?.label }}</span>
+              <small><i class="pi pi-bolt" aria-hidden="true" /><span>{{ item.trigger ?? 'No trigger captured' }}</span></small>
+              <span v-if="historyVisitNumbers.has(item.id)" class="history-visit-badge" role="img" :aria-label="`Visit ${historyVisitNumbers.get(item.id)}`">{{ historyVisitNumbers.get(item.id) }}</span>
             </button>
           </li>
         </ol>
       </section>
       </div>
     </aside>
+    </FocusChrome>
 
     <main class="event-view">
       <div class="event-content" tabindex="0" role="region" aria-label="Recorded event details">
@@ -344,38 +432,56 @@ onUnmounted(() => {
       <div v-if="latestRevision > active.revision" class="update-banner" role="status"><div><strong>A newer revision is available.</strong><span> Viewing r{{ active.revision }}. Reload to view r{{ latestRevision }}; stable selections stay selected.</span></div><Button label="Reload revision" icon="pi pi-refresh" :loading="selecting" @click="library.select(active.id)" /></div>
       <div v-if="selectionError || error" class="inline-error" role="alert">{{ selectionError || error }} <Button v-if="error" label="Retry" size="small" text @click="library.resync" /></div>
       </div>
-      <div class="event-columns">
-        <section class="event-story" tabindex="0" aria-label="Event story" aria-live="polite" aria-atomic="true">
-          <div class="event-hero"><p class="eyebrow">Occurrence {{ String(index + 1).padStart(2, '0') }} / {{ String(scenario.occurrences.length).padStart(2, '0') }} · Current</p><h2>{{ currentNode?.label }}</h2><div class="trigger"><span class="eyebrow">Trigger</span><code>{{ occurrence.trigger ?? 'No trigger captured' }}</code></div></div>
+        <StepNavigator :key="`${active.id}/${scenario.id}`" :diagram="diagram" :scenario="scenario" :index="index" @select="navigation.selectOccurrence" />
+        <section class="event-tabs" aria-label="Event views">
+          <div class="event-tablist" role="tablist" aria-label="Event views" @keydown="onTabKeydown">
+            <button v-for="(tab, position) in tabs" :id="`event-tab-${position}`" :key="tab" role="tab" :aria-selected="selectedTab === position" :aria-controls="`event-panel-${position}`" :tabindex="selectedTab === position ? 0 : -1" @click="selectTab(position)">{{ tab }}</button>
+          </div>
+          <div v-show="selectedTab === 0" id="event-panel-0" class="event-story event-tabpanel" role="tabpanel" aria-labelledby="event-tab-0" tabindex="0" aria-live="polite" aria-atomic="true">
           <div v-if="diagram.kind === 'sequence'" class="event-graph"><SequenceView :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" compact @select="navigation.selectOccurrence" /></div>
-          <div v-else-if="compactGraph" class="event-graph"><GraphView :layout="compactGraph" :title="`Current event: ${currentNode?.label}`" :current-node-id="occurrence.nodeId" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" /></div>
+          <div v-else-if="compactGraph" class="event-graph"><GraphView :layout="compactGraph" :title="`Current event: ${currentNode?.label}`" :current-node-id="occurrence.nodeId" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" /></div>
           <p class="narration">{{ occurrence.narration }}</p>
           <div class="event-context"><span class="eyebrow">{{ index === scenario.occurrences.length - 1 ? 'Path complete' : 'Recorded event' }}</span><span>{{ index === scenario.occurrences.length - 1 ? 'End of this scenario. Replay or explore another path.' : 'Next moves to the next captured occurrence. No system behavior is simulated.' }}</span></div>
+          </div>
+          <div v-if="selectedTab === 1" id="event-panel-1" class="diagram-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-1" tabindex="0">
+            <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" @inspect="inspectNode" />
+            <GraphView v-else-if="graph" ref="diagramView" :key="diagram.id" :layout="graph" :title="diagram.title" :current-node-id="occurrence.nodeId" :current-occurrence-id="`${scenario.id}/${occurrence.id}`" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" interactive @select="inspectNode" />
+            <div v-if="inspectedNode" class="node-inspector"><h3>{{ inspectedNode.label }}</h3><p class="muted">Entities: {{ inspectedNode.entityIds.map(id => active?.document.domain.entities.find(entity => entity.id === id)?.label).join(', ') || 'None linked' }}</p>
+              <p v-if="!nodeOccurrences.length" class="offpath-note">Off this scenario’s path. You can inspect this node, but it has no captured occurrence here. The current event stays unchanged.</p>
+              <div v-else-if="nodeOccurrences.length > 1" class="occurrence-picker"><p>This node appears {{ nodeOccurrences.length }} times. Choose an occurrence; each visit has its own snapshots.</p><Select v-model="pickedOccurrenceId" :options="nodeOccurrences" option-label="label" option-value="id" placeholder="Choose a recorded occurrence" aria-label="Recorded occurrence" /><Button label="Go to occurrence" :disabled="!pickedOccurrenceId" @click="pickedOccurrenceId && navigation.selectOccurrence(pickedOccurrenceId)" /></div>
+              <p v-else class="muted">Showing this node’s recorded occurrence.</p>
+            </div>
+          </div>
+          <div v-show="selectedTab === 2" id="event-panel-2" class="data-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-2" tabindex="0">
+            <StateView :document="active.document" :occurrence="occurrence" />
+          </div>
+          <div v-if="selectedTab === 3" id="event-panel-3" class="domain-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-3" tabindex="0">
+            <DomainView ref="domainView" :domain="active.document.domain" :diagram="diagram" :scenario="scenario" :occurrence="occurrence" :selected-entity-id="inspectedEntityId" @select="id => inspectedEntityId = id" />
+            <div v-if="inspectedEntity" class="node-inspector"><h3>{{ inspectedEntity.label }}</h3><p class="eyebrow">{{ inspectedEntity.id }}</p><dl class="entity-attributes"><template v-for="attribute in inspectedEntity.attributes" :key="attribute.id"><dt>{{ attribute.label }}</dt><dd>{{ attribute.id }}</dd></template></dl>
+              <section v-if="inspectedEntity.methods?.length" class="entity-methods" aria-label="Entity methods">
+                <h4>Methods</h4>
+                <div v-for="method in inspectedEntity.methods" :key="method.id" class="entity-method">
+                  <code>{{ method.signature }}</code><small class="muted">{{ method.id }}</small><p>{{ method.description }}</p>
+                </div>
+              </section>
+            </div>
+          </div>
         </section>
-        <StateView :document="active.document" :occurrence="occurrence" />
       </div>
-      </div>
-      <footer class="event-controls"><Button label="Previous event" icon="pi pi-arrow-left" severity="secondary" outlined :disabled="index === 0" @click="navigation.step(-1)" /><span class="eyebrow">{{ index + 1 }} / {{ scenario.occurrences.length }} · {{ index === scenario.occurrences.length - 1 ? 'End of path' : 'Walk the scenario' }}</span><Button v-if="index < scenario.occurrences.length - 1" label="Next event" icon="pi pi-arrow-right" icon-pos="right" @click="navigation.step(1)" /><Button v-else label="Replay scenario" icon="pi pi-replay" @click="navigation.selectOccurrence(scenario.occurrences[0]!.id)" /></footer>
+      <FocusChrome :hidden="focusMode">
+      <footer class="event-controls"><Button label="Previous event" icon="pi pi-arrow-left" severity="secondary" outlined :disabled="index === 0" @click="navigation.step(-1)" /><span class="eyebrow"><span aria-hidden="true">❤️</span> Focus is your superpower</span><Button v-if="index < scenario.occurrences.length - 1" label="Next event" icon="pi pi-arrow-right" icon-pos="right" @click="navigation.step(1)" /><Button v-else label="Replay scenario" icon="pi pi-replay" @click="navigation.selectOccurrence(scenario.occurrences[0]!.id)" /></footer>
+      </FocusChrome>
     </main>
   </div>
 
   <QuickActionsDialog ref="quickActionsDialog" v-model:visible="quickDialog" :close-on-escape="false" :actions="actions" @execute="executeAction" @after-hide="afterDialogHide" />
-  <Dialog v-model:visible="graphVisible" modal :close-on-escape="false" :header="renderedGraphMode === 'domain' ? 'Domain / Entity relationships' : diagram?.title ?? 'Full diagram'" :class="['graph-dialog', 'recorded-graph-dialog', renderedGraphMode === 'domain' ? 'domain-erd-dialog' : 'scenario-diagram-dialog']" :style="{ width: 'min(1200px, 95vw)' }" @show="nextTick(focusGraphFooter)" @after-hide="afterDialogHide">
-    <template v-if="renderedGraphMode === 'diagram'">
-    <p v-if="diagram?.kind !== 'sequence'" class="muted">Blue marks visited nodes and edges; solid blue is current. Dark outlines mark future parts of this scenario. Gray marks other paths. Select any node to inspect it.</p>
-    <SequenceView v-if="diagram?.kind === 'sequence' && scenario && occurrence" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" @inspect="inspectNode" />
-    <GraphView v-else-if="graph && occurrence" :layout="graph" :title="diagram?.title ?? 'Diagram'" :current-node-id="occurrence.nodeId" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" interactive @select="inspectNode" />
-    <div v-if="inspectedNode" class="node-inspector"><h3>{{ inspectedNode.label }}</h3><p class="muted">Entities: {{ inspectedNode.entityIds.map(id => active?.document.domain.entities.find(entity => entity.id === id)?.label).join(', ') || 'None linked' }}</p>
-      <p v-if="!nodeOccurrences.length" class="offpath-note">Off this scenario’s path. You can inspect this node, but it has no captured occurrence here. The current event stays unchanged.</p>
-      <div v-else-if="nodeOccurrences.length > 1" class="occurrence-picker"><p>This node appears {{ nodeOccurrences.length }} times. Choose an occurrence; each visit has its own snapshots.</p><Select v-model="pickedOccurrenceId" :options="nodeOccurrences" option-label="label" option-value="id" placeholder="Choose a recorded occurrence" aria-label="Recorded occurrence" /><Button label="Go to occurrence" :disabled="!pickedOccurrenceId" @click="pickedOccurrenceId && navigation.selectOccurrence(pickedOccurrenceId)" /></div>
-      <p v-else class="muted">Showing this node’s recorded occurrence.</p>
-    </div>
-    </template>
-    <template v-else>
-    <p class="muted">Entities and their defined attributes. Relationship labels show source and target cardinalities. Select an entity to inspect its definition.</p>
-    <GraphView v-if="domainGraph" :layout="domainGraph" title="Domain entity relationship diagram" interactive @select="id => inspectedEntityId = id" />
-    <div v-if="inspectedEntity" class="node-inspector"><h3>{{ inspectedEntity.label }}</h3><p class="eyebrow">{{ inspectedEntity.id }}</p><dl class="entity-attributes"><template v-for="attribute in inspectedEntity.attributes" :key="attribute.id"><dt>{{ attribute.label }}</dt><dd>{{ attribute.id }}</dd></template></dl></div>
-    </template>
-    <template #footer><Button ref="graphFooter" label="Back to event" severity="secondary" outlined autofocus @click="graphMode = null" /></template>
-  </Dialog>
 </template>
+
+<style scoped>
+.entity-methods{border-top:1px solid var(--line);margin-top:16px;padding-top:16px}
+.entity-methods h4{margin:0 0 12px}
+.entity-method{margin-bottom:16px;overflow-wrap:anywhere}
+.entity-method code{white-space:pre-wrap;font-size:.85rem}
+.entity-method small{display:block;margin-top:4px}
+.entity-method p{margin:8px 0 0;font-size:.85rem;white-space:pre-wrap}
+</style>

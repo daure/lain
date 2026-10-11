@@ -21,9 +21,9 @@ const summary = { id: 'order-lifecycle', revision: 1, title: fixture.title, desc
   updatedAtMs: 1, diagramCount: fixture.diagrams.length, scenarioCount: fixture.scenarios.length };
 const stored = (id = 'order-lifecycle', revision = 1, document = fixture) => ({ id, revision, updatedAtMs: 1, document });
 const current = () => new URLSearchParams(location.search).get('occurrence');
-const hero = () => document.querySelector('.event-hero .eyebrow')?.textContent;
+const hero = () => document.querySelector('.step-announcement')?.textContent;
 const click = async (label: string) => {
-  [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === label)!.click();
+  [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent?.trim()) === label)!.click();
   await nextTick();
 };
 const route = (scenario = 'duplicate-callback', occurrence = 'duplicate-verification', explanation = 'order-lifecycle') =>
@@ -99,7 +99,8 @@ it('pushes complete selections and restores Back and Forward without fetching th
   history.forward();
   await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
   expect(fetch.mock.calls).toHaveLength(calls);
-  await click('lain');
+  document.querySelector<HTMLElement>('.explanation-title')!.click();
+  await nextTick();
   expect(location.search).toBe('?theme=dark');
   history.back();
   await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
@@ -289,8 +290,8 @@ it('ignores stale deletion notifications after a newer publication and retains t
   await vi.waitFor(() => expect(document.querySelector('.update-banner')?.textContent).toContain('Reload to view r3'));
   expect(document.querySelector('.update-banner')?.textContent).toContain('Viewing r1');
   expect(current()).toBe('duplicate-verification');
-  await click('lain');
-  expect(document.querySelector('.explanation-card')?.textContent).toContain('Revision 3');
+  await click('Lain explanation library');
+  expect(document.querySelector('.explanation-card h2')?.textContent).toBe(summary.title);
 });
 
 it('restores recreated library cards from an authoritative reconnect list after deletion', async () => {
@@ -307,13 +308,13 @@ it('restores recreated library cards from an authoritative reconnect list after 
   await vi.waitFor(() => expect(document.querySelector('.explanation-card')).toBeNull());
   exists = true; revision = 3;
   LiveSocket.current.onopen?.();
-  await vi.waitFor(() => expect(document.querySelector('.explanation-card')?.textContent).toContain('Revision 3'));
+  await vi.waitFor(() => expect(document.querySelector('.explanation-card h2')?.textContent).toBe(summary.title));
   expect(document.querySelector('.workspace')).toBeNull();
   expect(location.search).toBe('');
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click();
   await vi.waitFor(() => expect(hero()).toContain('01 / 04'));
   expect(document.querySelector('.update-banner')).toBeNull();
-  await click('lain');
+  await click('Lain explanation library');
   pending = true;
   history.replaceState(null, '', route());
   window.dispatchEvent(new PopStateEvent('popstate'));

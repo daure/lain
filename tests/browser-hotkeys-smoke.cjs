@@ -42,7 +42,7 @@ async function assertBounded() {
   assert.ok(Math.abs(gaps.outer) <= 1, `footer must reach the view bottom: ${JSON.stringify(gaps)}`);
 }
 
-const eventText = () => page.locator('.event-hero > .eyebrow').textContent();
+const eventText = () => page.locator('.step-announcement').textContent();
 const scenarioText = () => page.locator('.scenario-link[aria-current="true"]').textContent();
 const search = () => page.getByRole('combobox', { name: 'Search quick actions' });
 
@@ -129,10 +129,10 @@ async function cancelHandoff(query, origin, sameTurn) {
       const queued = [];
       for (const key of ['h', 'j', 'k', 'l']) {
         dispatch(key); await Promise.resolve();
-        queued.push({ event: document.querySelector('.event-hero > .eyebrow').textContent, scenario: document.querySelector('.scenario-link[aria-current="true"]').textContent });
+        queued.push({ event: document.querySelector('.step-announcement').textContent, scenario: document.querySelector('.scenario-link[aria-current="true"]').textContent });
       }
       dispatch('Escape'); dispatch('h'); await Promise.resolve();
-      return { queued, dismissed: document.querySelector('.event-hero > .eyebrow').textContent, leaving: element.isConnected };
+      return { queued, dismissed: document.querySelector('.step-announcement').textContent, leaving: element.isConnected };
     });
     for (const sample of result.queued) { assert.equal(sample.event, before); assert.equal(sample.scenario, 'Duplicate callback'); }
     assert.match(result.dismissed, /01 \/ 05/); assert.equal(result.leaving, true);
@@ -171,7 +171,7 @@ async function dismissDuringNavigation(mode, origin, sameTurn) {
         if (key === 'Escape') continue;
         await Promise.resolve();
         samples.push({
-          event: document.querySelector('.event-hero > .eyebrow').textContent,
+          event: document.querySelector('.step-announcement').textContent,
           scenario: document.querySelector('.scenario-link[aria-current="true"]').textContent,
           leaving: dialog.isConnected,
           prevented: event.defaultPrevented,
@@ -186,7 +186,7 @@ async function dismissDuringNavigation(mode, origin, sameTurn) {
     for (const key of ['h', 'l', 'j', 'k']) {
       await page.keyboard.press(key);
       samples.push(await page.evaluate(() => ({
-        event: document.querySelector('.event-hero > .eyebrow').textContent,
+        event: document.querySelector('.step-announcement').textContent,
         scenario: document.querySelector('.scenario-link[aria-current="true"]').textContent,
         leaving: !!document.querySelector('[role="dialog"]'),
         query: document.querySelector('[aria-label="Search quick actions"]')?.value,
@@ -208,7 +208,7 @@ async function assertDuplicateStep(step) {
   const labels = ['Callback received', 'Receipt checked', 'Event already handled', 'Receipt checked', 'Ignore the duplicate callback'];
   assert.match(await eventText(), new RegExp(`0${step} / 05`));
   assert.equal(await page.locator('.graph-dialog .graph-node.current').getAttribute('aria-label'), step === 4 ? `${labels[step - 1]} · visited 2 times` : labels[step - 1]);
-  assert.equal(await page.locator('.event-hero h2').textContent(), labels[step - 1]);
+  assert.equal(await page.locator('.step-tile[aria-current="step"] .step-title').textContent(), `0${step} / ${labels[step - 1]}`);
   assert.equal(await page.locator('.graph-dialog .graph-node.visited').count(), [1, 2, 3, 3, 4][step - 1]);
   assert.equal(await page.locator('.graph-dialog .graph-edge.walked').count(), step - 1);
   assert.deepEqual(await page.locator('.graph-dialog .node-visit-badge text').allTextContents(), step >= 4 ? ['2'] : []);
@@ -239,7 +239,7 @@ async function assertScenarioPath(documentFixture = fixture) {
       const path = edge.querySelector('path');
       const markerId = path.getAttribute('marker-end').slice(5, -1);
       return {
-        label: edge.querySelector('text').firstChild.textContent, on: edge.classList.contains('on-scenario'), off: edge.classList.contains('off-scenario'),
+        label: edge.querySelector('title').firstChild.textContent, on: edge.classList.contains('on-scenario'), off: edge.classList.contains('off-scenario'),
         walked: edge.classList.contains('walked'), stroke: getComputedStyle(path).stroke,
         text: getComputedStyle(edge.querySelector('text')).fill, arrow: getComputedStyle(document.getElementById(markerId).querySelector('path')).fill,
       };
@@ -528,7 +528,7 @@ async function assertSequenceStep(dialog, scenario, step) {
   const dark = await page.locator('html').evaluate(element => element.classList.contains('app-dark'));
   const occurrence = scenario.occurrences[step - 1];
   assert.match(await eventText(), new RegExp(`0${step} / 0${scenario.occurrences.length}`));
-  assert.equal(await page.locator('.trigger code').textContent(), occurrence.trigger);
+  assert.equal(await page.locator('.step-tile[aria-current="step"] .step-trigger code').textContent(), occurrence.trigger);
   assert.equal(await dialog.locator('.sequence-message.current').getAttribute('data-occurrence-id'), occurrence.id);
   const visited = new Set(scenario.occurrences.slice(0, step).map(item => item.nodeId));
   const onPath = new Set(scenario.occurrences.map(item => item.nodeId));
@@ -744,7 +744,7 @@ async function exerciseTheme(documentFixture) {
   await page.locator('.explanation-card').first().click(); await page.locator('.event-controls').waitFor();
   await page.getByRole('button', { name: 'Duplicate callback', exact: true }).click();
   for (let step = 0; step < 3; step++) await page.getByRole('button', { name: 'Next event', exact: true }).click();
-  await assertDarkSurface(page.locator('.event-hero')); await assertDarkSurface(page.locator('.sidebar'));
+  await assertDarkSurface(page.locator('.sidebar'));
   assert.equal(await page.locator('.event-graph .graph-node.visited:not(.current) text').first().evaluate(element => getComputedStyle(element).fill), 'rgb(121, 170, 255)');
   assert.equal(await page.locator('.event-graph .graph-arrow.default path').evaluate(element => getComputedStyle(element).fill), 'rgb(121, 170, 255)');
   await assertBounded();

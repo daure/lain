@@ -45,6 +45,8 @@ struct PublishInput {
     /// Complete recorded explanation. Diagrams own shared definitions; sequence.body declares
     /// ordered messages and alt/opt/loop fragments. Scenarios follow that structure and declared
     /// edges, with stable occurrence IDs even for revisits. Guards are descriptive text.
+    /// Domain entities may include methods with stable IDs, signature text, and descriptions.
+    /// Methods describe behavior, are never executed, and are not snapshot value keys.
     /// Encode numbers outside ±9007199254740991 and precision-sensitive decimals as strings.
     document: Explanation,
 }
@@ -94,7 +96,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Validate and atomically publish a complete explanation. Diagrams define shared behavior; scenarios traverse it. Sequence diagrams require an ordered body with message references and alt/opt/loop fragments; guards are text, never executed. expectedRevision=0 creates; updates require the current revision. Redact secrets before publishing. Snapshots contain captured values, not inferred state."
+        description = "Validate and atomically publish a complete explanation. Diagrams define shared behavior; scenarios traverse it. Domain entities may include descriptive methods with id, signature, and description; methods are never executed or captured as snapshot attributes. Sequence diagrams require an ordered body with message references and alt/opt/loop fragments; guards are text, never executed. expectedRevision=0 creates; updates require the current revision. Redact secrets before publishing. Snapshots contain captured values, not inferred state."
     )]
     async fn publish_explanation(
         &self,

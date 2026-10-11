@@ -1,4 +1,5 @@
-export type Entity = { id: string; label: string; attributes: { id: string; label: string }[] };
+export type EntityMethod = { id: string; signature: string; description: string };
+export type Entity = { id: string; label: string; attributes: { id: string; label: string }[]; methods?: EntityMethod[] };
 export type Relationship = {
   id: string;
   label: string;

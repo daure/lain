@@ -15,6 +15,7 @@ let scrollAnimation: number | undefined;
 
 function update() {
   if (!region?.clientHeight) return;
+  region.style.setProperty('--sidebar-scrollbar-width', `${region.offsetWidth - region.clientWidth}px`);
   const group = [...region.querySelectorAll<HTMLElement>('.scenario-group')].find(item => item.dataset.diagramId === props.diagram.id);
   const originalHeading = group?.querySelector<HTMLElement>('.group-heading');
   const selected = group?.querySelector<HTMLElement>('.scenario-link.selected');
@@ -37,11 +38,11 @@ function cancelScroll() {
   scrollAnimation = undefined;
 }
 
-function center() {
+function center(onlyIfHidden = false) {
   cancelScroll();
   const target = region?.querySelector<HTMLElement>('.history-link.current');
   const selected = region?.querySelector<HTMLElement>('.scenario-link.selected');
-  if (!region || !target || !selected) return;
+  if (!region?.clientHeight || !target || !selected) return;
   const bounds = region.getBoundingClientRect();
   const group = selected.closest('.scenario-group')!;
   const title = group.querySelector('h3')!;
@@ -53,12 +54,13 @@ function center() {
   const contentStyle = getComputedStyle(content.value!);
   const headingHeight = heading.value!.offsetHeight + parseFloat(contentStyle.paddingBottom) + parseFloat(contentStyle.borderBottomWidth);
   const targetBounds = target.getBoundingClientRect();
+  const stickyHeightAt = (top: number) => top >= diagramBoundary ? headingHeight + (firstScenario || top >= scenarioBoundary ? selected.offsetHeight : 0) : 0;
+  if (onlyIfHidden && targetBounds.top >= bounds.top + stickyHeightAt(start) && targetBounds.bottom <= bounds.bottom) return;
   const midpoint = start + targetBounds.top - bounds.top + targetBounds.height / 2;
   const maximum = region.scrollHeight - region.clientHeight;
   let top = start;
   for (let pass = 0; pass < 4; pass++) {
-    const stickyHeight = top >= diagramBoundary ? headingHeight + (firstScenario || top >= scenarioBoundary ? selected.offsetHeight : 0) : 0;
-    top = Math.max(0, Math.min(maximum, midpoint - (region.clientHeight + stickyHeight) / 2));
+    top = Math.max(0, Math.min(maximum, midpoint - (region.clientHeight + stickyHeightAt(top)) / 2));
   }
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     region.scrollTop = top;

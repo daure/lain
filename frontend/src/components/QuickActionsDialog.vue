@@ -9,7 +9,7 @@ const query = ref('');
 const search = ref<HTMLInputElement>();
 const activeId = ref<QuickActionId>();
 const filtered = computed(() => props.actions.filter(action => `${action.title} ${action.description} ${action.id}`.toLowerCase().includes(query.value.trim().toLowerCase())));
-const groups = computed(() => ['Events', 'Scenarios', 'Diagrams', 'Clipboard'].map(title => ({ title, actions: filtered.value.filter(action => action.group === title) })).filter(group => group.actions.length));
+const groups = computed(() => ['Events', 'Scenarios', 'Tabs', 'Diagram', 'Clipboard'].map(title => ({ title, actions: filtered.value.filter(action => action.group === title) })).filter(group => group.actions.length));
 watch(() => props.visible, visible => {
   if (visible) { query.value = ''; activeId.value = props.actions.find(action => !action.disabled)?.id; }
 }, { flush: 'sync' });

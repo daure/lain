@@ -126,6 +126,10 @@ fn document() -> Value {
 
 fn sequence_document() -> Value {
     let mut value = document();
+    value["domain"]["entities"] = json!([{
+        "id": "order", "label": "Order", "attributes": [],
+        "methods": [{"id": "capture", "signature": "capturePayment(): void", "description": "Capture an authorized payment."}]
+    }]);
     value["diagrams"][0]["kind"] = json!("sequence");
     value["diagrams"][0]["sequence"] = json!({
         "participants": [{"id": "client", "label": "<script>Client</script>"}],
@@ -629,6 +633,25 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
     assert!(publish["inputSchema"]["properties"]["document"].is_object());
     assert!(publish["inputSchema"].to_string().contains("occurrences"));
     let definitions = &publish["inputSchema"]["$defs"];
+    assert_eq!(
+        definitions["Entity"]["properties"]["methods"]["items"]["$ref"],
+        "#/$defs/EntityMethod"
+    );
+    assert!(
+        !definitions["Entity"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("methods"))
+    );
+    assert_eq!(definitions["EntityMethod"]["additionalProperties"], false);
+    for field in ["id", "signature", "description"] {
+        assert!(
+            definitions["EntityMethod"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field))
+        );
+    }
     assert_eq!(
         definitions["DiagramKind"]["enum"],
         json!(["flow", "state", "process", "sequence"])

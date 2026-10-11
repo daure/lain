@@ -5,18 +5,32 @@ export const quickActions = [
   { id: 'G', title: 'Last event', description: 'Jump to the end of the active scenario', group: 'Events', icon: 'pi-step-forward' },
   { id: 'j', shortcut: 'j / ↓', title: 'Next scenario', description: 'Select the next path in the sidebar', group: 'Scenarios', icon: 'pi-arrow-down' },
   { id: 'k', shortcut: 'k / ↑', title: 'Previous scenario', description: 'Select the previous path in the sidebar', group: 'Scenarios', icon: 'pi-arrow-up' },
-  { id: 'i', title: 'View current Scenario Diagram', description: 'Inspect the selected scenario’s full diagram', group: 'Diagrams', icon: 'pi-sitemap' },
-  { id: 'o', title: 'View Domain ERD', description: 'Inspect entities and their relationships', group: 'Diagrams', icon: 'pi-database' },
+  { id: 'H', shortcut: 'Shift+H', title: 'Reset explanation', description: 'Reset all scenarios to their first event and open the first scenario in Event view', group: 'Scenarios', icon: 'pi-replay' },
+  { id: '[', title: 'Previous tab', description: 'Select the previous event view', group: 'Tabs', icon: 'pi-angle-left' },
+  { id: ']', title: 'Next tab', description: 'Select the next event view', group: 'Tabs', icon: 'pi-angle-right' },
+  { id: 'm', title: 'Toggle focus mode', description: 'Hide or restore the sidebar, header, and event footer', group: 'Tabs', icon: 'pi-window-maximize' },
+  { id: '=', title: 'Zoom in', description: 'Enlarge the active diagram', group: 'Diagram', icon: 'pi-plus' },
+  { id: '-', title: 'Zoom out', description: 'Shrink the active diagram', group: 'Diagram', icon: 'pi-minus' },
+  { id: ';', title: 'Fit diagram', description: 'Show the whole layout', group: 'Diagram', icon: 'pi-expand' },
+  { id: "'", title: '100% and focus', description: 'Restore actual size and center the current step', group: 'Diagram', icon: 'pi-bullseye' },
+  { id: 'pan-left', shortcut: 'Shift+H', title: 'Pan left', description: 'Scroll left by 187.5 pixels; hold the shortcut to continue', group: 'Diagram', icon: 'pi-arrow-left' },
+  { id: 'pan-down', shortcut: 'Shift+J', title: 'Pan down', description: 'Scroll down by 187.5 pixels; hold the shortcut to continue', group: 'Diagram', icon: 'pi-arrow-down' },
+  { id: 'pan-up', shortcut: 'Shift+K', title: 'Pan up', description: 'Scroll up by 187.5 pixels; hold the shortcut to continue', group: 'Diagram', icon: 'pi-arrow-up' },
+  { id: 'pan-right', shortcut: 'Shift+L', title: 'Pan right', description: 'Scroll right by 187.5 pixels; hold the shortcut to continue', group: 'Diagram', icon: 'pi-arrow-right' },
   { id: 'ys', title: 'Yank scenario name', description: 'Copy the breadcrumb path through the current scenario', group: 'Clipboard', icon: 'pi-copy' },
   { id: 'yp', title: 'Yank full path', description: 'Copy the breadcrumb path through the current event', group: 'Clipboard', icon: 'pi-copy' },
   { id: 'yd', title: 'Yank diagram name', description: 'Copy the breadcrumb path through the current diagram', group: 'Clipboard', icon: 'pi-copy' },
 ] as const;
 
 export type QuickActionId = typeof quickActions[number]['id'];
-export type QuickAction = typeof quickActions[number] & { disabled: boolean; shortcut?: string };
+export type QuickAction = Omit<typeof quickActions[number], 'shortcut'> & { disabled: boolean; shortcut?: string };
 
 export const arrowKeyActions: Readonly<Partial<Record<string, QuickActionId>>> = {
   ArrowLeft: 'h', ArrowDown: 'j', ArrowUp: 'k', ArrowRight: 'l',
+};
+
+export const shiftedPanActions: Readonly<Partial<Record<string, QuickActionId>>> = {
+  H: 'pan-left', J: 'pan-down', K: 'pan-up', L: 'pan-right',
 };
 
 export function isEditableTarget(target: EventTarget | null): boolean {

@@ -9,7 +9,7 @@ const links = computed(() => compareLinks(props.document, props.occurrence.befor
 </script>
 
 <template>
-  <section class="state-panel" tabindex="0" aria-labelledby="state-title">
+  <section class="state-panel" aria-labelledby="state-title">
     <p class="eyebrow">State / values / data</p>
     <h2 id="state-title">At this event</h2>
     <p class="muted state-caption">Before → After · Complete captured snapshots</p>

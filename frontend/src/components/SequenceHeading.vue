@@ -9,6 +9,7 @@ const props = defineProps<{
   y: number;
   sticky?: boolean;
   selected?: boolean;
+  highlighted?: boolean;
   context?: string;
 }>();
 const label = computed(() => props.branch ? props.branch.guard : `${props.frame.kind}${props.frame.guard ? `: ${props.frame.guard}` : ''}`);
@@ -20,7 +21,7 @@ const guard = computed(() => {
 </script>
 
 <template>
-  <g :class="[branch ? 'sequence-operand-heading' : 'fragment-heading', { 'sequence-pinned-fragment': sticky, selected }]"
+  <g :class="[branch ? 'sequence-operand-heading' : 'fragment-heading', { 'sequence-pinned-fragment': sticky, selected, highlighted }]"
      :transform="`translate(${8 + frame.depth * 12},${y})`" role="group" :aria-label="label">
     <title>{{ context || label }}</title>
     <rect v-if="sticky" class="sequence-heading-surface fragment-outline" :width="width - 16 - frame.depth * 24" height="28" />
