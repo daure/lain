@@ -268,10 +268,8 @@ async function notices(mock) {
   const longError = `${'Fetch failed while loading the recorded explanation. Diagnostic details remain available.\n'.repeat(100)}End of fetch diagnostics.`;
   mock.documentError = longError;
   mock.socket.send(JSON.stringify({ id: 'scroll-fixture', revision: 2 }));
-  const reload = page.getByRole('button', { name: 'Reload revision', exact: true });
-  await reload.click();
   await page.locator('.inline-error').waitFor();
-  assert.equal((await page.locator('.inline-error').textContent()).trim(), longError);
+  assert.ok((await page.locator('.inline-error').textContent()).includes(longError));
   await boundedWorkspace();
 
   mock.listError = longError;
@@ -280,11 +278,8 @@ async function notices(mock) {
   await retry.waitFor();
   await wheelInside(page.viewportSize().width > 1200 ? '.event-notices' : '.event-content',
     page.viewportSize().width > 1200 ? 'notices' : 'content');
-  const region = page.getByRole('region', { name: 'Revision updates and connection errors', exact: true });
+  const region = page.getByRole('region', { name: 'Connection errors', exact: true });
   await region.focus();
-  await page.keyboard.press('Tab');
-  assert.equal(await reload.evaluate(element => element === document.activeElement), true);
-  await visibleInViewport(reload);
   await page.keyboard.press('Tab');
   assert.equal(await retry.evaluate(element => element === document.activeElement), true);
   await visibleInViewport(retry);
@@ -294,15 +289,15 @@ async function notices(mock) {
 
   mock.listError = '';
   await page.keyboard.press('Enter');
-  await retry.waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('.inline-error').count(), 1, 'selection error stays until successful reload');
+  await page.waitForFunction(() => document.querySelector('.inline-error').textContent.includes('End of fetch diagnostics.'));
+  assert.equal(await page.locator('.inline-error').count(), 1, 'failed updates retain retryable diagnostics');
   mock.documentError = '';
   mock.revision = 2;
-  await reload.focus();
-  await visibleInViewport(reload);
+  await retry.focus();
+  await visibleInViewport(retry);
   await page.keyboard.press('Enter');
   await region.waitFor({ state: 'hidden' });
-  assert.match(await page.locator('.event-controls').textContent(), /2 \/ 100/);
+  assert.match(await page.locator('.path-hint').textContent(), /2\/100/);
   await boundedWorkspace();
 }
 

@@ -278,7 +278,16 @@ function onMapKeydown(event: KeyboardEvent) {
   else void zoom(event.key === '-' ? .8 : 1.25);
 }
 
-watch(() => [props.width, props.height, props.sceneKey], () => { void actualSize(); }, { flush: 'post' });
+watch(() => props.sceneKey, () => { void actualSize(); }, { flush: 'post' });
+watch(() => [props.width, props.height], () => {
+  cancelMotion();
+  selectedFocusPoint = undefined;
+  void nextTick(() => {
+    if (fitted.value) void fit();
+    else if (following) void centerCurrent();
+    else pan(view.value.left, view.value.top);
+  });
+}, { flush: 'post' });
 watch(() => [props.focusKey, props.focusPoint?.x, props.focusPoint?.y], () => { selectedFocusPoint = undefined; void centerCurrent(true); }, { flush: 'post' });
 onMounted(() => {
   if (typeof ResizeObserver !== 'undefined') {

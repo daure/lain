@@ -5,6 +5,8 @@ import Select from 'primevue/select';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import GraphView from './components/GraphView.vue';
+import DrillLink from './components/DrillLink.vue';
+import ScenarioDetails from './components/ScenarioDetails.vue';
 import DomainView from './components/DomainView.vue';
 import SequenceView from './components/SequenceView.vue';
 import StateView from './components/StateView.vue';
@@ -20,18 +22,20 @@ import { useLibrary } from './library';
 import { useNavigation } from './navigation';
 import { useBrowserNavigation } from './browser-navigation';
 import { diagramLayout } from './layout';
+import { activateDiagramNode, diagramLinkHint, diagramLinks } from './diagram-links';
 import { useTheme } from './theme';
 
 const { dark, toggleTheme } = useTheme();
 const toast = useToast();
 let yankDeadline = 0;
 let firstEventDeadline = 0;
+const drillRepeatSkipped = { i: false, o: false };
 const library = useLibrary();
-const { summaries, active, loading, selecting, error, selectionError, connection, latestRevision } = library;
+const { summaries, active, loading, selecting, error, selectionError, connection } = library;
 const navigation = useNavigation();
 const routes = useBrowserNavigation(library, navigation);
 const { scenario, diagram, occurrence, index, history: walkedHistory, scenarioId } = navigation;
-const tabs = ['Event', 'Diagram', 'Data', 'Domain'] as const;
+const tabs = ['Details', 'Diagram', 'Data', 'Domain'] as const;
 const selectedTab = ref(0);
 const focusMode = ref(false);
 const diagramView = ref<{ canvas?: InstanceType<typeof DiagramViewport> }>();
@@ -53,7 +57,8 @@ const scenarioPosition = computed(() => visualScenarios.value.findIndex(item => 
 const actions = computed(() => quickActions.map(action => ({ ...action, ...(action.id === 'H' && activeCanvas.value ? { shortcut: 'Palette only' } : {}), disabled: !active.value || !scenario.value || ({
   h: index.value === 0, l: index.value === (scenario.value?.occurrences.length ?? 0) - 1,
   gg: index.value === 0, G: index.value === (scenario.value?.occurrences.length ?? 0) - 1,
-  j: scenarioPosition.value === visualScenarios.value.length - 1, k: scenarioPosition.value <= 0,
+   j: scenarioPosition.value === visualScenarios.value.length - 1, k: scenarioPosition.value <= 0,
+   i: !navigation.canDrillBack.value, o: !navigation.canDrillForward.value,
   H: false,
   m: false,
   '[': selectedTab.value === 0, ']': selectedTab.value === tabs.length - 1,
@@ -66,10 +71,12 @@ watch(quickDialog, (next, previous) => {
   if (previous && !next) modalClosing = true;
 }, { flush: 'sync' });
 const inspectedNodeId = ref('');
+const inspectedDiagramId = ref('');
 const pickedOccurrenceId = ref<string | null>(null);
 const inspectedEntityId = ref('');
 const graph = computed(() => diagram.value && diagram.value.kind !== 'sequence' ? diagramLayout(diagram.value) : null);
 const currentNode = computed(() => diagram.value?.nodes.find(node => node.id === occurrence.value?.nodeId));
+const detailLinks = computed(() => active.value && diagram.value ? diagramLinks(active.value.document, diagram.value) : new Map());
 const currentLocation = computed(() => `${currentNode.value?.label ?? ''} · ${index.value + 1} / ${scenario.value?.occurrences.length ?? 0}`);
 const yankPaths = computed(() => {
   const diagramPath = `${active.value?.document.title} → ${diagram.value?.title}`;
@@ -95,18 +102,32 @@ const historyVisitNumbers = computed(() => {
   }
   return new Map([...visits.values()].filter(ids => ids.length > 1).flatMap(ids => ids.map((id, position) => [id, position + 1] as const)));
 });
-const compactGraph = computed(() => {
-  if (!diagram.value || diagram.value.kind === 'sequence' || !occurrence.value) return null;
-  const previous = scenario.value?.occurrences[index.value - 1];
-  const ids = new Set([occurrence.value.nodeId, previous?.nodeId]);
-  return diagramLayout({ ...diagram.value, nodes: diagram.value.nodes.filter(node => ids.has(node.id)),
-    edges: diagram.value.edges.filter(edge => edge.id === occurrence.value?.incomingEdgeId) });
-});
-const connectionLabel = computed(() => ({ connected: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting · view stays pinned', offline: 'Not connected' })[connection.value]);
+const connectionLabel = computed(() => ({ connected: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Not connected' })[connection.value]);
 
-watch(active, () => {
-  selectedTab.value = 0;
-  if (!active.value) focusMode.value = false;
+watch(active, (next, previous) => {
+  if (!next || next.id !== previous?.id) {
+    navigation.clearDrillHistory();
+    selectedTab.value = 0;
+    inspectedNodeId.value = ''; inspectedDiagramId.value = ''; pickedOccurrenceId.value = null; inspectedEntityId.value = '';
+    if (!next) focusMode.value = false;
+    return;
+  }
+  const focused = document.activeElement;
+  if (inspectedDiagramId.value !== diagram.value?.id || !inspectedNode.value) { inspectedNodeId.value = ''; pickedOccurrenceId.value = null; }
+  if (!nodeOccurrences.value.some(item => item.id === pickedOccurrenceId.value)) pickedOccurrenceId.value = null;
+  if (!inspectedEntity.value) inspectedEntityId.value = '';
+  if (next.revision > previous.revision) {
+    const change = navigation.selectionChange.value;
+    const detail = change === 'scenario' ? `Selected scenario was removed; moved to ${scenario.value?.title}.`
+      : change === 'occurrence' ? `Selected step was removed; moved to ${currentNode.value?.label}.` : undefined;
+    toast.add({ severity: 'info', summary: 'Explanation updated', detail, life: detail ? 6000 : 3000 });
+  }
+  void nextTick(() => {
+    if (focused && focused !== document.body && !focused.isConnected) selectTab(selectedTab.value, true);
+  });
+});
+watch(selectionError, message => {
+  if (message && active.value) toast.add({ severity: 'error', summary: 'Explanation update failed', detail: `${message} The current view is unchanged.`, life: 6000 });
 });
 watch(scenarioId, (nextScenario, previousScenario) => {
   const revealScenario = nextScenario !== previousScenario && !sidebarCenterPending;
@@ -155,6 +176,10 @@ function selectTab(position: number, focus = false) {
   if (focus || focusedInTabs) void nextTick(() => document.querySelector<HTMLButtonElement>('.event-tabs [role="tab"][aria-selected="true"]')?.focus({ preventScroll: true }));
 }
 
+function openDetail(targetScenarioId: string) {
+  if (navigation.openDetail(targetScenarioId)) selectTab(1, true);
+}
+
 function onTabKeydown(event: KeyboardEvent) {
   const position = { ArrowLeft: selectedTab.value - 1, ArrowRight: selectedTab.value + 1, Home: 0, End: tabs.length - 1 }[event.key];
   if (position === undefined || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
@@ -192,6 +217,11 @@ function executeAction(id: QuickActionId, heldKey?: string) {
   if (id === '[' || id === ']') {
     selectTab(selectedTab.value + (id === '[' ? -1 : 1));
     if (quickDialog.value) quickDialog.value = false;
+    return;
+  }
+  if (id === 'i' || id === 'o') {
+    if (routes.traverseDrill(id === 'i' ? -1 : 1)) selectTab(1, true);
+    if (quickDialog.value) { modalClosing = true; quickDialog.value = false; }
     return;
   }
   sidebarCenterPending = true;
@@ -296,7 +326,7 @@ function onOwnedKeydown(event: KeyboardEvent) {
   }
   const ownedTarget = event.target instanceof Element && event.target.closest(ownedDialogSelector);
   const key = arrowKeyActions[event.key] ?? event.key;
-  if (ownedTarget && ['h', 'j', 'k', 'l', '[', ']', 'g', 'G', 'H', 'J', 'K', 'L', 'm', '=', '-', ';', "'"].includes(key)) {
+  if (ownedTarget && ['h', 'j', 'k', 'l', 'i', 'o', '[', ']', 'g', 'G', 'H', 'J', 'K', 'L', 'm', '=', '-', ';', "'"].includes(key)) {
     onGlobalKeydown(event);
     if (event.defaultPrevented) event.stopPropagation();
     return;
@@ -315,6 +345,17 @@ function onGlobalKeydown(event: KeyboardEvent) {
     if (!event.shiftKey) libraryView.value?.handleKeydown(event);
     return;
   }
+  if (event.key === 'Enter' && selectedTab.value === 1 && occurrence.value) {
+    const target = event.target;
+    const diagramSurface = target === document || target === document.body || target === document.documentElement
+      || (target instanceof Element && (target.matches('.event-content, .event-tablist [role="tab"][aria-selected="true"]')
+        || (!!target.closest('.diagram-panel') && !target.closest('button, [role="button"], a'))));
+    const link = detailLinks.value.get(occurrence.value.nodeId);
+    if (diagramSurface && link?.scenarioId) {
+      activateDiagramNode(event, link, () => {}, openDetail);
+      return;
+    }
+  }
   const panAction = event.shiftKey && activeCanvas.value ? shiftedPanActions[event.key] : undefined;
   if (panAction) {
     event.preventDefault();
@@ -332,11 +373,16 @@ function onGlobalKeydown(event: KeyboardEvent) {
   if (action && leavingTarget) event.preventDefault();
   if (action && !action.disabled) {
     event.preventDefault();
-    if (!event.repeat || (action.id !== 'G' && action.id !== 'H' && action.id !== 'm')) executeAction(action.id);
+    if (action.id === 'i' || action.id === 'o') {
+      drillRepeatSkipped[action.id] = event.repeat && !drillRepeatSkipped[action.id];
+      if (drillRepeatSkipped[action.id]) return;
+    }
+    if (!event.repeat || !['G', 'H', 'm'].includes(action.id)) executeAction(action.id);
   }
 }
 
 function inspectNode(id: string) {
+  inspectedDiagramId.value = diagram.value?.id ?? '';
   inspectedNodeId.value = id;
   pickedOccurrenceId.value = null;
   const visits = navigation.occurrencesAtNode(id);
@@ -402,50 +448,52 @@ onUnmounted(() => {
   <div v-else-if="scenario && diagram && occurrence" :class="['workspace', { 'focus-mode': focusMode }]">
     <FocusChrome class="focus-sidebar-slot" :hidden="focusMode">
     <aside class="sidebar" aria-label="Scenarios and walked history">
-      <div class="sidebar-scroll" tabindex="0" role="region" aria-label="Scenarios and walked history navigation">
+      <div class="sidebar-scroll scenarios-scroll" tabindex="0" role="region" aria-label="Scenario navigation">
       <SidebarContext ref="sidebarContext" :diagram="diagram" :scenario="scenario" />
+      <div class="path-heading"><span class="eyebrow">Scenarios</span></div>
       <nav aria-label="Scenarios">
         <section v-for="group in active.document.diagrams" :key="group.id" :class="['scenario-group', { inactive: group.id !== diagram.id }]" :data-diagram-id="group.id">
           <div class="group-heading"><h3>{{ group.title }}</h3><span class="eyebrow">{{ group.kind }}</span></div>
           <button v-for="item in active.document.scenarios.filter(item => item.diagramId === group.id)" :key="item.id" :class="['scenario-link', { selected: item.id === scenarioId }]" :aria-current="item.id === scenarioId ? 'true' : undefined" @click="navigation.selectScenario(item.id)">{{ item.title }}</button>
         </section>
       </nav>
-      <section class="walked-path"><div class="path-heading"><span class="eyebrow">Scenario</span><span class="muted path-hint">{{ walkedHistory.length }}/{{ scenario.occurrences.length }}</span></div>
+      </div>
+      <section class="walked-path">
+        <div class="path-heading steps-heading"><span class="eyebrow">Steps</span><span class="muted path-hint">{{ index + 1 }}/{{ scenario.occurrences.length }}</span></div>
+        <div class="sidebar-scroll steps-scroll" tabindex="0" role="region" aria-label="Recorded steps navigation">
         <ol>
-          <li v-for="(item, position) in scenario.occurrences" :key="item.id">
-            <button :class="['history-link', { current: item.id === occurrence.id, future: position > index }]" :aria-current="item.id === occurrence.id ? 'step' : undefined" @click="navigation.selectOccurrence(item.id)">
-              <span class="history-symbol" aria-hidden="true">{{ item.id === occurrence.id ? '●' : position > index ? '○' : '✓' }}</span>
+          <li v-for="(item, position) in scenario.occurrences" :key="item.id" :class="['history-item', { 'current-step': item.id === occurrence.id, 'has-detail': detailLinks.has(item.nodeId) }]">
+            <button :class="['history-link', { current: item.id === occurrence.id, future: position > index, 'has-detail': detailLinks.has(item.nodeId) }]" :aria-current="item.id === occurrence.id ? 'step' : undefined"
+                    :aria-description="detailLinks.has(item.nodeId) ? diagramLinkHint(detailLinks.get(item.nodeId)).slice(2) : undefined"
+                    @click="navigation.selectOccurrence(item.id)" @keydown.enter="activateDiagramNode($event, detailLinks.get(item.nodeId), () => navigation.selectOccurrence(item.id), openDetail)">
+              <span class="history-symbol" aria-hidden="true">{{ position === scenario.occurrences.length - 1 ? (item.id === occurrence.id ? '■' : '□') : item.id === occurrence.id ? '●' : position > index ? '○' : '✓' }}</span>
               <span class="history-title">{{ diagram.nodes.find(node => node.id === item.nodeId)?.label }}</span>
-              <small><i class="pi pi-bolt" aria-hidden="true" /><span>{{ item.trigger ?? 'No trigger captured' }}</span></small>
+              <small><i class="pi pi-bolt" aria-hidden="true" /><span>{{ item.trigger ?? 'No trigger captured' }}</span>
+                <DrillLink v-if="detailLinks.has(item.nodeId)" :link="detailLinks.get(item.nodeId)!" @open="openDetail" />
+              </small>
               <span v-if="historyVisitNumbers.has(item.id)" class="history-visit-badge" role="img" :aria-label="`Visit ${historyVisitNumbers.get(item.id)}`">{{ historyVisitNumbers.get(item.id) }}</span>
             </button>
           </li>
         </ol>
+        </div>
       </section>
-      </div>
     </aside>
     </FocusChrome>
 
     <main class="event-view">
       <div class="event-content" tabindex="0" role="region" aria-label="Recorded event details">
-      <div v-if="latestRevision > active.revision || selectionError || error" class="event-notices" tabindex="0" role="region" aria-label="Revision updates and connection errors">
-      <div v-if="latestRevision > active.revision" class="update-banner" role="status"><div><strong>A newer revision is available.</strong><span> Viewing r{{ active.revision }}. Reload to view r{{ latestRevision }}; stable selections stay selected.</span></div><Button label="Reload revision" icon="pi pi-refresh" :loading="selecting" @click="library.select(active.id)" /></div>
-      <div v-if="selectionError || error" class="inline-error" role="alert">{{ selectionError || error }} <Button v-if="error" label="Retry" size="small" text @click="library.resync" /></div>
+      <div v-if="selectionError || error" class="event-notices" tabindex="0" role="region" aria-label="Connection errors">
+      <div class="inline-error" role="alert">{{ selectionError || error }} <Button label="Retry" size="small" text @click="library.resync" /></div>
       </div>
-        <StepNavigator :key="`${active.id}/${scenario.id}`" :diagram="diagram" :scenario="scenario" :index="index" @select="navigation.selectOccurrence" />
+        <StepNavigator :key="`${active.id}/${scenario.id}`" :diagram="diagram" :scenario="scenario" :index="index" :links="detailLinks" @select="navigation.selectOccurrence" @open="openDetail" />
         <section class="event-tabs" aria-label="Event views">
           <div class="event-tablist" role="tablist" aria-label="Event views" @keydown="onTabKeydown">
             <button v-for="(tab, position) in tabs" :id="`event-tab-${position}`" :key="tab" role="tab" :aria-selected="selectedTab === position" :aria-controls="`event-panel-${position}`" :tabindex="selectedTab === position ? 0 : -1" @click="selectTab(position)">{{ tab }}</button>
           </div>
-          <div v-show="selectedTab === 0" id="event-panel-0" class="event-story event-tabpanel" role="tabpanel" aria-labelledby="event-tab-0" tabindex="0" aria-live="polite" aria-atomic="true">
-          <div v-if="diagram.kind === 'sequence'" class="event-graph"><SequenceView :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" compact @select="navigation.selectOccurrence" /></div>
-          <div v-else-if="compactGraph" class="event-graph"><GraphView :layout="compactGraph" :title="`Current event: ${currentNode?.label}`" :current-node-id="occurrence.nodeId" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" /></div>
-          <p class="narration">{{ occurrence.narration }}</p>
-          <div class="event-context"><span class="eyebrow">{{ index === scenario.occurrences.length - 1 ? 'Path complete' : 'Recorded event' }}</span><span>{{ index === scenario.occurrences.length - 1 ? 'End of this scenario. Replay or explore another path.' : 'Next moves to the next captured occurrence. No system behavior is simulated.' }}</span></div>
-          </div>
+          <ScenarioDetails v-show="selectedTab === 0" id="event-panel-0" role="tabpanel" aria-labelledby="event-tab-0" tabindex="0" :document="active.document" :scenario="scenario" :occurrence="occurrence" />
           <div v-if="selectedTab === 1" id="event-panel-1" class="diagram-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-1" tabindex="0">
-            <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" @inspect="inspectNode" />
-            <GraphView v-else-if="graph" ref="diagramView" :key="diagram.id" :layout="graph" :title="diagram.title" :current-node-id="occurrence.nodeId" :current-occurrence-id="`${scenario.id}/${occurrence.id}`" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" interactive @select="inspectNode" />
+            <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" :links="detailLinks" @inspect="inspectNode" @open="openDetail" />
+            <GraphView v-else-if="graph" ref="diagramView" :key="diagram.id" :layout="graph" :title="diagram.title" :current-node-id="occurrence.nodeId" :current-occurrence-id="`${scenario.id}/${occurrence.id}`" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" :links="detailLinks" interactive @select="inspectNode" @open="openDetail" />
             <div v-if="inspectedNode" class="node-inspector"><h3>{{ inspectedNode.label }}</h3><p class="muted">Entities: {{ inspectedNode.entityIds.map(id => active?.document.domain.entities.find(entity => entity.id === id)?.label).join(', ') || 'None linked' }}</p>
               <p v-if="!nodeOccurrences.length" class="offpath-note">Off this scenario’s path. You can inspect this node, but it has no captured occurrence here. The current event stays unchanged.</p>
               <div v-else-if="nodeOccurrences.length > 1" class="occurrence-picker"><p>This node appears {{ nodeOccurrences.length }} times. Choose an occurrence; each visit has its own snapshots.</p><Select v-model="pickedOccurrenceId" :options="nodeOccurrences" option-label="label" option-value="id" placeholder="Choose a recorded occurrence" aria-label="Recorded occurrence" /><Button label="Go to occurrence" :disabled="!pickedOccurrenceId" @click="pickedOccurrenceId && navigation.selectOccurrence(pickedOccurrenceId)" /></div>
@@ -478,6 +526,9 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.history-link.has-detail{position:relative;padding-right:36px}
+.history-link.has-detail small{position:relative}
+.history-link small > .drill-link{position:absolute;right:-28px;top:50%;transform:translateY(-50%)}
 .entity-methods{border-top:1px solid var(--line);margin-top:16px;padding-top:16px}
 .entity-methods h4{margin:0 0 12px}
 .entity-method{margin-bottom:16px;overflow-wrap:anywhere}

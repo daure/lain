@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import fixture from '../../examples/order-lifecycle.json';
 import GraphView from '../src/components/GraphView.vue';
 import SequenceView from '../src/components/SequenceView.vue';
+import DiagramViewport from '../src/components/DiagramViewport.vue';
 import type { GraphLayout } from '../src/layout';
 import type { Explanation } from '../src/model';
 
@@ -22,7 +23,7 @@ async function mountViewport(render: () => ReturnType<typeof h>) {
   const scroller = canvas.querySelector<HTMLElement>('.viewport-scroll')!;
   Object.defineProperties(scroller, {
     clientWidth: { value: 1000 }, clientHeight: { value: 600 },
-    scrollWidth: { value: 10000 }, scrollHeight: { value: 10000 },
+    scrollWidth: { value: 10000, configurable: true }, scrollHeight: { value: 10000, configurable: true },
   });
   window.dispatchEvent(new Event('resize'));
   await settle();
@@ -41,11 +42,34 @@ async function mountGraph(width = 2000) {
     { id: 'b', label: 'Middle', lines: ['Middle'], x: width / 2, y: 150, width: 240, height: 72 },
     { id: 'c', label: 'Last', lines: ['Last'], x: width - 152, y: 150, width: 240, height: 72 },
   ] };
-  return { selected, ...await mountViewport(() => h(GraphView, { layout, title: 'Process', interactive: true,
+  return { selected, ...await mountViewport(() => h(GraphView, { layout, title: 'Flow', interactive: true,
     currentNodeId: selected.value, currentOccurrenceId: selected.value })) };
 }
 
 afterEach(() => { vi.unstubAllGlobals(); document.body.replaceChildren(); });
+
+it('preserves zoom and clamps manual panning when the current layout shrinks', async () => {
+  const width = ref(2000);
+  const height = ref(1600);
+  const view = await mountViewport(() => h(DiagramViewport, { width: width.value, height: height.value, title: 'Changing layout' }));
+  try {
+    await view.click('Zoom in');
+    const scale = view.canvas.dataset.scale;
+    view.scroller.scrollLeft = 6000;
+    view.scroller.scrollTop = 7000;
+    view.scroller.dispatchEvent(new Event('scroll')); await settle();
+    Object.defineProperties(view.scroller, {
+      scrollWidth: { value: 1500, configurable: true }, scrollHeight: { value: 900, configurable: true },
+    });
+    width.value = 400; height.value = 240; await settle();
+    expect(view.canvas.dataset.scale).toBe(scale);
+    expect(view.position()).toEqual([500, 300]);
+    await view.click('Fit diagram');
+    width.value = 4000; height.value = 2400; await settle();
+    expect(view.canvas.dataset.fitted).toBe('true');
+    expect(Number(view.canvas.dataset.scale)).toBeCloseTo(.233333);
+  } finally { view.app.unmount(); }
+});
 
 it.each([980, 1000, 2000])('defaults to 1:1 and centers fitting axes while hugging overflowing bounds at layout width %i', async width => {
   const view = await mountGraph(width);

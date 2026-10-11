@@ -1,19 +1,25 @@
 export type EntityMethod = { id: string; signature: string; description: string };
+export type MethodCall = { entityId: string; methodId: string; instanceId?: string };
 export type Entity = { id: string; label: string; attributes: { id: string; label: string }[]; methods?: EntityMethod[] };
+export type Cardinality = 'zeroOrOne' | 'exactlyOne' | 'zeroOrMore' | 'oneOrMore';
 export type Relationship = {
   id: string;
   label: string;
   sourceEntityId: string;
   targetEntityId: string;
-  sourceCardinality: 'one' | 'many';
-  targetCardinality: 'one' | 'many';
+  sourceCardinality: Cardinality;
+  targetCardinality: Cardinality;
 };
+export type FlowNodeRole = 'action' | 'decision' | 'start' | 'end' | 'subprocess';
+export type DiagramGroup = { id: string; label: string; nodeIds: string[]; parentGroupId?: string };
+export type DomainGroup = { id: string; label: string; entityIds: string[]; parentGroupId?: string };
 export type Diagram = {
   id: string;
   title: string;
-  kind: 'flow' | 'state' | 'process' | 'sequence';
-  nodes: { id: string; label: string; entityIds: string[] }[];
+  kind: 'flow' | 'state' | 'sequence';
+  nodes: { id: string; label: string; entityIds: string[]; role?: FlowNodeRole; detailDiagramId?: string; subprocessDiagramId?: string }[];
   edges: { id: string; sourceNodeId: string; targetNodeId: string; label: string }[];
+  groups?: DiagramGroup[];
   sequence?: {
     participants: { id: string; label: string }[];
     messages: { nodeId: string; fromParticipantId: string; toParticipantId: string }[];
@@ -35,15 +41,17 @@ export type Occurrence = {
   incomingEdgeId: string | null;
   trigger: string | null;
   narration: string;
+  changeSummary?: string;
   before: Snapshot;
   after: Snapshot;
+  methodCalls?: MethodCall[];
 };
-export type Scenario = { id: string; title: string; diagramId: string; occurrences: Occurrence[] };
+export type Scenario = { id: string; title: string; description?: string; diagramId: string; occurrences: Occurrence[] };
 export type Explanation = {
   schemaVersion: 1;
   title: string;
   description: string;
-  domain: { entities: Entity[]; relationships: Relationship[] };
+  domain: { entities: Entity[]; relationships: Relationship[]; groups?: DomainGroup[] };
   diagrams: Diagram[];
   scenarios: Scenario[];
 };

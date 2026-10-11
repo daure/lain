@@ -81,6 +81,14 @@ export function useBrowserNavigation(library: ReturnType<typeof useLibrary>, nav
 
   function select(id: string) { return apply('push', id); }
 
+  function traverseDrill(delta: -1 | 1) {
+    applying = true;
+    const changed = navigation.traverseDrill(delta);
+    applying = false;
+    if (changed) write('push');
+    return changed;
+  }
+
   function reset(firstScenarioId: string) {
     if (!library.active.value) return;
     applying = true;
@@ -105,5 +113,5 @@ export function useBrowserNavigation(library: ReturnType<typeof useLibrary>, nav
     stopActive(); stopCursor(); stopReady(); stopDeleted();
   }
 
-  return { start, stop, select, reset, back };
+  return { start, stop, select, reset, back, traverseDrill };
 }

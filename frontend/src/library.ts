@@ -33,6 +33,7 @@ export function useLibrary() {
   let listRequest = 0;
   let documentRequest = 0;
   let pendingId = '';
+  let refreshing = false;
   let documentAbort: AbortController | null = null;
   const deletedRevisions = new Map<string, number>();
 
@@ -40,6 +41,17 @@ export function useLibrary() {
     seenRevisions.set(event.id, Math.max(seenRevisions.get(event.id) ?? 0, event.revision));
     if (event.revision > (deletedRevisions.get(event.id) ?? Infinity)) deletedRevisions.delete(event.id);
     if (active.value?.id === event.id) latestRevision.value = Math.max(latestRevision.value, event.revision);
+    void refreshActive();
+  }
+
+  async function refreshActive() {
+    if (refreshing || stopped || selecting.value) return;
+    refreshing = true;
+    try {
+      while (!stopped && !selecting.value && active.value && (seenRevisions.get(active.value.id) ?? 0) > active.value.revision) {
+        if (!await select(active.value.id)) break;
+      }
+    } finally { refreshing = false; }
   }
 
   async function resync() {
@@ -66,17 +78,24 @@ export function useLibrary() {
     pendingId = id;
     selecting.value = true;
     selectionError.value = '';
+    const minimumRevision = Math.max(seenRevisions.get(id) ?? 0, active.value?.id === id ? active.value.revision : 0);
+    let success = false;
     try {
       const stored = await request<StoredExplanation>(`/api/explanations/${encodeURIComponent(id)}`, { signal: controller.signal });
       if (stopped || requestId !== documentRequest) return false;
+      if (stored.revision < minimumRevision) throw new Error('The latest explanation revision is not available yet. Retry the update.');
       active.value = stored;
       noteRevision(stored);
       latestRevision.value = Math.max(stored.revision, seenRevisions.get(id) ?? 0);
+      success = true;
       return true;
     } catch (cause) {
       if (!stopped && requestId === documentRequest) selectionError.value = (cause as Error).message;
     } finally {
-      if (!stopped && requestId === documentRequest) { selecting.value = false; pendingId = ''; documentAbort = null; }
+      if (!stopped && requestId === documentRequest) {
+        selecting.value = false; pendingId = ''; documentAbort = null;
+        if (success) void refreshActive();
+      }
     }
     return false;
   }

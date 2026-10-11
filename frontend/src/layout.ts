@@ -1,10 +1,15 @@
 import dagre from '@dagrejs/dagre';
-import { roundedPath } from './edge-path';
-import type { Diagram } from './model';
+import { roundedPath, type Point } from './edge-path';
+import type { Diagram, DiagramGroup, FlowNodeRole } from './model';
 
-export type LayoutNode = { id: string; label: string; lines: string[]; x: number; y: number; width: number; height: number };
+export type LayoutNode = { id: string; label: string; lines: string[]; role?: FlowNodeRole; x: number; y: number; width: number; height: number };
 export type LayoutEdge = { id: string; label: string; lines: string[]; path: string; x: number; y: number; source: string; target: string };
-export type GraphLayout = { width: number; height: number; nodes: LayoutNode[]; edges: LayoutEdge[] };
+export type LayoutGroup = { id: string; label: string; lines: string[]; nodeIds: string[]; x: number; y: number; width: number; height: number; headerHeight: number; kind: 'flow' | 'state' | 'domain' };
+export type GraphLayout = { width: number; height: number; nodes: LayoutNode[]; edges: LayoutEdge[]; groups?: LayoutGroup[] };
+type GroupEdge = Pick<LayoutEdge, 'label' | 'lines' | 'x' | 'y' | 'source' | 'target'> & { points: Point[]; labelLineHeight?: number };
+type RoutedEdge = Omit<LayoutEdge, 'path'> & { points: Point[] };
+type Bounds = { left: number; top: number; right: number; bottom: number };
+const groupPadding = 24;
 
 export function wrapLabel(text: string, width = 29): string[] {
   const lines: string[] = [];
@@ -27,31 +32,209 @@ function edgeLabelLines(label: string): string[] {
   return lines.length <= 2 ? lines : [lines[0]!, `${lines[1]!.slice(0, 19).trimEnd()}…`];
 }
 
-function layout(nodes: { id: string; label: string; lines: string[] }[], edges: { id: string; label: string; source: string; target: string }[], direction: string): GraphLayout {
-  const graph = new dagre.graphlib.Graph({ multigraph: true });
-  graph.setGraph({ rankdir: direction, marginx: 32, marginy: 32, ranksep: 100, nodesep: 35, edgesep: 28 });
+function nodeConnection(node: LayoutNode, toward: Point, fallback: Point): Point {
+  const dx = toward.x - node.x;
+  const dy = toward.y - node.y;
+  if ((!dx && !dy) || !node.role || node.role === 'action' || node.role === 'subprocess') return fallback;
+  const halfWidth = node.width / 2;
+  const halfHeight = node.height / 2;
+  if (node.role === 'decision') {
+    const scale = 1 / (Math.abs(dx) / halfWidth + Math.abs(dy) / halfHeight);
+    return { x: node.x + dx * scale, y: node.y + dy * scale };
+  }
+  const capOffset = halfWidth - halfHeight;
+  if (dy && Math.abs(dx / dy * halfHeight) <= capOffset) {
+    const scale = halfHeight / Math.abs(dy);
+    return { x: node.x + dx * scale, y: node.y + dy * scale };
+  }
+  const capCenter = Math.sign(dx) * capOffset;
+  const squaredLength = dx * dx + dy * dy;
+  const projection = dx * capCenter;
+  const scale = (projection + Math.sqrt(projection * projection - squaredLength * (capCenter * capCenter - halfHeight * halfHeight))) / squaredLength;
+  return { x: node.x + dx * scale, y: node.y + dy * scale };
+}
+
+function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role'>[], edges: { id: string; label: string; source: string; target: string }[], groups: DiagramGroup[], kind: 'flow' | 'state'): GraphLayout {
+  const graph = new dagre.graphlib.Graph({ multigraph: true, compound: true });
+  const headings = groups.map(group => ({ ...group, lines: wrapLabel(group.label) }));
+  const headingSpace = Math.max(0, ...headings.map(group => group.lines.length * 20 + 40));
+  graph.setGraph({ rankdir: 'LR', marginx: 32, marginy: 32, ranksep: 100, nodesep: Math.max(35, headingSpace), edgesep: Math.max(28, headingSpace) });
   graph.setDefaultEdgeLabel(() => ({}));
-  for (const node of nodes) graph.setNode(node.id, { width: 240, height: Math.max(72, node.lines.length * 20 + 32) });
+  for (const node of nodes) {
+    const diamondWidth = Math.max(176, Math.max(...node.lines.map(line => line.length)) * 7.5 + node.lines.length * 40 + 48);
+    const height = node.role === 'decision' ? diamondWidth / 2 : Math.max(72, node.lines.length * 20 + 32);
+    const width = node.role === 'decision' ? diamondWidth : node.role === 'start' || node.role === 'end' ? Math.max(240, height + 160) : 240;
+    graph.setNode(node.id, { width, height });
+  }
+  for (const group of groups) graph.setNode(group.id, {});
+  for (const group of groups) {
+    if (group.parentGroupId) graph.setParent(group.id, group.parentGroupId);
+    for (const id of group.nodeIds) graph.setParent(id, group.id);
+  }
   const wrappedEdges = edges.map(edge => ({ ...edge, lines: edgeLabelLines(edge.label) }));
   for (const edge of wrappedEdges) graph.setEdge(edge.source, edge.target, {
     width: Math.max(...edge.lines.map(line => line.length)) * 7, height: edge.lines.length * 16 + 18,
   }, edge.id);
   dagre.layout(graph);
+  const placedNodes = nodes.map(node => ({ ...node, ...graph.node(node.id) }));
+  const nodeById = new Map(placedNodes.map(node => [node.id, node]));
+  const placedEdges: RoutedEdge[] = wrappedEdges.map(edge => {
+    const placed = graph.edge({ v: edge.source, w: edge.target, name: edge.id });
+    const points: Point[] = [...placed.points];
+    points[0] = nodeConnection(nodeById.get(edge.source)!, points[1]!, points[0]!);
+    points[points.length - 1] = nodeConnection(nodeById.get(edge.target)!, points.at(-2)!, points.at(-1)!);
+    return { ...edge, x: placed.x ?? 0, y: placed.y ?? 0, points };
+  });
+  let placedGroups = groupFrames(headings, placedNodes, placedEdges, kind);
+  normalizeGroupGaps(headings, () => placedGroups, (top, bottom, gap) => {
+    const delta = gap - (bottom - top);
+    if (Math.abs(delta) < .001) return;
+    const moveY = (y: number) => y + delta * Math.min(1, Math.max(0, (y - top) / (bottom - top)));
+    const movement = new Map(placedNodes.map(node => [node.id, moveY(node.y) - node.y]));
+    for (const node of placedNodes) node.y += movement.get(node.id)!;
+    for (const edge of placedEdges) {
+      edge.y = moveY(edge.y);
+      edge.points = edge.points.map((point, index, points) => ({ x: point.x, y: index === 0
+        ? point.y + movement.get(edge.source)! : index === points.length - 1 ? point.y + movement.get(edge.target)! : moveY(point.y) }));
+    }
+    placedGroups = groupFrames(headings, placedNodes, placedEdges, kind);
+  });
+  separateBranchLanes(groups, placedGroups, placedEdges);
+  placedGroups = groupFrames(headings, placedNodes, placedEdges, kind);
+  let width = graph.graph().width ?? 600;
+  let height = graph.graph().height ?? 400;
+  if (placedGroups.length) {
+    const bounds = enclosingBounds([...placedNodes.map(boxBounds), ...placedGroups.map(boxBounds), ...placedEdges.map(edgeBounds)]);
+    const dx = 32 - bounds.left;
+    const dy = 32 - bounds.top;
+    for (const item of [...placedNodes, ...placedGroups, ...placedEdges]) { item.x += dx; item.y += dy; }
+    for (const edge of placedEdges) edge.points = edge.points.map(point => ({ x: point.x + dx, y: point.y + dy }));
+    width = bounds.right - bounds.left + 64;
+    height = bounds.bottom - bounds.top + 64;
+  }
   return {
-    width: graph.graph().width ?? 600,
-    height: graph.graph().height ?? 400,
-    nodes: nodes.map(node => ({ ...node, ...graph.node(node.id) })),
-    edges: wrappedEdges.map(edge => {
-      const placed = graph.edge({ v: edge.source, w: edge.target, name: edge.id });
-      return {
-        ...edge, x: placed.x ?? 0, y: placed.y ?? 0,
-        path: roundedPath(placed.points, Number.POSITIVE_INFINITY),
-      };
-    }),
+    width, height,
+    nodes: placedNodes,
+    groups: placedGroups,
+    edges: placedEdges.map(({ points, ...edge }) => ({ ...edge, path: roundedPath(points, Number.POSITIVE_INFINITY) })),
   };
 }
 
+function separateBranchLanes(definitions: DiagramGroup[], frames: LayoutGroup[], edges: RoutedEdge[]) {
+  const membership = new Map(definitions.flatMap(group => group.nodeIds.map(id => [id, group.id] as const)));
+  const byGroup = new Map(frames.map(group => [group.id, group]));
+  const branches = new Map<string, RoutedEdge[]>();
+  for (const edge of edges) {
+    const source = membership.get(edge.source);
+    const target = membership.get(edge.target);
+    if (!source || !target || source === target || !edge.label.trim()) continue;
+    const width = Math.max(...edge.lines.map(line => line.length)) * 7;
+    if (edge.x + width / 2 + 12 >= boxBounds(byGroup.get(target)!).left) continue;
+    const key = `${edge.source}/${target}/${Math.round(edge.x)}`;
+    const bundle = branches.get(key) ?? [];
+    bundle.push(edge);
+    branches.set(key, bundle);
+  }
+  for (const bundle of branches.values()) {
+    if (bundle.length < 2) continue;
+    const boundary = boxBounds(byGroup.get(membership.get(bundle[0]!.source)!)!).bottom;
+    let previousBottom = Number.NEGATIVE_INFINITY;
+    for (const edge of bundle.sort((a, b) => a.y - b.y)) {
+      const halfHeight = edge.lines.length * 8;
+      if (edge.y >= boundary) {
+        const lane = edge.points.slice(1, -1).find(point => Math.abs(point.x - edge.x) < .001);
+        if (lane) {
+          edge.y = Math.max(edge.y, boundary + halfHeight + 12, previousBottom + halfHeight + 16);
+          const shift = edge.y + halfHeight + 12 - lane.y;
+          edge.points = edge.points.map((point, index, points) => ({ x: point.x,
+            y: index && index < points.length - 1 ? point.y + shift : point.y }));
+        }
+      }
+      previousBottom = edge.y + halfHeight;
+    }
+  }
+}
+
+export function boxBounds(box: { x: number; y: number; width: number; height: number }): Bounds {
+  return { left: box.x - box.width / 2, top: box.y - box.height / 2, right: box.x + box.width / 2, bottom: box.y + box.height / 2 };
+}
+
+export function enclosingBounds(items: Bounds[]): Bounds {
+  return { left: Math.min(...items.map(item => item.left)), top: Math.min(...items.map(item => item.top)),
+    right: Math.max(...items.map(item => item.right)), bottom: Math.max(...items.map(item => item.bottom)) };
+}
+
+export function edgeBounds(edge: GroupEdge): Bounds {
+  const bounds = edge.points.map(point => ({ left: point.x, right: point.x, top: point.y, bottom: point.y }));
+  if (edge.label.trim()) bounds.push(boxBounds({ x: edge.x, y: edge.y,
+    width: Math.max(...edge.lines.map(line => line.length)) * 7 + 8, height: edge.lines.length * (edge.labelLineHeight ?? 16) }));
+  return enclosingBounds(bounds);
+}
+
+export function groupFrames(groups: (DiagramGroup & { lines: string[] })[], nodes: Pick<LayoutNode, 'id' | 'x' | 'y' | 'width' | 'height'>[], edges: GroupEdge[], kind: LayoutGroup['kind']): LayoutGroup[] {
+  const byNode = new Map(nodes.map(node => [node.id, node]));
+  const frames = new Map<string, LayoutGroup>();
+  function place(group: DiagramGroup & { lines: string[] }): LayoutGroup {
+    const existing = frames.get(group.id);
+    if (existing) return existing;
+    const children = groups.filter(child => child.parentGroupId === group.id).map(place);
+    const nodeIds = [...group.nodeIds, ...children.flatMap(child => child.nodeIds)];
+    const members = new Set(nodeIds);
+    const bounds = enclosingBounds([
+      ...group.nodeIds.map(id => boxBounds(byNode.get(id)!)), ...children.map(boxBounds),
+      ...edges.filter(edge => members.has(edge.source) && members.has(edge.target)).map(edgeBounds),
+    ]);
+    const lines = kind === 'domain' ? wrapLabel(group.label, Math.max(1, Math.floor((bounds.right - bounds.left) / 7.5))) : group.lines;
+    const headerHeight = lines.length * 20 + 16;
+    const width = Math.max(bounds.right - bounds.left, Math.max(...lines.map(line => line.length)) * 7.5) + groupPadding * 2;
+    const frame = { id: group.id, label: group.label, lines, nodeIds, kind, headerHeight,
+      x: (bounds.left + bounds.right) / 2, y: (bounds.top + bounds.bottom - headerHeight) / 2,
+      width, height: bounds.bottom - bounds.top + headerHeight + groupPadding * 2 };
+    frames.set(group.id, frame);
+    return frame;
+  }
+  return groups.map(place).sort((a, b) => b.width * b.height - a.width * a.height);
+}
+
+export function normalizeGroupGaps(definitions: Pick<DiagramGroup, 'id' | 'parentGroupId'>[],
+  frames: () => Pick<LayoutGroup, 'id' | 'x' | 'y' | 'width' | 'height'>[], adjustGap: (top: number, bottom: number, gap: number) => void) {
+  function align(parentId?: string) {
+    const children = definitions.filter(group => group.parentGroupId === parentId);
+    for (const child of children) align(child.id);
+    const frame = (id: string) => frames().find(group => group.id === id)!;
+    const ordered = children.map(child => child.id).sort((a, b) => frame(a).y - frame(b).y);
+    for (const [index, id] of ordered.entries()) {
+      const current = boxBounds(frame(id));
+      const above = ordered.slice(0, index).map(id => boxBounds(frame(id)))
+        .filter(bounds => bounds.right > current.left && bounds.left < current.right);
+      if (above.length) adjustGap(Math.max(...above.map(bounds => bounds.bottom)), current.top, parentId ? 56 : 42);
+    }
+  }
+  align();
+}
+
 export function diagramLayout(diagram: Diagram): GraphLayout {
-  return layout(diagram.nodes.map(node => ({ id: node.id, label: node.label, lines: wrapLabel(node.label) })),
-    diagram.edges.map(edge => ({ id: edge.id, label: edge.label, source: edge.sourceNodeId, target: edge.targetNodeId })), 'LR');
+  const groups = visibleGroups(diagram);
+  return layout(diagram.nodes.map(node => {
+    const role = diagram.kind === 'flow' ? node.role : undefined;
+    return { id: node.id, label: node.label, role,
+      lines: wrapLabel(node.label, role === 'subprocess' ? 25 : role && role !== 'action' ? 20 : 29) };
+  }), diagram.edges.map(edge => ({ id: edge.id, label: edge.label, source: edge.sourceNodeId, target: edge.targetNodeId })), groups, diagram.kind === 'state' ? 'state' : 'flow');
+}
+
+function visibleGroups(diagram: Diagram): DiagramGroup[] {
+  if (diagram.kind === 'sequence') return [];
+  const nodeIds = new Set(diagram.nodes.map(node => node.id));
+  const groups = diagram.groups ?? [];
+  const byId = new Map(groups.map(group => [group.id, group]));
+  const visible = new Set<string>();
+  for (const group of groups) {
+    if (!group.nodeIds.some(id => nodeIds.has(id))) continue;
+    let current: DiagramGroup | undefined = group;
+    while (current && !visible.has(current.id)) {
+      visible.add(current.id);
+      current = current.parentGroupId ? byId.get(current.parentGroupId) : undefined;
+    }
+  }
+  return groups.filter(group => visible.has(group.id)).map(group => ({ ...group, nodeIds: group.nodeIds.filter(id => nodeIds.has(id)) }));
 }

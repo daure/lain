@@ -27,9 +27,52 @@ async function main() {
     await page.locator('.explanation-card').click();
     await page.getByRole('button', { name: 'Toggle dark mode' }).click();
 
+    const artifacts = await fs.mkdtemp('/tmp/opencode/lain-details-focus-');
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const overview = page.locator('.scenario-overview');
+      assert.equal(await overview.locator('.details-prose').textContent(), fixture.scenarios[0].description);
+      const bounds = await overview.boundingBox();
+      await page.keyboard.press('l');
+      assert.equal(await overview.locator('.details-prose').textContent(), fixture.scenarios[0].description);
+      assert.deepEqual(await overview.boundingBox(), bounds);
+      assert.equal(await page.locator('.step-narration').textContent(), fixture.scenarios[0].occurrences[1].narration);
+      await page.keyboard.press('h');
+      for (const theme of ['light', 'dark']) {
+        const toggle = page.getByRole('button', { name: 'Toggle dark mode' });
+        if (await toggle.getAttribute('aria-pressed') !== String(theme === 'dark')) await toggle.click();
+        await page.screenshot({ path: path.join(artifacts, `details-${width}-${theme}.png`) });
+      }
+    }
+
+    await page.route('**/api/explanations/demo', route => {
+      const document = structuredClone(fixture);
+      document.scenarios[0].description = `${'Recorded scenario context.\n\n'.repeat(100)}End of overview.`;
+      document.scenarios[0].occurrences[0].narration = `${'The callback creates a receipt.\n\n'.repeat(100)}End of step.`;
+      return route.fulfill({ json: { id: 'demo', revision: 1, document } });
+    });
+    await page.reload();
+    await page.locator('.step-details').waitFor();
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const overview = page.locator('.scenario-overview');
+      const step = page.locator('.step-details');
+      const bounds = await overview.boundingBox();
+      assert.ok(bounds.height <= (await page.locator('.details-panel').boundingBox()).height * .4 + 1);
+      assert.ok(await step.evaluate(element => element.clientHeight > 60 && element.scrollHeight > element.clientHeight));
+      await step.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      assert.deepEqual(await overview.boundingBox(), bounds);
+      assert.equal(await overview.evaluate(element => element.scrollTop), 0);
+      await overview.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      assert.ok(await overview.evaluate(element => element.scrollTop > 0));
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight));
+      await overview.evaluate(element => { element.scrollTop = 0; });
+      await step.evaluate(element => { element.scrollTop = 0; });
+    }
+
     for (const width of [1800, 1584, 900, 390]) {
       await page.setViewportSize({ width, height: 900 });
-      for (const tab of ['Event', 'Diagram', 'Data', 'Domain']) {
+      for (const tab of ['Details', 'Diagram', 'Data', 'Domain']) {
         await page.getByRole('tab', { name: tab, exact: true }).click();
         const cursor = new URL(page.url()).search;
         await page.keyboard.press('m');
@@ -72,7 +115,7 @@ async function main() {
     await page.keyboard.press('m');
     assert.equal(await page.locator('.focus-breadcrumb').evaluate(element => element.getAnimations().length), 0);
     assert.deepEqual(errors, []);
-    console.log('Focus browser smoke passed: full-width tabs, balanced spacing, 250ms entry fade, instant exit, and reduced motion.');
+    console.log(`Focus browser smoke passed: fixed Details overview, independent prose scrolling, full-width tabs, focus transitions, and reduced motion. Screenshots: ${artifacts}`);
   } finally {
     await browser?.close();
     await new Promise(resolve => server.httpServer.close(resolve));

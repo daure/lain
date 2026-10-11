@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { Diagram, Scenario } from '../model';
+import { activateDiagramNode, diagramLinkHint, type DiagramLink } from '../diagram-links';
+import DrillLink from './DrillLink.vue';
 
-const props = defineProps<{ diagram: Diagram; scenario: Scenario; index: number }>();
-const emit = defineEmits<{ select: [id: string] }>();
+const props = defineProps<{ diagram: Diagram; scenario: Scenario; index: number; links?: Map<string, DiagramLink> }>();
+const emit = defineEmits<{ select: [id: string]; open: [scenarioId: string] }>();
 const nodeLabels = computed(() => new Map(props.diagram.nodes.map(node => [node.id, node.label])));
 const current = computed(() => props.scenario.occurrences[props.index]!);
 const currentLabel = computed(() => nodeLabels.value.get(current.value.nodeId) ?? current.value.nodeId);
@@ -28,23 +30,26 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
       <div class="step-runway" aria-hidden="true" />
       <div class="step-lens" aria-hidden="true" />
       <button v-for="step in steps" :key="step.occurrence.id" type="button"
-              :class="['step-tile', { 'is-current': step.offset === 0, 'is-visible': Math.abs(step.offset) <= 1 }]"
+               :class="['step-tile', { 'is-current': step.offset === 0, 'is-visible': Math.abs(step.offset) <= 1, 'has-detail': links?.has(step.occurrence.nodeId) }]"
               :style="{ transform: `translateX(${(step.offset + 1) * 100}%)` }"
               :data-occurrence-id="step.occurrence.id"
-              :aria-label="`${role(step.offset)} step: ${step.label} (occurrence ${stepNumber(step.position)} / ${stepNumber(scenario.occurrences.length - 1)})`"
+               :aria-label="`${role(step.offset)} step: ${step.label} (occurrence ${stepNumber(step.position)} / ${stepNumber(scenario.occurrences.length - 1)})${diagramLinkHint(links?.get(step.occurrence.nodeId))}`"
               :aria-current="step.offset === 0 ? 'step' : undefined"
-              :aria-disabled="step.offset === 0 ? 'true' : undefined"
+               :aria-disabled="step.offset === 0 && !links?.get(step.occurrence.nodeId)?.scenarioId ? 'true' : undefined"
               :aria-hidden="Math.abs(step.offset) > 1 ? 'true' : undefined"
-              :tabindex="Math.abs(step.offset) === 1 ? 0 : -1"
-              @click="step.offset !== 0 && emit('select', step.occurrence.id)">
+               :tabindex="Math.abs(step.offset) === 1 || (step.offset === 0 && links?.get(step.occurrence.nodeId)?.scenarioId) ? 0 : -1"
+               @click="step.offset !== 0 && emit('select', step.occurrence.id)"
+               @keydown.enter="activateDiagramNode($event, links?.get(step.occurrence.nodeId), () => step.offset !== 0 && emit('select', step.occurrence.id), id => emit('open', id))">
         <span class="step-heading">
-          <span class="step-marker" aria-hidden="true">{{ step.offset === 0 ? '●' : step.offset < 0 ? '✓' : '○' }}</span>
+          <span class="step-marker" aria-hidden="true">{{ step.position === scenario.occurrences.length - 1 ? (step.offset === 0 ? '■' : '□') : step.offset === 0 ? '●' : step.offset < 0 ? '✓' : '○' }}</span>
           <span class="step-title" :title="step.label" :role="step.offset === 0 ? 'heading' : undefined" :aria-level="step.offset === 0 ? 2 : undefined">
             <span class="step-number">{{ stepNumber(step.position) }}</span>
             <span class="step-label">{{ step.label }}</span>
           </span>
         </span>
-        <span class="trigger step-trigger"><i class="pi pi-bolt" aria-hidden="true" /><code>{{ step.occurrence.trigger ?? 'No trigger captured' }}</code></span>
+        <span class="trigger step-trigger"><i class="pi pi-bolt" aria-hidden="true" /><code>{{ step.occurrence.trigger ?? 'No trigger captured' }}</code>
+          <DrillLink v-if="links?.has(step.occurrence.nodeId)" :link="links.get(step.occurrence.nodeId)!" @open="emit('open', $event)" />
+        </span>
       </button>
     </div>
   </nav>
@@ -61,6 +66,9 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
 .step-tile.is-current{color:var(--text);pointer-events:none}
 .step-tile.is-visible:not(.is-current):hover{color:var(--text);background:color-mix(in srgb,var(--blue) 7%,transparent)}
 .step-tile:focus-visible{outline-offset:-4px}
+.step-tile.is-current.has-detail{pointer-events:auto}
+.step-trigger .drill-link{position:absolute;right:0;top:50%;transform:translateY(-50%);pointer-events:auto}
+.step-tile.has-detail .step-trigger{position:relative;padding-right:20px}
 .step-heading{display:flex;align-items:center;justify-content:center;gap:7px;flex:0 1 auto;min-width:0;min-height:0;max-width:100%;transform:scale(.72727273);transition:transform .3s cubic-bezier(.22,.68,0,1)}
 .is-current .step-heading{transform:scale(1)}
 .step-marker{display:grid;place-items:center;flex-shrink:0;width:24px;height:24px;font-size:12px;color:var(--text);border-radius:6px}
@@ -72,6 +80,7 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
 .step-trigger .pi{flex-shrink:0;font-size:12px;line-height:1}
 .step-trigger code{min-width:0;max-height:3em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;color:inherit}
 .is-current .step-trigger code{color:var(--text)}
+.is-current .step-trigger .drill-link{color:var(--text)}
 .app-dark .step-runway{background:#14161c}
 .app-dark .step-lens{border-color:#789acd;background:linear-gradient(180deg,#1c2535,#2a3a56);box-shadow:0 6px 16px #0004}
 .app-dark .step-marker{color:#ced4e0}
@@ -80,4 +89,5 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
 @media(max-width:1200px){.step-heading{transform:scale(.73684211)}.step-title{font-size:19px}}
 @media(max-width:700px){.step-navigator{padding-top:8px;padding-bottom:4px}.step-rail{height:88px}.step-tile{padding:6px 8px}.step-lens{left:calc(100% / 3 + 3px);width:calc(100% / 3 - 6px);border-radius:8px}.step-heading{gap:3px;transform:scale(.73333333)}.step-marker{width:16px;height:20px;font-size:10px}.step-title{gap:6px;font-size:15px}.step-trigger{gap:6px;max-height:30px;font-size:10px}}
 @media(prefers-reduced-motion:reduce){.step-tile,.step-heading,.step-title,.step-trigger{transition:none!important}}
+@media(max-width:700px){.step-trigger .drill-link{right:6px}}
 </style>

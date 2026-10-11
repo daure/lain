@@ -134,26 +134,82 @@ it('canonicalizes missing and stale cursor IDs with replacement and rejects malf
   expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes('bad'))).toBe(false);
 });
 
-it('pins publication updates and replaces cursor IDs that disappear during revision reload', async () => {
+it('automatically replaces removed cursor IDs with the nearest surviving step and explains selection changes', async () => {
   history.replaceState(null, '', route());
   const documentFixture = structuredClone(fixture);
+  documentFixture.domain.entities.push({ id: 'temporary', label: 'Temporary entity', attributes: [] });
   let revision = 1;
   await mount(async path => Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision, documentFixture)));
   await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await click('Domain');
+  document.querySelector<SVGGElement>('[data-entity-id="temporary"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await nextTick();
+  expect(document.querySelector('.node-inspector h3')!.textContent).toBe('Temporary entity');
   const push = vi.spyOn(history, 'pushState');
   const entries = history.length;
   revision = 2;
   documentFixture.scenarios[1]!.occurrences.splice(3);
+  documentFixture.domain.entities = documentFixture.domain.entities.filter(item => item.id !== 'temporary');
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision }) });
-  await vi.waitFor(() => expect(document.querySelector('.update-banner')).not.toBeNull());
-  expect(current()).toBe('duplicate-verification');
-  expect(hero()).toContain('04 / 05');
-  await click('Reload revision');
-  await vi.waitFor(() => expect(hero()).toContain('01 / 03'));
+  await vi.waitFor(() => expect(hero()).toContain('03 / 03'));
   expect(new URLSearchParams(location.search).get('scenario')).toBe('duplicate-callback');
-  expect(current()).toBe(documentFixture.scenarios[1]!.occurrences[0]!.id);
+  expect(current()).toBe('duplicate-existing');
+  expect(document.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe('Domain');
+  expect(document.querySelector('.node-inspector')).toBeNull();
+  expect(document.body.textContent).toContain('Selected step was removed; moved to Event already handled.');
   expect(history.length).toBe(entries);
   expect(push).not.toHaveBeenCalled();
+  revision = 3;
+  documentFixture.scenarios = documentFixture.scenarios.filter(item => item.id !== 'duplicate-callback');
+  LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision }) });
+  await vi.waitFor(() => expect(current()).toBe('success-received'));
+  expect(document.body.textContent).toContain('Selected scenario was removed; moved to Successful callback.');
+  expect(history.length).toBe(entries);
+  expect(push).not.toHaveBeenCalled();
+});
+
+it('closes a removed node inspector while preserving the recorded selection and Diagram tab', async () => {
+  history.replaceState(null, '', route());
+  const documentFixture = structuredClone(fixture);
+  documentFixture.diagrams[0]!.nodes.push({ id: 'off-path', label: 'Unrecorded step', entityIds: [], role: 'action' });
+  let revision = 1;
+  await mount(async path => Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision, documentFixture)));
+  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await click('Diagram');
+  document.querySelector<SVGGElement>('.diagram-panel [data-node-id="off-path"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await nextTick();
+  expect(document.querySelector('.node-inspector h3')!.textContent).toBe('Unrecorded step');
+  documentFixture.diagrams[0]!.nodes = documentFixture.diagrams[0]!.nodes.filter(item => item.id !== 'off-path');
+  revision = 2;
+  LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision }) });
+  await vi.waitFor(() => expect(document.querySelector('.node-inspector')).toBeNull());
+  expect(current()).toBe('duplicate-verification');
+  expect(document.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe('Diagram');
+  expect(document.querySelector('[role="alert"]')!.textContent).toContain('Explanation updated');
+});
+
+it('keeps the current document, cursor, and tab after a failed automatic update and applies a retry', async () => {
+  history.replaceState(null, '', route());
+  let revision = 1;
+  let fail = false;
+  await mount(async path => path !== '/api/explanations' && fail
+    ? Response.json({ error: 'Revision unavailable' }, { status: 500 })
+    : Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision, { ...fixture, title: `Revision ${revision}` })));
+  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await click('Data');
+  const previousRoute = location.search;
+  revision = 2; fail = true;
+  LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision }) });
+  await vi.waitFor(() => expect(document.querySelector('.inline-error')?.textContent).toContain('Revision unavailable'));
+  expect(document.querySelector('.explanation-title')!.textContent).toBe('Revision 1');
+  expect(document.body.textContent).toContain('Explanation update failed');
+  expect(document.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe('Data');
+  expect(location.search).toBe(previousRoute);
+  fail = false;
+  await click('Retry');
+  await vi.waitFor(() => expect(document.querySelector('.explanation-title')?.textContent).toBe('Revision 2'));
+  expect(document.querySelector('.inline-error')).toBeNull();
+  expect(location.search).toBe(previousRoute);
 });
 
 it('keeps failed deep links retryable and leaves the homepage visible when authentication fails', async () => {
@@ -234,7 +290,6 @@ it('clears a deleted pinned explanation when a reconnect resync no longer lists 
   LiveSocket.current.onopen?.();
   await vi.waitFor(() => expect(document.querySelector('.workspace')).toBeNull());
   expect(location.search).toBe('');
-  expect(document.querySelector('.update-banner')).toBeNull();
 });
 
 it('cancels disconnected document reads before resync and permits fresh route navigation', async () => {
@@ -279,7 +334,7 @@ it('cancels disconnected document reads before resync and permits fresh route na
   expect(document.querySelector('[role="alert"]')).toBeNull();
 });
 
-it('ignores stale deletion notifications after a newer publication and retains the pinned view', async () => {
+it('ignores stale deletion notifications after automatically applying a newer publication', async () => {
   history.replaceState(null, '', route());
   let revision = 1;
   await mount(async path => Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision)));
@@ -287,8 +342,7 @@ it('ignores stale deletion notifications after a newer publication and retains t
   revision = 3;
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision: 3 }) });
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision: 2, deleted: true }) });
-  await vi.waitFor(() => expect(document.querySelector('.update-banner')?.textContent).toContain('Reload to view r3'));
-  expect(document.querySelector('.update-banner')?.textContent).toContain('Viewing r1');
+  await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('Explanation updated'));
   expect(current()).toBe('duplicate-verification');
   await click('Lain explanation library');
   expect(document.querySelector('.explanation-card h2')?.textContent).toBe(summary.title);
@@ -313,7 +367,6 @@ it('restores recreated library cards from an authoritative reconnect list after 
   expect(location.search).toBe('');
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click();
   await vi.waitFor(() => expect(hero()).toContain('01 / 04'));
-  expect(document.querySelector('.update-banner')).toBeNull();
   await click('Lain explanation library');
   pending = true;
   history.replaceState(null, '', route());

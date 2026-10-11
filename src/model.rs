@@ -4,6 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
+pub use crate::cardinality::Cardinality;
+pub use crate::groups::{DiagramGroup, DomainGroup};
+pub use crate::method_calls::MethodCall;
 pub use crate::sequence::{SequenceOperand, SequenceStep};
 
 pub const MAX_DOCUMENT_BYTES: usize = 2 * 1024 * 1024;
@@ -26,6 +29,9 @@ pub struct Explanation {
 pub struct Domain {
     pub entities: Vec<Entity>,
     pub relationships: Vec<Relationship>,
+    /// Shared ERD containers for domain areas, external systems, API DTOs, or technology boundaries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<DomainGroup>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -63,15 +69,10 @@ pub struct Relationship {
     pub label: String,
     pub source_entity_id: String,
     pub target_entity_id: String,
+    /// Sources per target: zeroOrOne (0..1), exactlyOne (1..1), zeroOrMore (0..*), or oneOrMore (1..*).
     pub source_cardinality: Cardinality,
+    /// Targets per source: zeroOrOne (0..1), exactlyOne (1..1), zeroOrMore (0..*), or oneOrMore (1..*).
     pub target_cardinality: Cardinality,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum Cardinality {
-    One,
-    Many,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -79,9 +80,13 @@ pub enum Cardinality {
 pub struct Diagram {
     pub id: String,
     pub title: String,
+    /// Flow nodes describe actions; state nodes describe conditions and their edges describe triggering events.
     pub kind: DiagramKind,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// Flow subgraphs or state composite containers. Membership is descriptive; traversals use nodes and edges.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<DiagramGroup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<Sequence>,
 }
@@ -89,9 +94,9 @@ pub struct Diagram {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum DiagramKind {
+    #[serde(alias = "process")]
     Flow,
     State,
-    Process,
     Sequence,
 }
 
@@ -127,6 +132,27 @@ pub struct Node {
     pub id: String,
     pub label: String,
     pub entity_ids: Vec<String>,
+    /// Optional flow-only role. Subprocesses use double-bordered boxes; omitted roles use action boxes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<FlowNodeRole>,
+    /// Detail flow or sequence diagram in this explanation. Flow sources require role subprocess;
+    /// sequence sources are message nodes. State diagrams cannot be sources or targets. Never executed.
+    #[serde(
+        default,
+        alias = "subprocessDiagramId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub detail_diagram_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum FlowNodeRole {
+    Action,
+    Decision,
+    Start,
+    End,
+    Subprocess,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -143,6 +169,10 @@ pub struct Edge {
 pub struct Scenario {
     pub id: String,
     pub title: String,
+    /// Agent-authored plain-text overview of the setup, goal, and recorded outcome or stopping point.
+    /// Remains the same at every step. Label assumptions and synthetic examples explicitly.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     pub diagram_id: String,
     pub occurrences: Vec<Occurrence>,
 }
@@ -158,9 +188,18 @@ pub struct Occurrence {
     #[serde(deserialize_with = "required_nullable")]
     #[schemars(with = "NullableString")]
     pub trigger: Option<String>,
+    /// Agent-authored paragraphs explaining this visit's action, cause, and observed consequence.
+    /// Distinguish verified facts from assumptions; use blank lines between paragraphs.
     pub narration: String,
+    /// Optional agent-authored summary of this visit's captured before-to-after changes.
+    /// Distinguish capture differences from state changes; omitted data is unknown, not unchanged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub change_summary: String,
     pub before: Snapshot,
     pub after: Snapshot,
+    /// Recorded calls in authored order, attached to this visit rather than the shared node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub method_calls: Vec<MethodCall>,
 }
 
 #[derive(JsonSchema)]
@@ -326,17 +365,62 @@ impl Explanation {
             let attributes = index(&entity.attributes, |attribute| &attribute.id, "attribute")?;
             entity_attributes.insert(entity.id.as_str(), attributes);
         }
+        self.domain.validate_groups(&entities)?;
         for relationship in &self.domain.relationships {
             require(&entities, &relationship.source_entity_id, "source entity")?;
             require(&entities, &relationship.target_entity_id, "target entity")?;
+            for (endpoint, cardinality) in [
+                ("sourceCardinality", relationship.source_cardinality),
+                ("targetCardinality", relationship.target_cardinality),
+            ] {
+                if !cardinality.is_explicit() {
+                    return Err(format!(
+                        "relationship {:?}: {endpoint} must specify a minimum and maximum: zeroOrOne, exactlyOne, zeroOrMore, or oneOrMore",
+                        relationship.id
+                    ));
+                }
+            }
         }
         for diagram in &self.diagrams {
             limit(diagram.nodes.len(), 200, "diagram nodes")?;
             limit(diagram.edges.len(), 500, "diagram edges")?;
             let nodes = index(&diagram.nodes, |node| &node.id, "node")?;
             index(&diagram.edges, |edge| &edge.id, "edge")?;
+            diagram.validate_groups(&nodes)?;
             diagram.validate_sequence(&nodes)?;
             for node in &diagram.nodes {
+                if node.role.is_some() && diagram.kind != DiagramKind::Flow {
+                    return Err(format!("node {:?}: role requires kind flow", node.id));
+                }
+                if let Some(target) = &node.detail_diagram_id {
+                    if diagram.kind == DiagramKind::State {
+                        return Err(format!(
+                            "node {:?}: state diagrams cannot link to detail diagrams",
+                            node.id
+                        ));
+                    }
+                    if diagram.kind == DiagramKind::Flow
+                        && node.role != Some(FlowNodeRole::Subprocess)
+                    {
+                        return Err(format!(
+                            "node {:?}: detailDiagramId on a flow node requires role subprocess",
+                            node.id
+                        ));
+                    }
+                    let detail = require(&diagrams, target, "detail diagram")?;
+                    if detail.kind == DiagramKind::State {
+                        return Err(format!(
+                            "node {:?}: detail diagram must have kind flow or sequence",
+                            node.id
+                        ));
+                    }
+                    if target == &diagram.id {
+                        return Err(format!(
+                            "node {:?}: detail diagram must be another diagram",
+                            node.id
+                        ));
+                    }
+                }
                 for entity_id in &node.entity_ids {
                     require(&entities, entity_id, "node entity")?;
                 }
@@ -353,6 +437,7 @@ impl Explanation {
             let diagram = require(&diagrams, &scenario.diagram_id, "scenario diagram")?;
             self.validate_scenario(scenario, diagram, &entity_attributes, &relationships)?;
         }
+        self.validate_method_calls()?;
         let value = serde_json::to_value(self).map_err(|error| error.to_string())?;
         validate_json(&value, 0)?;
         let bytes = serde_json::to_vec(&value).map_err(|error| error.to_string())?;
@@ -519,21 +604,41 @@ fn validate_snapshot<'a>(
                 link.relationship_id
             ));
         }
-        if relationship.target_cardinality == Cardinality::One
-            && !sources.insert((&link.relationship_id, &link.source_instance_id))
-        {
+        let first_source = sources.insert((&link.relationship_id, &link.source_instance_id));
+        let first_target = targets.insert((&link.relationship_id, &link.target_instance_id));
+        if relationship.target_cardinality.is_single() && !first_source {
             return Err(format!(
                 "relationship {:?} violates target cardinality one",
                 link.relationship_id
             ));
         }
-        if relationship.source_cardinality == Cardinality::One
-            && !targets.insert((&link.relationship_id, &link.target_instance_id))
-        {
+        if relationship.source_cardinality.is_single() && !first_target {
             return Err(format!(
                 "relationship {:?} violates source cardinality one",
                 link.relationship_id
             ));
+        }
+    }
+    for relationship in relationships.values() {
+        for instance in &snapshot.instances {
+            if relationship.target_cardinality.is_required()
+                && instance.entity_id == relationship.source_entity_id
+                && !sources.contains(&(&relationship.id, &instance.id))
+            {
+                return Err(format!(
+                    "relationship {:?}: instance {:?} requires at least one target link",
+                    relationship.id, instance.id
+                ));
+            }
+            if relationship.source_cardinality.is_required()
+                && instance.entity_id == relationship.target_entity_id
+                && !targets.contains(&(&relationship.id, &instance.id))
+            {
+                return Err(format!(
+                    "relationship {:?}: instance {:?} requires at least one source link",
+                    relationship.id, instance.id
+                ));
+            }
         }
     }
     Ok(())

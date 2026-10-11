@@ -82,6 +82,164 @@ it('toggles the root theme and restores the saved choice when the viewer remount
   } finally { app.unmount(); }
 });
 
+it('keeps agent-authored scenario context stable while showing each visit’s safe prose and recorded calls', async () => {
+  const authored = graphFixture();
+  const scenario = authored.scenarios[1]!;
+  scenario.description = 'A gateway retries a handled callback.\n\n<script>Assumption: the gateway will retry.</script>';
+  scenario.occurrences[1]!.narration = 'The first read checks the receipt.\n\n<img src=x onerror=alert(1)>';
+  scenario.occurrences[3]!.narration = 'The verification read checks the saved receipt. <svg onload=alert(1)>';
+  scenario.occurrences[3]!.methodCalls = [
+    { entityId: 'payment', methodId: 'capture', instanceId: 'pay-72' },
+    { entityId: 'payment', methodId: 'capture' },
+  ];
+  const app = await mountFixture(authored);
+  try {
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    button(scenario.title).click(); await settle();
+    const overview = document.querySelector('.scenario-overview')!;
+    const description = () => overview.querySelector('.details-prose')!.textContent;
+    document.querySelectorAll<HTMLButtonElement>('.history-link')[1]!.click(); await settle();
+    expect(description()).toBe(scenario.description);
+    expect(document.querySelector('.step-narration')!.textContent).toBe(scenario.occurrences[1]!.narration);
+    const stepDetails = document.querySelector<HTMLElement>('.step-details')!;
+    stepDetails.scrollTop = 240;
+    document.querySelectorAll<HTMLButtonElement>('.history-link')[3]!.click(); await settle();
+    expect(stepDetails.scrollTop).toBe(0);
+    expect(document.querySelector('.scenario-overview')).toBe(overview);
+    expect(description()).toBe(scenario.description);
+    expect(document.querySelector('.step-narration')!.textContent).toBe(scenario.occurrences[3]!.narration);
+    expect([...document.querySelectorAll('.step-calls code')].map(node => node.textContent)).toEqual(['capture(): void', 'capture(): void']);
+    expect([...document.querySelectorAll('.step-calls small')].map(node => node.textContent)).toEqual(['pay-72', 'Receiver not captured']);
+    expect(document.querySelector('.details-panel script, .details-panel img, .details-panel svg')).toBeNull();
+    button('Declined payment').click(); await settle();
+    expect(description()).toBe(authored.scenarios[2]!.description);
+    expect(document.querySelector('.step-calls')).toBeNull();
+  } finally { app.unmount(); }
+});
+
+it('shows explicit prose gaps for recordings with omitted or blank scenario details', async () => {
+  const authored = graphFixture();
+  delete authored.scenarios[0]!.description;
+  authored.scenarios[1]!.description = '   ';
+  authored.scenarios[0]!.occurrences[0]!.narration = '';
+  const app = await mountFixture(authored);
+  try {
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    expect(document.querySelector('.scenario-overview')!.textContent).toContain('No scenario description recorded.');
+    expect(document.querySelector('.step-details')!.textContent).toContain('No step explanation recorded.');
+    expect(document.querySelector('.step-calls')).toBeNull();
+    button('Duplicate callback').click(); await settle();
+    expect(document.querySelector('.scenario-overview')!.textContent).toContain('No scenario description recorded.');
+    expect(document.querySelector('.step-narration')!.textContent).toBe(authored.scenarios[1]!.occurrences[0]!.narration);
+  } finally { app.unmount(); }
+});
+
+it.each(['sidebar', 'navigator', 'graph'])('opens detail recordings from the %s icon at their saved occurrence while preserving the source cursor', async surface => {
+  const app = await mountFixture(fixture);
+  try {
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    button('Capture and mark paid').click(); await settle();
+    await press('l');
+    button('Successful callback').click(); await settle();
+    await press('l'); await press('l');
+    if (surface === 'graph') { button('Diagram').click(); await settle(); }
+    const sourceCursor = location.search;
+    const selector = { sidebar: '.history-item.current-step', navigator: '.step-tile.is-current', graph: '.graph' }[surface]!;
+    const link = document.querySelector<HTMLElement | SVGElement>(`${selector} .drill-link`)!;
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await settle();
+    expect(currentScenario()).toBe('Capture and mark paid');
+    expect(currentEvent()).toContain('02 / 02');
+    expect(button('Diagram').getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(button('Diagram'));
+    expect(new URLSearchParams(location.search).get('scenario')).toBe('capture-authorized-payment');
+    button('Successful callback').click(); await settle();
+    expect(location.search).toBe(sourceCursor);
+    expect(currentEvent()).toContain('03 / 04');
+  } finally { app.unmount(); }
+});
+
+it('keeps detail icons disabled when their diagram has no recorded scenario', async () => {
+  const documentFixture = structuredClone(fixture) as Explanation;
+  documentFixture.scenarios = documentFixture.scenarios.filter(item => item.diagramId !== 'payment-capture-flow');
+  const app = await mountFixture(documentFixture);
+  try {
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await press('l'); await press('l');
+    const icon = document.querySelector<HTMLElement>('.history-item.current-step .drill-link')!;
+    expect(icon.dataset.disabled).toBe('true');
+    expect(icon.title).toBe('Open Payment capture details — No recorded scenario');
+    icon.click(); await settle();
+    await press('Enter', {}, document.querySelector('.history-link.current')!);
+    expect(currentScenario()).toBe('Successful callback');
+    expect(currentEvent()).toContain('03 / 04');
+  } finally { app.unmount(); }
+});
+
+it.each([
+  { sourceId: 'capture-authorized-payment', nodeId: 'capture-payment', targetId: 'capture-payment-exchange', kind: 'flow to sequence' },
+  { sourceId: 'sequence-successful-callback', nodeId: 'capture', targetId: 'capture-payment-exchange', kind: 'sequence to sequence' },
+  { sourceId: 'capture-payment-exchange', nodeId: 'capture-payment', targetId: 'capture-authorized-payment', kind: 'sequence to flow' },
+].flatMap(item => ['sidebar', 'navigator', 'diagram'].map(surface => ({ ...item, surface }))))('drills $kind from the $surface without conflating step selection and detail navigation', async ({ sourceId, nodeId, targetId, surface }) => {
+  const source = fixture.scenarios.find(item => item.id === sourceId)!;
+  const target = fixture.scenarios.find(item => item.id === targetId)!;
+  const app = await mountFixture(fixture);
+  try {
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    button(target.title).click(); await settle();
+    await press('l');
+    button(source.title).click(); await settle();
+    const sourceOccurrence = source.occurrences.find(item => item.nodeId === nodeId)!;
+    const position = source.occurrences.findIndex(item => item.id === sourceOccurrence.id);
+    document.querySelectorAll<HTMLButtonElement>('.history-link')[position]!.click(); await settle();
+    if (surface === 'diagram') {
+      button('Diagram').click(); await settle();
+      const message = document.querySelector<SVGElement>(`[data-node-id="${nodeId}"][role="button"]`)!;
+      message.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
+      expect(currentScenario()).toBe(source.title);
+      expect(new URLSearchParams(location.search).get('occurrence')).toBe(sourceOccurrence.id);
+    }
+    const sourceCursor = location.search;
+    const ownerSelector = { sidebar: '.history-link.current', navigator: '.step-tile.is-current', diagram: `[data-node-id="${nodeId}"][role="button"]` }[surface]!;
+    const owner = document.querySelector<HTMLElement | SVGElement>(ownerSelector)!;
+    expect(owner).not.toBeNull();
+    for (const options of [{ repeat: true }, { ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) {
+      await press('Enter', options, owner);
+      expect(location.search).toBe(sourceCursor);
+    }
+    await press('Enter', {}, owner);
+    expect(currentScenario()).toBe(target.title);
+    expect(new URLSearchParams(location.search).get('occurrence')).toBe(target.occurrences[1]!.id);
+    expect(button('Diagram').getAttribute('aria-selected')).toBe('true');
+    button(source.title).click(); await settle();
+    expect(location.search).toBe(sourceCursor);
+  } finally { app.unmount(); }
+});
+
+it.each(['successful-callback', 'capture-payment-exchange'].flatMap(sourceId => ['canvas', 'tab'].map(surface => ({ sourceId, surface }))))('opens the active diagram step from Enter on the $surface for $sourceId', async ({ sourceId, surface }) => {
+  const authored = fixture as Explanation;
+  const source = authored.scenarios.find(item => item.id === sourceId)!;
+  const diagram = authored.diagrams.find(item => item.id === source.diagramId)!;
+  const node = diagram.nodes.find(item => item.detailDiagramId)!;
+  const visit = source.occurrences.find(item => item.nodeId === node.id)!;
+  const app = await mountFixture(fixture);
+  try {
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    button(source.title).click(); await settle();
+    document.querySelectorAll<HTMLButtonElement>('.history-link')[source.occurrences.findIndex(item => item.id === visit.id)]!.click(); await settle();
+    button('Diagram').click(); await settle();
+    const cursor = location.search;
+    await press('Enter', {}, document.querySelector('.theme-toggle')!);
+    expect(location.search).toBe(cursor);
+    const targetSurface = surface === 'tab' ? button('Diagram') : document;
+    await press('Enter', { repeat: true }, targetSurface);
+    expect(location.search).toBe(cursor);
+    await press('Enter', {}, targetSurface);
+    const target = fixture.scenarios.find(item => item.diagramId === node.detailDiagramId)!;
+    expect(currentScenario()).toBe(target.title);
+  } finally { app.unmount(); }
+});
+
 it.each(['.quick-actions-trigger', '.history-link.current', '.event-controls button:last-child'])('toggles focus mode from %s while preserving selection and keyboard navigation', async selector => {
   const app = await mountFixture();
   const chrome = () => [...document.querySelectorAll<HTMLElement>('.app-header, .sidebar, .event-controls')];
@@ -155,7 +313,7 @@ it('guards focus mode in editable controls and overlays and exposes it through q
     await press('Enter', {}, search);
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     expect(focused()).toBe(true);
-    expect(document.activeElement).toBe(button('Event'));
+    expect(document.activeElement).toBe(button('Details'));
     await press('k', { ctrlKey: true });
     document.querySelector<HTMLElement>('#quick-action-m')!.click(); await settle();
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
@@ -178,6 +336,7 @@ it('navigates adjacent occurrence IDs above every tab and reserves empty boundar
     expect(current().dataset.occurrenceId).toBe(recorded[0]!.id);
     expect(current().querySelector('.step-marker')!.textContent).toBe('●');
     expect(neighbor('Next')!.getAttribute('aria-label')).toContain('occurrence 02 / 05');
+    expect(document.querySelector('.history-item:last-child .history-symbol')!.textContent).toBe('□');
     const firstCheck = neighbor('Next')!;
     expect(firstCheck.querySelector('.step-number')!.textContent).toBe('02');
     expect(firstCheck.querySelector('.step-label')!.textContent).toBe('Receipt checked');
@@ -197,6 +356,7 @@ it('navigates adjacent occurrence IDs above every tab and reserves empty boundar
     expect(current().querySelector('.step-number')!.textContent).toBe('04');
     expect(current().querySelector('.step-label')!.textContent).toBe('Receipt checked');
     expect(current().style.transform).toBe('translateX(100%)');
+    expect(neighbor('Next')!.querySelector('.step-marker')!.textContent).toBe('□');
     button('Data').click(); await settle();
     neighbor('Previous')!.click(); await settle();
     expect(button('Data').getAttribute('aria-selected')).toBe('true');
@@ -206,6 +366,8 @@ it('navigates adjacent occurrence IDs above every tab and reserves empty boundar
     expect(neighbor('Next')).toBeNull();
     expect(current().dataset.occurrenceId).toBe(recorded.at(-1)!.id);
     expect(current().style.transform).toBe('translateX(100%)');
+    expect(current().querySelector('.step-marker')!.textContent).toBe('■');
+    expect(document.querySelector('.history-item:last-child .history-symbol')!.textContent).toBe('■');
     button('Replay scenario').click(); await settle();
     expect(neighbor('Previous')).toBeNull();
     expect(current().dataset.occurrenceId).toBe(recorded[0]!.id);
@@ -400,6 +562,8 @@ it('centers a single recorded occurrence with empty neighbors and an uncaptured 
     expect(steps[0]!.getAttribute('aria-current')).toBe('step');
     expect(steps[0]!.style.transform).toBe('translateX(100%)');
     expect(steps[0]!.tabIndex).toBe(-1);
+    expect(steps[0]!.querySelector('.step-marker')!.textContent).toBe('■');
+    expect(document.querySelector('.history-symbol')!.textContent).toBe('■');
     expect(currentEvent()).toContain('01 / 01');
     expect(document.querySelector('.step-trigger code')!.textContent).toBe('No trigger captured');
   } finally { app.unmount(); }
@@ -421,7 +585,7 @@ it.each(['SecurityError', 'QuotaExceededError'])('keeps theme controls usable wh
   } finally { app.unmount(); }
 });
 
-it('wires the library, scenario traversal, revisits, off-path inspection, and pinned reload in the browser', async () => {
+it('wires traversal and automatically updates the explanation while preserving revisits, the active tab, and entity inspection', async () => {
   let revision = 1;
   const documentFixture = graphFixture();
   documentFixture.diagrams[0]!.edges.push({ ...documentFixture.diagrams[0]!.edges[0]!, id: 'parallel-lookup', label: 'Alternate lookup' });
@@ -448,7 +612,6 @@ it('wires the library, scenario traversal, revisits, off-path inspection, and pi
     expect(document.querySelectorAll('.history-link')).toHaveLength(5);
     expect(document.querySelectorAll('.history-link.future')).toHaveLength(3);
     expect([...document.querySelectorAll('.history-visit-badge')].map(badge => badge.textContent)).toEqual(['1', '2']);
-    expect(document.querySelector('.event-graph .node-visit-badge text')!.textContent).toBe('1');
     expect(document.querySelector('.path-hint')!.textContent).toBe('2/5');
     button('Diagram').click(); await settle();
     const edge = (label: string) => [...document.querySelectorAll('.diagram-panel .graph-edge')].find(node => node.querySelector('title')?.firstChild?.textContent === label)!;
@@ -457,7 +620,7 @@ it('wires the library, scenario traversal, revisits, off-path inspection, and pi
     expect(edge('Verify saved receipt').classList.contains('on-scenario')).toBe(true);
     expect(edge('Verify saved receipt').classList.contains('walked')).toBe(false);
     expect(document.querySelector('.diagram-panel [aria-label="Ignore the duplicate callback"]')!.classList.contains('on-scenario')).toBe(true);
-    expect(document.querySelector('.diagram-panel [aria-label="Capture the payment"]')!.classList.contains('off-scenario')).toBe(true);
+    expect(document.querySelector('.diagram-panel [data-node-id="capture"]')!.classList.contains('off-scenario')).toBe(true);
     await press('h');
     expect(edge('Look up event ID').classList.contains('walked')).toBe(false);
     expect(edge('Look up event ID').classList.contains('on-scenario')).toBe(true);
@@ -469,23 +632,26 @@ it('wires the library, scenario traversal, revisits, off-path inspection, and pi
     expect(document.querySelector('.occurrence-picker')!.textContent).toContain('This node appears 2 times');
     expect(button('Go to occurrence').disabled).toBe(true);
     expect(currentEvent()).toContain('02 / 05');
-    document.querySelector<SVGGElement>('.diagram-panel [role="button"][aria-label="Capture the payment"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
+    document.querySelector<SVGGElement>('.diagram-panel [role="button"][data-node-id="capture"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
     expect(document.querySelector('.offpath-note')!.textContent).toContain('current event stays unchanged');
-    button('Event').click(); await settle();
+    button('Details').click(); await settle();
     button('Next event').click(); await settle();
     button('Next event').click(); await settle();
     expect(currentEvent()).toContain('04 / 05');
     const lookup = [...document.querySelectorAll('.value-row')].find(node => node.textContent?.includes('Receipt lookups'))!;
     expect([...lookup.querySelectorAll('pre')].map(node => node.textContent)).toEqual(['1', '2']);
+    button('Domain').click(); await settle();
+    document.querySelector<SVGGElement>('.domain-entity[data-entity-id="receipt"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
+    const cursor = location.search;
     revision = 2;
     documentFixture.title = `${fixture.title} · revision 2`;
     LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision }) }); await settle();
-    expect(document.querySelector('.update-banner')!.textContent).toContain('Viewing r1');
-    expect(explanationTitle()).toBe(fixture.title);
-    button('Reload revision').click(); await settle();
-    expect(document.querySelector('.update-banner')).toBeNull();
     expect(currentEvent()).toContain('04 / 05');
     expect(explanationTitle()).toBe(documentFixture.title);
+    expect(button('Domain').getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector('.node-inspector h3')!.textContent).toBe('Receipt');
+    expect(location.search).toBe(cursor);
+    expect(document.querySelector('[role="alert"]')!.textContent).toContain('Explanation updated');
   } finally { app.unmount(); }
 });
 
@@ -502,7 +668,7 @@ it('renders entity methods as safe definitions in the domain compartment and ins
     expect(order.querySelector('.domain-methods')!.getAttribute('aria-label')).toBe('Order methods');
     const renderedLines = (selector: string) => [...order.querySelectorAll(`${selector} tspan`)].map(line => line.textContent).join(' ');
     expect(renderedLines('.domain-method-signature')).toBe(signature);
-    expect(renderedLines('.domain-method-description')).toBe(description);
+    expect(order.querySelector('.domain-method title')!.textContent).toBe(`${signature} · capture-payment · ${description}`);
     order.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await settle();
     expect(document.querySelector('.entity-methods code')!.textContent).toBe(signature);
     expect(document.querySelector('.entity-methods p')!.textContent).toBe(description);
@@ -520,9 +686,9 @@ it('switches embedded views with bounded tab shortcuts and preserves keyboard fo
   const selected = () => document.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
   try {
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    expect([...document.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['Event', 'Diagram', 'Data', 'Domain']);
+    expect([...document.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['Details', 'Diagram', 'Data', 'Domain']);
     await press('[');
-    expect(selected().textContent).toBe('Event');
+    expect(selected().textContent).toBe('Details');
     const cursor = new URLSearchParams(location.search).get('occurrence');
     document.querySelector<HTMLElement>('.event-story')!.focus();
     await press(']', {}, document.activeElement!);
@@ -552,7 +718,7 @@ it('switches embedded views with bounded tab shortcuts and preserves keyboard fo
     await press('ArrowLeft', {}, selected());
     expect(selected().textContent).toBe('Diagram');
     await press('Home', {}, selected());
-    expect(selected().textContent).toBe('Event');
+    expect(selected().textContent).toBe('Details');
     await press('End', {}, selected());
     expect(selected().textContent).toBe('Domain');
     expect(document.activeElement).toBe(selected());
@@ -568,41 +734,54 @@ it('switches embedded views with bounded tab shortcuts and preserves keyboard fo
   } finally { app.unmount(); }
 });
 
-it('keeps visible scenario steps stationary and reveals steps clipped by the viewport or pinned context', async () => {
+it('keeps visible scenario steps stationary and centers clipped steps in their own viewport', async () => {
   const app = await mountFixture();
   let targetTop = 200;
   try {
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
-    const region = document.querySelector<HTMLElement>('.sidebar-scroll')!;
+    const region = document.querySelector<HTMLElement>('.steps-scroll')!;
+    const scenariosRegion = document.querySelector<HTMLElement>('.scenarios-scroll')!;
+    scenariosRegion.scrollTop = 120;
     Object.defineProperties(region, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
-    const heading = document.querySelector<HTMLElement>('.sidebar-pinned-heading')!;
-    Object.defineProperty(heading, 'offsetHeight', { value: 40 });
-    const content = document.querySelector<HTMLElement>('.sidebar-context-content')!;
-    content.style.paddingBottom = '10px'; content.style.borderBottomWidth = '1px';
-    document.querySelectorAll('.scenario-link').forEach(link => Object.defineProperty(link, 'offsetHeight', { value: 44 }));
     const originalBounds = HTMLElement.prototype.getBoundingClientRect;
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-      if (this === region) return new DOMRect(0, 100, 300, 600);
-      if (this.matches('.history-link')) return new DOMRect(20, targetTop, 260, 60);
-      if (this.matches('.group-heading h3')) return new DOMRect(25, 50, 160, 20);
-      if (this.matches('.sidebar-pinned-heading h3')) return new DOMRect(25, 110, 160, 20);
-      if (this === heading) return new DOMRect(20, 110, 260, 40);
-      if (this.matches('.scenario-link')) return new DOMRect(20, 100, 260, 44);
-      return originalBounds.call(this);
+       if (this === region) return new DOMRect(0, 100, 300, 600);
+       if (this.matches('.history-link')) return new DOMRect(20, Math.max(100, Math.min(640, targetTop)), 260, 60);
+       if (this.matches('.history-item')) return new DOMRect(20, targetTop - 68, 260, 68);
+       if (this.matches('.steps-scroll ol')) return new DOMRect(20, targetTop, 260, 2000);
+       return originalBounds.call(this);
     });
     for (targetTop of [200, 180, 690, 800, 10]) {
       for (const key of ['j', 'k']) {
         region.scrollTop = 100;
         await press(key);
-        if (targetTop === 200) expect(region.scrollTop).toBe(100);
+        if (targetTop === 200 || targetTop === 180) expect(region.scrollTop).toBe(100);
         else expect(region.scrollTop).not.toBe(100);
       }
     }
     targetTop = 200;
     region.scrollTop = 100;
+    scenariosRegion.scrollTop = 120;
     await press('l');
     expect(region.scrollTop).not.toBe(100);
+    expect(scenariosRegion.scrollTop).toBe(120);
+  } finally { app.unmount(); }
+});
+
+it.each(['j', 'ArrowDown', 'k', 'ArrowUp'])('scrolls Scenarios to its boundary when %s selects an endpoint scenario', async key => {
+  const app = await mountFixture(fixture);
+  const first = key === 'k' || key === 'ArrowUp';
+  try {
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    const links = [...document.querySelectorAll<HTMLButtonElement>('.scenario-link')];
+    links.at(first ? 1 : -2)!.click(); await settle();
+    const region = document.querySelector<HTMLElement>('.scenarios-scroll')!;
+    Object.defineProperties(region, { clientHeight: { value: 300 }, scrollHeight: { value: 1000 } });
+    region.scrollTop = first ? 30 : 670;
+    await press(key);
+    expect(currentScenario()).toBe(links.at(first ? 0 : -1)!.textContent);
+    expect(region.scrollTop).toBe(first ? 0 : 700);
   } finally { app.unmount(); }
 });
 
@@ -647,7 +826,7 @@ it('bounds keyboard traversal in sidebar group order and preserves each scenario
     expect(currentEvent()).toBe(event); expect(currentScenario()).toBe(title);
     const otherModal = document.createElement('div'); otherModal.setAttribute('aria-modal', 'true'); document.body.append(otherModal);
     await press(']');
-    expect(button('Event').getAttribute('aria-selected')).toBe('true'); otherModal.remove();
+    expect(button('Details').getAttribute('aria-selected')).toBe('true'); otherModal.remove();
     await press(']');
     expect(button('Diagram').getAttribute('aria-selected')).toBe('true');
     await press('h');
@@ -780,7 +959,7 @@ it('jumps to scenario endpoints with G and gg while preserving shortcut input bo
   } finally { app.unmount(); }
 });
 
-it.each(['Event', 'Data'])('resets every scenario and selects the first sidebar scenario from %s with Shift+H', async tab => {
+it.each(['Details', 'Data'])('resets every scenario and selects the first sidebar scenario from %s with Shift+H', async tab => {
   const documentFixture = structuredClone(fixture) as Explanation;
   documentFixture.scenarios.unshift(documentFixture.scenarios.pop()!);
   const app = await mountFixture(documentFixture);
@@ -799,8 +978,8 @@ it.each(['Event', 'Data'])('resets every scenario and selects the first sidebar 
     const firstScenario = fixture.scenarios[0]!;
     expect(currentScenario()).toBe(firstScenario.title);
     expect(currentEvent()).toContain('01 / 04');
-    expect(button('Event').getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(button('Event'));
+    expect(button('Details').getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(button('Details'));
     expect(new URLSearchParams(location.search).get('scenario')).toBe(firstScenario.id);
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(firstScenario.occurrences[0]!.id);
     expect(push).toHaveBeenCalledTimes(1);
@@ -850,7 +1029,7 @@ it('guards Shift+H in inputs and overlays and exposes reset through quick action
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     expect(currentScenario()).toBe('Successful callback');
     expect(currentEvent()).toContain('01 / 04');
-    expect(button('Event').getAttribute('aria-selected')).toBe('true');
+    expect(button('Details').getAttribute('aria-selected')).toBe('true');
     await press('j');
     expect(currentEvent()).toContain('01 / 05');
   } finally { app.unmount(); }
@@ -1008,8 +1187,8 @@ it('searches all quick actions, skips disabled options, executes selection, and 
     await press('k', { ctrlKey: true }, origin);
     const search = () => document.querySelector<HTMLInputElement>('[aria-label="Search quick actions"]')!;
     expect(document.activeElement).toBe(search());
-    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(21);
-    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(21);
+    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(23);
+    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(23);
     await closeDialog();
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
     await press('k', { ctrlKey: true });
@@ -1143,8 +1322,9 @@ it('numbers repeated occurrences and shows traversed visit counts from the first
     expect(future.querySelector('small')!.textContent).toBe('receipt.recheck(3)');
     expect(future.disabled).toBe(false);
     future.click(); await settle();
-    expect(document.querySelector('.history-link.current')).toBe(future);
-    expect(currentEvent()).toContain('04 / 06');
+     expect(document.querySelector('.history-link.current')).toBe(future);
+     expect(document.querySelector('.steps-heading .path-hint')!.textContent).toBe('4/6');
+     expect(currentEvent()).toContain('04 / 06');
     expect(document.querySelector('.step-tile[aria-current="step"] .step-trigger code')!.textContent).toBe('receipt.recheck(3)');
     const lookup = [...document.querySelectorAll('.value-row')].find(node => node.textContent?.includes('Receipt lookups'))!;
     expect([...lookup.querySelectorAll('pre')].map(node => node.textContent)).toEqual(['2', '3']);
@@ -1160,10 +1340,11 @@ it('numbers repeated occurrences and shows traversed visit counts from the first
     expect(document.querySelector('.diagram-panel .node-visit-badge text')!.textContent).toBe('1');
     expect(document.querySelector('.diagram-panel .graph-node.current')!.getAttribute('aria-label')).toBe('Receipt checked · visited 1 time');
     expect(document.querySelectorAll('.history-link.future')).toHaveLength(4);
-    button('Event').click(); await settle();
+    button('Details').click(); await settle();
     document.querySelectorAll<HTMLButtonElement>('.history-link')[5]!.click(); await settle();
     button('Replay scenario').click(); await settle();
-    expect(currentEvent()).toContain('01 / 06');
+     expect(currentEvent()).toContain('01 / 06');
+     expect(document.querySelector('.steps-heading .path-hint')!.textContent).toBe('1/6');
     expect(document.querySelectorAll('.history-link.future')).toHaveLength(5);
     await press(']');
     expect(document.querySelector('.diagram-panel .node-visit-badge, .diagram-panel .edge-visit-count')).toBeNull();
@@ -1209,7 +1390,6 @@ it('shares sequence fragments across scenarios and preserves occurrence selectio
     const payment = [...document.querySelectorAll('.value-row')].find(row => row.textContent?.includes('Payment status'))!;
     expect([...payment.querySelectorAll('pre')].map(value => value.textContent)).toEqual(['"pending"', '"paid"']);
     expect(document.querySelector('.occurrence-picker')).toBeNull();
-    expect(document.querySelectorAll('.event-graph .sequence-message')).toHaveLength(2);
     await press('h');
     expect(panel().querySelector('.sequence-message.current')!.getAttribute('data-occurrence-id')).toBe('sequence-checked');
     expect(successHeading().classList.contains('highlighted')).toBe(false);

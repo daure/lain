@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "title": "Order lifecycle",
-  "description": "Follow payment callbacks through capture, duplicate acknowledgement, and issuer decline. Walk parcels through first-attempt delivery, redelivery, and return to sender. Inspect the three payment exchanges as ordered messages with concrete recorded state.",
+   "description": "Follow payment callbacks through capture, duplicate acknowledgement, and issuer decline. Walk parcels through first-attempt delivery, redelivery, and return to sender. Inspect the three payment exchanges as ordered messages with concrete recorded state. The synthetic shared domain groups commerce entities, API DTOs, and an external payment gateway; gateway and DTO definitions illustrate integration boundaries without captured instances.",
   "domain": {
     "entities": [
       { "id": "order", "label": "Order", "attributes": [{ "id": "number", "label": "Order number" }, { "id": "paymentStatus", "label": "Payment status" }, { "id": "total", "label": "Total (EUR)" }], "methods": [
@@ -16,27 +16,43 @@
       { "id": "shipment", "label": "Shipment", "attributes": [{ "id": "status", "label": "Parcel status" }, { "id": "trackingNumber", "label": "Tracking number" }, { "id": "deliveredAt", "label": "Delivered at" }, { "id": "carrier", "label": "Carrier" }, { "id": "destinationCity", "label": "Destination city" }, { "id": "deliveryAttempts", "label": "Delivery attempts" }, { "id": "deliveryIssue", "label": "Delivery issue" }, { "id": "returnReason", "label": "Return reason" }, { "id": "returnedAt", "label": "Returned at" }], "methods": [
         { "id": "record-attempt", "signature": "recordDeliveryAttempt(issue: string | null): void", "description": "Increment the delivery attempt count and record any delivery issue." },
         { "id": "return", "signature": "returnToSender(reason: string): void", "description": "Record the return reason and move the parcel into the returned state." }
-      ] }
+      ] },
+      { "id": "gateway", "label": "Payment gateway", "attributes": [{ "id": "provider", "label": "Provider name" }] },
+      { "id": "callback-dto", "label": "Payment callback DTO", "attributes": [{ "id": "eventId", "label": "Callback event ID" }, { "id": "paymentId", "label": "Payment identifier" }, { "id": "outcome", "label": "Payment outcome" }] }
     ],
     "relationships": [
-      { "id": "order-payments", "label": "has payment", "sourceEntityId": "order", "targetEntityId": "payment", "sourceCardinality": "one", "targetCardinality": "many" },
-      { "id": "order-fulfillments", "label": "queues work", "sourceEntityId": "order", "targetEntityId": "fulfillment", "sourceCardinality": "one", "targetCardinality": "many" },
-      { "id": "payment-receipts", "label": "records callback", "sourceEntityId": "payment", "targetEntityId": "receipt", "sourceCardinality": "one", "targetCardinality": "many" },
-      { "id": "fulfillment-shipment", "label": "packs parcel", "sourceEntityId": "fulfillment", "targetEntityId": "shipment", "sourceCardinality": "one", "targetCardinality": "one" },
-      { "id": "order-shipments", "label": "tracks parcel", "sourceEntityId": "order", "targetEntityId": "shipment", "sourceCardinality": "one", "targetCardinality": "many" }
+      { "id": "order-payments", "label": "has payment", "sourceEntityId": "order", "targetEntityId": "payment", "sourceCardinality": "zeroOrOne", "targetCardinality": "zeroOrMore" },
+      { "id": "order-fulfillments", "label": "queues work", "sourceEntityId": "order", "targetEntityId": "fulfillment", "sourceCardinality": "zeroOrOne", "targetCardinality": "zeroOrMore" },
+      { "id": "payment-receipts", "label": "records callback", "sourceEntityId": "payment", "targetEntityId": "receipt", "sourceCardinality": "zeroOrOne", "targetCardinality": "zeroOrMore" },
+      { "id": "fulfillment-shipment", "label": "packs parcel", "sourceEntityId": "fulfillment", "targetEntityId": "shipment", "sourceCardinality": "zeroOrOne", "targetCardinality": "zeroOrOne" },
+      { "id": "order-shipments", "label": "tracks parcel", "sourceEntityId": "order", "targetEntityId": "shipment", "sourceCardinality": "zeroOrOne", "targetCardinality": "zeroOrMore" },
+      { "id": "gateway-callbacks", "label": "sends callback DTO", "sourceEntityId": "gateway", "targetEntityId": "callback-dto", "sourceCardinality": "zeroOrOne", "targetCardinality": "zeroOrMore" },
+      { "id": "callback-receipts", "label": "deduplicated by", "sourceEntityId": "callback-dto", "targetEntityId": "receipt", "sourceCardinality": "zeroOrMore", "targetCardinality": "zeroOrOne" }
+    ],
+    "groups": [
+      { "id": "commerce", "label": "Commerce domain", "entityIds": ["order"] },
+      { "id": "payments", "label": "Payments", "entityIds": ["payment", "receipt"], "parentGroupId": "commerce" },
+      { "id": "fulfillment-domain", "label": "Fulfillment", "entityIds": ["fulfillment", "shipment"], "parentGroupId": "commerce" },
+      { "id": "external-payment-system", "label": "External system: payment gateway", "entityIds": ["gateway"] },
+      { "id": "api-dtos", "label": "API DTOs", "entityIds": ["callback-dto"], "parentGroupId": "external-payment-system" }
     ]
   },
   "diagrams": [
     {
       "id": "payment-flow", "title": "Payment handling", "kind": "flow",
+      "groups": [
+        { "id": "callback-processing", "label": "Callback processing", "nodeIds": [] },
+        { "id": "receipt-verification", "label": "Receipt verification", "nodeIds": ["check", "existing"], "parentGroupId": "callback-processing" },
+        { "id": "payment-resolution", "label": "Payment resolution", "nodeIds": ["capture", "fulfill", "ignore", "decline"], "parentGroupId": "callback-processing" }
+      ],
       "nodes": [
-        { "id": "callback", "label": "Callback received", "entityIds": ["payment", "receipt"] },
-        { "id": "check", "label": "Receipt checked", "entityIds": ["receipt"] },
-        { "id": "capture", "label": "Capture the payment", "entityIds": ["order", "payment"] },
-        { "id": "fulfill", "label": "Queue fulfillment", "entityIds": ["fulfillment", "receipt"] },
-        { "id": "existing", "label": "Event already handled", "entityIds": ["receipt"] },
-        { "id": "ignore", "label": "Ignore the duplicate callback", "entityIds": ["order", "payment", "fulfillment", "receipt"] },
-        { "id": "decline", "label": "Record the declined payment", "entityIds": ["order", "payment", "receipt"] }
+        { "id": "callback", "label": "Callback received", "entityIds": ["payment", "receipt", "gateway", "callback-dto"], "role": "start" },
+        { "id": "check", "label": "Receipt checked", "entityIds": ["receipt"], "role": "decision" },
+        { "id": "capture", "label": "Capture the payment", "entityIds": ["order", "payment"], "role": "subprocess", "detailDiagramId": "payment-capture-flow" },
+        { "id": "fulfill", "label": "Queue fulfillment", "entityIds": ["fulfillment", "receipt"], "role": "end" },
+        { "id": "existing", "label": "Event already handled", "entityIds": ["receipt"], "role": "action" },
+        { "id": "ignore", "label": "Ignore the duplicate callback", "entityIds": ["order", "payment", "fulfillment", "receipt"], "role": "end" },
+        { "id": "decline", "label": "Record the declined payment", "entityIds": ["order", "payment", "receipt"], "role": "end" }
       ],
       "edges": [
         { "id": "callback-check", "sourceNodeId": "callback", "targetNodeId": "check", "label": "Look up event ID" },
@@ -50,6 +66,11 @@
     },
     {
       "id": "shipment-state", "title": "Shipment lifecycle", "kind": "state",
+      "groups": [
+        { "id": "carrier-handling", "label": "Carrier handling", "nodeIds": [] },
+        { "id": "delivery-in-progress", "label": "Delivery in progress", "nodeIds": ["transit", "delivery-failed"], "parentGroupId": "carrier-handling" },
+        { "id": "delivery-outcome", "label": "Delivery outcome", "nodeIds": ["delivered", "returned"], "parentGroupId": "carrier-handling" }
+      ],
       "nodes": [
         { "id": "packed", "label": "Parcel packed", "entityIds": ["fulfillment", "shipment"] },
         { "id": "transit", "label": "In transit", "entityIds": ["shipment", "fulfillment"] },
@@ -71,9 +92,9 @@
     {
       "id": "payment-sequence", "title": "Payment callback sequence", "kind": "sequence",
       "nodes": [
-        { "id": "callback", "label": "Callback received", "entityIds": ["payment", "receipt"] },
+        { "id": "callback", "label": "Callback received", "entityIds": ["payment", "receipt", "gateway", "callback-dto"] },
         { "id": "check", "label": "Receipt checked", "entityIds": ["receipt"] },
-        { "id": "capture", "label": "Capture the payment", "entityIds": ["order", "payment"] },
+        { "id": "capture", "label": "Capture the payment", "entityIds": ["order", "payment"], "detailDiagramId": "payment-capture-sequence" },
         { "id": "fulfill", "label": "Queue fulfillment", "entityIds": ["fulfillment", "receipt"] },
         { "id": "existing", "label": "Event already handled", "entityIds": ["receipt"] },
         { "id": "ignore", "label": "Ignore the duplicate callback", "entityIds": ["order", "payment", "fulfillment", "receipt"] },
@@ -126,14 +147,40 @@
           ] }
         ]
       }
+    },
+    {
+      "id": "payment-capture-flow", "title": "Payment capture details", "kind": "flow",
+      "nodes": [
+        { "id": "capture-payment", "label": "Capture authorized payment", "entityIds": ["payment"], "role": "subprocess", "detailDiagramId": "payment-capture-sequence" },
+        { "id": "mark-order-paid", "label": "Mark order paid", "entityIds": ["order"], "role": "end" }
+      ],
+      "edges": [{ "id": "capture-mark-paid", "sourceNodeId": "capture-payment", "targetNodeId": "mark-order-paid", "label": "Capture succeeds" }]
+    },
+    {
+      "id": "payment-capture-sequence", "title": "Payment capture exchange", "kind": "sequence",
+      "nodes": [
+        { "id": "capture-payment", "label": "Capture authorized payment", "entityIds": ["payment"], "detailDiagramId": "payment-capture-flow" },
+        { "id": "mark-order-paid", "label": "Mark order paid", "entityIds": ["order"] }
+      ],
+      "edges": [{ "id": "capture-mark-paid", "sourceNodeId": "capture-payment", "targetNodeId": "mark-order-paid", "label": "Capture succeeds" }],
+      "sequence": {
+        "participants": [{ "id": "service", "label": "Payment service" }, { "id": "payment", "label": "Payment" }, { "id": "order", "label": "Order" }],
+        "messages": [
+          { "nodeId": "capture-payment", "fromParticipantId": "service", "toParticipantId": "payment" },
+          { "nodeId": "mark-order-paid", "fromParticipantId": "service", "toParticipantId": "order" }
+        ],
+        "body": [{ "kind": "message", "nodeId": "capture-payment" }, { "kind": "message", "nodeId": "mark-order-paid" }]
+      }
     }
   ],
   "scenarios": [
     {
       "id": "successful-callback", "title": "Successful callback", "diagramId": "payment-flow",
+      "description": "In this synthetic example, a gateway sends a new authorized-payment callback for pending order ORD-1042. The service verifies the receipt, captures EUR 89.90, and queues one fulfillment item. The recording ends with the order paid and ready for packing.",
       "occurrences": [
         {
           "id": "success-received", "nodeId": "callback", "incomingEdgeId": null,
+          "changeSummary": "Receipt rcpt-481 is created and linked to payment pay-72. The order and payment remain pending.",
           "trigger": "POST /payments/callback · evt_481",
           "narration": "A callback arrives for order ORD-1042. The service creates a receipt for evt_481. No payment or fulfillment work has been completed yet.",
           "before": { "instances": [
@@ -163,6 +210,8 @@
         },
         {
           "id": "success-captured", "nodeId": "capture", "incomingEdgeId": "check-capture",
+          "changeSummary": "The order becomes paid and the payment becomes captured. The failure reason is captured as null; its previous value was uncaptured.",
+          "methodCalls": [{ "entityId": "payment", "methodId": "capture", "instanceId": "pay-72" }, { "entityId": "order", "methodId": "mark-paid", "instanceId": "ord-1042" }],
           "trigger": "payment.capture(pay-72)",
           "narration": "The payment is captured and the order becomes paid. A captured null failure reason means there is no failure. At the preceding occurrence that attribute was uncaptured.",
           "before": { "instances": [
@@ -196,6 +245,7 @@
     },
     {
       "id": "duplicate-callback", "title": "Duplicate callback", "diagramId": "payment-flow",
+      "description": "In this synthetic example, the gateway retries event evt_481 after its payment and fulfillment work have been recorded. The service reads and verifies the handled receipt, then acknowledges the retry with HTTP 200. The paid order retains exactly one fulfillment item.",
       "occurrences": [
         {
           "id": "duplicate-received", "nodeId": "callback", "incomingEdgeId": null,
@@ -216,6 +266,7 @@
         },
         {
           "id": "duplicate-first-check", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "changeSummary": "The receipt lookup count increases from zero to one. The handled flag remains true.",
           "trigger": "receipt.lookup(evt_481)",
           "narration": "The first lookup finds the handled receipt. This occurrence belongs to the first visit to Receipt checked. The lookup count becomes one.",
           "before": { "instances": [
@@ -250,6 +301,7 @@
         },
         {
           "id": "duplicate-verification", "nodeId": "check", "incomingEdgeId": "existing-check",
+          "changeSummary": "The receipt lookup count increases from one to two on this separate verification visit. The payment and fulfillment remain unchanged.",
           "trigger": "receipt.verify(evt_481)",
           "narration": "A second read verifies the saved receipt before acknowledgement. This is a separate occurrence at the same diagram node: its lookup count changes from one to two, not from zero to one.",
           "before": { "instances": [
@@ -286,6 +338,7 @@
     },
     {
       "id": "declined-payment", "title": "Declined payment", "diagramId": "payment-flow",
+      "description": "In this synthetic example, the issuer declines the payment for pending order ORD-1043 because funds are insufficient. The service checks the new receipt, records the decline, and acknowledges the callback. The recording ends with a declined order and no fulfillment work.",
       "occurrences": [
         {
           "id": "decline-received", "nodeId": "callback", "incomingEdgeId": null,
@@ -318,6 +371,7 @@
         },
         {
           "id": "decline-recorded", "nodeId": "decline", "incomingEdgeId": "check-decline",
+          "methodCalls": [{ "entityId": "payment", "methodId": "decline", "instanceId": "pay-73" }],
           "trigger": "payment.decline(pay-73, insufficient_funds)",
           "narration": "The order and payment become declined. The failure reason is captured as insufficient_funds. The handled receipt gets HTTP 200; the failed payment is acknowledged without creating fulfillment work.",
           "before": { "instances": [
@@ -335,6 +389,7 @@
     },
     {
       "id": "parcel-delivered", "title": "Parcel delivered", "diagramId": "shipment-state",
+      "description": "In this synthetic example, Rotterdam packs paid order ORD-1042 for Utrecht. DemoParcel collects and delivers the parcel on the first attempt. The queue closes the fulfillment item, while the order keeps a durable link to the delivered shipment.",
       "occurrences": [
         {
           "id": "shipment-packed", "nodeId": "packed", "incomingEdgeId": null,
@@ -367,6 +422,7 @@
         },
         {
           "id": "shipment-delivered", "nodeId": "delivered", "incomingEdgeId": "transit-delivered",
+          "methodCalls": [{ "entityId": "shipment", "methodId": "record-attempt", "instanceId": "ship-88" }],
           "trigger": "carrier.delivered(ship-88)",
           "narration": "DemoParcel confirms delivery in Utrecht on the first attempt at 2026-10-09T14:32:00Z. The shipment becomes delivered with one attempt and no delivery issue. Fulfillment becomes complete; the order remains paid.",
           "before": { "instances": [
@@ -398,6 +454,7 @@
     },
     {
       "id": "sequence-successful-callback", "title": "Successful payment exchange", "diagramId": "payment-sequence",
+      "description": "This synthetic exchange follows a new authorized-payment callback between the gateway, payment service, receipt store, and fulfillment queue. Receipt verification permits capture and fulfillment. The recording ends with order ORD-1042 paid and one work item queued.",
       "occurrences": [
         {
           "id": "sequence-received", "nodeId": "callback", "incomingEdgeId": null,
@@ -430,6 +487,7 @@
         },
         {
           "id": "sequence-captured", "nodeId": "capture", "incomingEdgeId": "check-capture",
+          "methodCalls": [{ "entityId": "payment", "methodId": "capture", "instanceId": "pay-72" }, { "entityId": "order", "methodId": "mark-paid", "instanceId": "ord-1042" }],
           "trigger": "payment.capture(pay-72)",
           "narration": "The payment is captured and the order becomes paid. A captured null failure reason means there is no failure. At the preceding occurrence that attribute was uncaptured.",
           "before": { "instances": [
@@ -463,6 +521,7 @@
     },
     {
       "id": "delivery-retry", "title": "Delivery after redelivery", "diagramId": "shipment-state",
+      "description": "In this synthetic example, DemoParcel cannot deliver the Utrecht parcel because the recipient is unavailable. The recipient schedules redelivery and the parcel revisits In transit before delivery on the second attempt. Closing fulfillment retains both attempts and the delivery timestamp on the shipment.",
       "occurrences": [
         {
           "id": "retry-packed", "nodeId": "packed", "incomingEdgeId": null,
@@ -495,6 +554,7 @@
         },
         {
           "id": "retry-failed", "nodeId": "delivery-failed", "incomingEdgeId": "transit-delivery-failed",
+          "methodCalls": [{ "entityId": "shipment", "methodId": "record-attempt", "instanceId": "ship-88" }],
           "trigger": "carrier.deliveryFailed(ship-88, recipient unavailable)",
           "narration": "DemoParcel reaches Utrecht but the recipient is unavailable. The first attempt increments deliveryAttempts to one and records the delivery issue. The shipment becomes delivery_failed and fulfillment becomes exception; deliveredAt remains null.",
           "before": { "instances": [
@@ -525,6 +585,7 @@
         },
         {
           "id": "retry-delivered", "nodeId": "delivered", "incomingEdgeId": "transit-delivered",
+          "methodCalls": [{ "entityId": "shipment", "methodId": "record-attempt", "instanceId": "ship-88" }],
           "trigger": "carrier.delivered(ship-88)",
           "narration": "DemoParcel delivers NL-003489 in Utrecht on the second attempt at 2026-10-10T14:32:00Z. The attempt count becomes two and the delivery issue clears to a captured null. Fulfillment becomes complete; return metadata remains null.",
           "before": { "instances": [
@@ -556,6 +617,7 @@
     },
     {
       "id": "returned-to-sender", "title": "Returned to sender", "diagramId": "shipment-state",
+      "description": "In this synthetic example, the recipient is unavailable for delivery and declines redelivery. DemoParcel returns the parcel to Rotterdam and the queue closes its fulfillment item. The order retains the returned shipment; this recording covers parcel handling and contains no refund event.",
       "occurrences": [
         {
           "id": "return-packed", "nodeId": "packed", "incomingEdgeId": null,
@@ -588,6 +650,7 @@
         },
         {
           "id": "return-failed", "nodeId": "delivery-failed", "incomingEdgeId": "transit-delivery-failed",
+          "methodCalls": [{ "entityId": "shipment", "methodId": "record-attempt", "instanceId": "ship-88" }],
           "trigger": "carrier.deliveryFailed(ship-88, recipient unavailable)",
           "narration": "The recipient is unavailable when DemoParcel attempts delivery in Utrecht. The shipment records one attempt and recipient unavailable, with status delivery_failed. Fulfillment becomes exception while delivery and return timestamps remain null.",
           "before": { "instances": [
@@ -603,6 +666,7 @@
         },
         {
           "id": "return-returned", "nodeId": "returned", "incomingEdgeId": "delivery-failed-returned",
+          "methodCalls": [{ "entityId": "shipment", "methodId": "return", "instanceId": "ship-88" }],
           "trigger": "recipient.declineRedelivery(ship-88) · carrier.returned(ship-88)",
           "narration": "The recipient declines redelivery, so DemoParcel returns NL-003490 to Rotterdam at 2026-10-10T10:18:00Z. Shipment and fulfillment become returned. The record keeps one attempt, its delivery issue, and returnReason redelivery declined; deliveredAt stays null.",
           "before": { "instances": [
@@ -634,6 +698,7 @@
     },
     {
       "id": "sequence-duplicate-callback", "title": "Duplicate payment exchange", "diagramId": "payment-sequence",
+      "description": "This synthetic exchange follows a gateway retry of handled event evt_481. The payment service reads the receipt twice through the verification loop, then acknowledges the duplicate. The existing payment and single fulfillment item remain intact.",
       "occurrences": [
         {
           "id": "sequence-duplicate-received", "nodeId": "callback", "incomingEdgeId": null,
@@ -724,6 +789,7 @@
     },
     {
       "id": "sequence-declined-payment", "title": "Declined payment exchange", "diagramId": "payment-sequence",
+      "description": "This synthetic exchange follows an issuer-declined callback for order ORD-1043. The payment service verifies a new receipt and takes the insufficient-funds branch. The recording ends with the decline acknowledged and no fulfillment item created.",
       "occurrences": [
         {
           "id": "sequence-decline-received", "nodeId": "callback", "incomingEdgeId": null,
@@ -756,6 +822,7 @@
         },
         {
           "id": "sequence-decline-recorded", "nodeId": "decline", "incomingEdgeId": "check-decline",
+          "methodCalls": [{ "entityId": "payment", "methodId": "decline", "instanceId": "pay-73" }],
           "trigger": "payment.decline(pay-73, insufficient_funds)",
           "narration": "The order and payment become declined. The failure reason is captured as insufficient_funds. The handled receipt gets HTTP 200; the failed payment is acknowledged without creating fulfillment work.",
           "before": { "instances": [
@@ -768,6 +835,74 @@
             { "id": "pay-73", "entityId": "payment", "values": { "status": "declined", "amount": 44.5, "failureReason": "insufficient_funds" } },
             { "id": "rcpt-482", "entityId": "receipt", "values": { "eventId": "evt_482", "handled": true, "lookupCount": 1, "responseStatus": 200 } }
           ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1043", "targetInstanceId": "pay-73" }, { "relationshipId": "payment-receipts", "sourceInstanceId": "pay-73", "targetInstanceId": "rcpt-482" }] }
+        }
+      ]
+    },
+    {
+      "id": "capture-authorized-payment", "title": "Capture and mark paid", "diagramId": "payment-capture-flow",
+      "description": "This synthetic detail recording expands payment capture for ORD-1042 into two actions. Payment pay-72 starts pending with an authorized amount of EUR 89.90. The service captures it, then marks the order paid.\n\nOnly the order and payment are captured here. Receipt acknowledgement and fulfillment queuing belong to the surrounding callback recording.",
+      "occurrences": [
+        {
+          "id": "capture-detail-payment", "nodeId": "capture-payment", "incomingEdgeId": null,
+          "trigger": "payment.capture(pay-72)",
+          "narration": "The payment service captures the authorized EUR 89.90 on pay-72. The payment becomes captured and its failure reason is recorded as null.\n\nThe order is still pending in this intermediate snapshot. Marking the order paid is the next action in this detail recording.",
+          "methodCalls": [{ "entityId": "payment", "methodId": "capture", "instanceId": "pay-72" }],
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] }
+        },
+        {
+          "id": "capture-detail-order", "nodeId": "mark-order-paid", "incomingEdgeId": "capture-mark-paid",
+          "trigger": "order.markPaid(pay-72)",
+          "narration": "With pay-72 captured, the service marks ORD-1042 paid. The order can now proceed to fulfillment.\n\nThis detail recording stops at the paid order. It does not record queuing, packing, or delivery.",
+          "methodCalls": [{ "entityId": "order", "methodId": "mark-paid", "instanceId": "ord-1042" }],
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] }
+        }
+      ]
+    },
+    {
+      "id": "capture-payment-exchange", "title": "Capture interaction", "diagramId": "payment-capture-sequence",
+      "description": "This synthetic sequence shows the payment service capturing pay-72 and then marking ORD-1042 paid. It expands the capture message from the callback sequence into the two domain operations.\n\nThe recording captures order and payment state only, and ends with a captured payment and paid order. The linked flow presents these operations as ordered actions.",
+      "occurrences": [
+        {
+          "id": "capture-exchange-payment", "nodeId": "capture-payment", "incomingEdgeId": null,
+          "trigger": "payment.capture(pay-72)",
+          "narration": "The payment service calls capture on pay-72 for the authorized EUR 89.90. The payment becomes captured with a null failure reason.\n\nThe order remains pending until the following message. The drill link opens the corresponding action flow, preserving this sequence visit.",
+          "methodCalls": [{ "entityId": "payment", "methodId": "capture", "instanceId": "pay-72" }],
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "pending", "amount": 89.9 } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] }
+        },
+        {
+          "id": "capture-exchange-order", "nodeId": "mark-order-paid", "incomingEdgeId": "capture-mark-paid",
+          "trigger": "order.markPaid(pay-72)",
+          "narration": "After capture succeeds, the payment service calls markPaid on ORD-1042 with pay-72. The order changes from pending to paid while the captured payment retains its values.\n\nThe interaction ends here. Fulfillment belongs to the surrounding callback sequence.",
+          "methodCalls": [{ "entityId": "order", "methodId": "mark-paid", "instanceId": "ord-1042" }],
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "pending", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } }
+          ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] }
         }
       ]
     }

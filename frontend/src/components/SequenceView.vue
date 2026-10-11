@@ -1,19 +1,22 @@
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue';
+import { computed, ref, useId, type ComponentPublicInstance } from 'vue';
 import { roundedPath } from '../edge-path';
 import type { Diagram, Scenario } from '../model';
 import { sequenceLayout } from '../sequence-layout';
 import { sequenceHeadings, stickySequenceContext } from '../sequence-sticky';
 import SequenceHeading from './SequenceHeading.vue';
 import DiagramViewport from './DiagramViewport.vue';
+import DrillLink from './DrillLink.vue';
+import { activateDiagramNode, diagramLinkHint, type DiagramLink } from '../diagram-links';
 
 const props = withDefaults(defineProps<{
   diagram: Diagram;
   scenario: Scenario;
   currentOccurrenceId: string;
   compact?: boolean;
+  links?: Map<string, DiagramLink>;
 }>(), { compact: false });
-const emit = defineEmits<{ select: [occurrenceId: string]; inspect: [nodeId: string] }>();
+const emit = defineEmits<{ select: [occurrenceId: string]; inspect: [nodeId: string]; open: [scenarioId: string] }>();
 const markerId = `sequence-arrow-${useId().replace(/[^a-z0-9-]/gi, '')}`;
 const participants = computed(() => props.diagram.sequence!.participants);
 const participantLabels = computed(() => new Map(participants.value.map(participant => [participant.id, participant.label])));
@@ -27,6 +30,7 @@ const layout = computed(() => sequenceLayout(props.diagram));
 const scenarioNodes = computed(() => new Set(props.scenario.occurrences.map(occurrence => occurrence.nodeId)));
 const currentNodeId = computed(() => props.scenario.occurrences[currentIndex.value]?.nodeId);
 const focusedNodeId = ref<string>();
+const labelEnds = ref(new Map<string, number>());
 const highlightedNodes = computed(() => new Set([
   ...props.scenario.occurrences.slice(0, currentIndex.value + 1).map(occurrence => occurrence.nodeId),
   ...(focusedNodeId.value ? [focusedNodeId.value] : []),
@@ -47,7 +51,8 @@ const rows = computed(() => {
     const fromX = participantX.value.get(message.fromParticipantId)!;
     const toX = participantX.value.get(message.toParticipantId)!;
     const self = fromX === toX;
-    const labelWidth = self ? participantSpacing - 36 : Math.abs(toX - fromX) - 24;
+    const hasDetail = props.links?.has(nodeId) ?? false;
+    const labelWidth = (self ? participantSpacing - 36 : Math.abs(toX - fromX) - 24) - (hasDetail ? 24 : 0);
     const label = props.compact ? `${definition.index + 1}. ${node.label}` : node.label;
     const direction = `${node.label}, from ${participantLabels.value.get(message.fromParticipantId)!} to ${participantLabels.value.get(message.toParticipantId)!}`;
     return {
@@ -57,9 +62,9 @@ const rows = computed(() => {
       upcoming: !props.compact && visits.length > 0 && walked.length === 0,
       offScenario: !props.compact && visits.length === 0,
       visitCount: props.compact || visits.length < 2 ? 0 : walked.length,
-      accessibleLabel: props.compact ? `Occurrence ${definition.index + 1}: ${direction}` : `${direction}. ${visits.length ? `${visits.length} recorded occurrence${visits.length === 1 ? '' : 's'}` : 'Off this scenario’s path'}`,
+      accessibleLabel: (props.compact ? `Occurrence ${definition.index + 1}: ${direction}` : `${direction}. ${visits.length ? `${visits.length} recorded occurrence${visits.length === 1 ? '' : 's'}` : 'Off this scenario’s path'}`) + diagramLinkHint(props.links?.get(nodeId)),
       label: truncate(label, Math.floor(labelWidth / 8)),
-      labelX: self ? fromX + 32 : (fromX + toX) / 2,
+      labelX: self ? fromX + 32 : (fromX + toX) / 2 - (hasDetail ? 12 : 0),
       path: self ? roundedPath([{ x: fromX, y }, { x: fromX + 20, y }, { x: fromX + 20, y: y + 20 }, { x: fromX, y: y + 20 }], 10)
         : `M ${fromX} ${y} H ${toX}`,
     };
@@ -67,7 +72,7 @@ const rows = computed(() => {
 });
 const width = computed(() => Math.max(
   participantInset * 2 + (participants.value.length - 1) * participantSpacing,
-  ...rows.value.filter(row => row.self).map(row => row.labelX + row.labelWidth + 24),
+  ...rows.value.filter(row => row.self).map(row => row.labelX + row.labelWidth + 24 + (props.links?.has(row.node.id) ? 24 : 0)),
 ));
 const height = computed(() => props.compact ? 96 + rows.value.length * 64 : layout.value.height);
 const canvas = ref<InstanceType<typeof DiagramViewport>>();
@@ -120,6 +125,13 @@ function hasHighlightedMessage(nodeIds: string[]) {
 
 function truncate(text: string, limit: number) {
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function measureLabel(element: Element | ComponentPublicInstance | null, key: string) {
+  if (!(element instanceof SVGElement) || typeof (element as SVGGraphicsElement).getBBox !== 'function') return;
+  const bounds = (element as SVGGraphicsElement).getBBox();
+  const end = bounds.x + bounds.width;
+  if (labelEnds.value.get(key) !== end) labelEnds.value.set(key, end);
 }
 </script>
 
@@ -179,20 +191,25 @@ function truncate(text: string, limit: number) {
       </template>
       <SequenceHeading v-for="frame in compact ? [] : layout.frames" :key="`${frame.id}-label`"
         v-show="!pinnedIds.has(frame.id)" :data-heading-id="frame.id" :frame="frame" :width="width" :y="frame.y" :selected="onScenarioPath(frame.nodeIds)" />
-      <g v-for="row in rows" :key="row.key" :class="['sequence-message', { visited: row.visited, current: row.current, upcoming: row.upcoming, 'off-scenario': row.offScenario, self: row.self }]"
+      <g v-for="row in rows" :key="row.key">
+      <g :class="['sequence-message', { visited: row.visited, current: row.current, upcoming: row.upcoming, 'off-scenario': row.offScenario, self: row.self }]"
          :data-node-id="row.node.id" :data-occurrence-id="row.occurrence?.id" role="button" tabindex="0" :aria-label="row.accessibleLabel" :aria-current="row.current ? 'step' : undefined"
-          @click="select(row)" @keydown.enter="select(row)" @keydown.space.prevent="select(row)"
+           @click="select(row)" @keydown.enter="activateDiagramNode($event, links?.get(row.node.id), () => select(row), id => emit('open', id))" @keydown.space.prevent="select(row)"
           @focusin="focusedNodeId = row.node.id" @focusout="focusedNodeId = undefined">
         <title>{{ row.accessibleLabel }}</title>
         <rect class="sequence-row" x="12" :y="row.y - 34" :width="width - 24" height="58" rx="6" />
         <path class="sequence-message-arrow" :d="row.path" :marker-end="`url(#${markerId}-${row.visited ? 'visited' : row.offScenario ? 'off-scenario' : 'upcoming'})`" />
         <svg :x="row.self ? row.labelX : row.labelX - row.labelWidth / 2" :y="row.y - 28" :width="row.labelWidth" height="24" overflow="hidden">
-          <text :x="row.self ? 0 : row.labelWidth / 2" y="18" :text-anchor="row.self ? 'start' : 'middle'">{{ row.label }}</text>
+          <text :ref="element => measureLabel(element, row.key)" :x="row.self ? 0 : row.labelWidth / 2" y="18" :text-anchor="row.self ? 'start' : 'middle'">{{ row.label }}</text>
         </svg>
         <g v-if="row.visitCount > 0" class="sequence-visit-badge" :transform="`translate(${width - 30},${row.y - 16})`">
           <title>{{ row.visitCount }} visits through the current occurrence</title>
           <circle r="11" /><text text-anchor="middle" dominant-baseline="central">{{ row.visitCount }}</text>
         </g>
+      </g>
+      <DrillLink v-if="links?.has(row.node.id)" svg :link="links.get(row.node.id)!"
+                 :x="(row.self ? row.labelX : row.labelX - row.labelWidth / 2) + (labelEnds.get(row.key) ?? row.labelWidth) + 8 - 20 * 8 / 28"
+                 :y="row.y - 26" :style="{ color: row.current || row.visited ? 'var(--blue)' : 'var(--muted)' }" @open="emit('open', $event)" />
       </g>
     </svg>
     </template>

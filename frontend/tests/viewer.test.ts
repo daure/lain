@@ -29,7 +29,7 @@ describe('recorded traversal', () => {
     expect(viewer.occurrence.value?.id).toBe('duplicate-ignored');
   });
 
-  it('preserves stable selections across revision reload and resets removed occurrence IDs', () => {
+  it('preserves stable selections and chooses the nearest surviving recorded neighbor when a selected visit disappears', () => {
     const viewer = useNavigation();
     viewer.load(document);
     viewer.selectScenario('duplicate-callback');
@@ -42,9 +42,15 @@ describe('recorded traversal', () => {
     expect(viewer.occurrence.value?.id).toBe('duplicate-verification');
     expect(viewer.occurrence.value?.narration).toBe('Updated recorded narration');
     const next = structuredClone(revision);
-    next.scenarios.find(item => item.id === 'duplicate-callback')!.occurrences = [next.scenarios.find(item => item.id === 'duplicate-callback')!.occurrences[0]!];
+    const recorded = next.scenarios.find(item => item.id === 'duplicate-callback')!;
+    recorded.occurrences = [recorded.occurrences[4]!, recorded.occurrences[0]!, recorded.occurrences[2]!];
     viewer.load(next, true);
-    expect(viewer.occurrence.value?.id).toBe('duplicate-received');
+    expect(viewer.occurrence.value?.id).toBe('duplicate-existing');
+    expect(viewer.selectionChange.value).toBe('occurrence');
+    const replacement = structuredClone(next);
+    replacement.scenarios.find(item => item.id === 'duplicate-callback')!.occurrences.forEach((item, index) => { item.id = `replacement-${index}`; });
+    viewer.load(replacement, true);
+    expect(viewer.occurrence.value?.id).toBe('replacement-0');
   });
 });
 

@@ -202,11 +202,16 @@ fn decode(row: &SqliteRow) -> Result<StoredExplanation, ServiceError> {
     let revision: i64 = row.try_get("revision").map_err(storage)?;
     let timestamp: i64 = row.try_get("updated_at_ms").map_err(storage)?;
     let json: String = row.try_get("document_json").map_err(storage)?;
+    let mut document: Explanation = serde_json::from_str(&json).map_err(storage)?;
+    for relationship in &mut document.domain.relationships {
+        relationship.source_cardinality = relationship.source_cardinality.explicit();
+        relationship.target_cardinality = relationship.target_cardinality.explicit();
+    }
     Ok(StoredExplanation {
         id: row.try_get("id").map_err(storage)?,
         revision: u64::try_from(revision).map_err(storage)?,
         updated_at_ms: u64::try_from(timestamp).map_err(storage)?,
-        document: serde_json::from_str(&json).map_err(storage)?,
+        document,
     })
 }
 

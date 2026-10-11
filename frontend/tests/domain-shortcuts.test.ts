@@ -32,15 +32,16 @@ const matched = () => [...document.querySelectorAll<SVGGElement>('.domain-entity
   .filter(element => element.querySelector('.domain-shortcut-number .matched'))
   .map(element => Number(element.dataset.shortcutNumber)).sort((a, b) => a - b);
 
-async function mountDomain(count: number) {
+async function mountDomain(count: number, grouped = false) {
   const documentFixture = structuredClone(fixture) as Explanation;
+  if (!grouped) delete documentFixture.domain.groups;
   documentFixture.diagrams = documentFixture.diagrams.filter(diagram => diagram.kind !== 'sequence');
   documentFixture.scenarios = documentFixture.scenarios.filter(scenario => documentFixture.diagrams.some(diagram => diagram.id === scenario.diagramId));
   while (documentFixture.domain.entities.length < count) {
     const id = `extra-${documentFixture.domain.entities.length}`;
     documentFixture.domain.entities.push({ id, label: id, attributes: [] });
   }
-  documentFixture.domain.entities.reverse();
+  if (!grouped) documentFixture.domain.entities.reverse();
   vi.stubGlobal('WebSocket', LiveSocket);
   vi.stubGlobal('matchMedia', () => ({ matches: true }));
   vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/explanations'
@@ -88,6 +89,23 @@ it('numbers domain boxes by horizontal position and then vertical position, pres
     expect(location.search).toBe(cursor);
     await press('j');
     expect(geometry()).toEqual(initial);
+  } finally { app.unmount(); }
+});
+
+it('numbers each nested block completely before the next block and jumps to its entity without changing the recording', async () => {
+  const { app } = await mountDomain(7, true);
+  try {
+    const ids = () => Array.from({ length: 7 }, (_, index) => entity(index + 1).dataset.entityId);
+    expect(ids()).toEqual(['gateway', 'callback-dto', 'order', 'payment', 'receipt', 'fulfillment', 'shipment']);
+    const cursor = location.search;
+    for (const number of [1, 2, 5, 6]) {
+      await press(String(number));
+      expect(selected()).toBe(number);
+      expect(document.activeElement).toBe(entity(number));
+      expect(location.search).toBe(cursor);
+    }
+    await press('j');
+    expect(ids()).toEqual(['gateway', 'callback-dto', 'order', 'payment', 'receipt', 'fulfillment', 'shipment']);
   } finally { app.unmount(); }
 });
 

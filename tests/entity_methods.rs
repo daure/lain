@@ -5,7 +5,14 @@ use lain::{
 use serde_json::json;
 
 fn document() -> Explanation {
-    serde_json::from_str(include_str!("../examples/order-lifecycle.json")).unwrap()
+    let mut document: Explanation =
+        serde_json::from_str(include_str!("../examples/order-lifecycle.json")).unwrap();
+    for scenario in &mut document.scenarios {
+        for occurrence in &mut scenario.occurrences {
+            occurrence.method_calls.clear();
+        }
+    }
+    document
 }
 
 fn method() -> EntityMethod {

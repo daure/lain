@@ -106,16 +106,48 @@ async function fullWidthTabs() {
     const current = active.getBoundingClientRect();
     const trigger = active.querySelector('.step-trigger').getBoundingClientRect();
     const icon = active.querySelector('.step-trigger .pi').getBoundingClientRect();
-    const value = active.querySelector('.step-trigger code').firstChild;
-    const firstCharacter = document.createRange();
-    firstCharacter.setStart(value, 0); firstCharacter.setEnd(value, 1);
-    const glyph = firstCharacter.getBoundingClientRect();
+    const value = active.querySelector('.step-trigger code').getBoundingClientRect();
     const tabs = document.querySelector('.event-tablist').getBoundingClientRect();
     const center = (rail.left + rail.right) / 2;
     return Math.abs((lens.left + lens.right) / 2 - center) < 1
       && Math.abs((current.left + current.right) / 2 - center) < 1 && trigger.bottom <= tabs.top
-      && Math.abs((icon.top + icon.bottom - glyph.top - glyph.bottom) / 2) < 2;
+      && Math.abs((icon.top + icon.bottom - value.top - value.bottom) / 2) < 2;
   });
+}
+
+async function groupedFrames(diagram) {
+  const panel = page.locator('.diagram-panel');
+  const geometry = await panel.locator('svg.graph').evaluate((svg, groups) => {
+    const bounds = element => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+    };
+    return groups.map(group => {
+      const frame = svg.querySelector(`[data-group-id="${group.id}"]`);
+      const children = [...group.nodeIds.map(id => svg.querySelector(`.graph-node[data-node-id="${id}"] .node-shape`)),
+        ...groups.filter(child => child.parentGroupId === group.id).map(child => svg.querySelector(`[data-group-id="${child.id}"] .group-shape`))];
+      return { id: group.id, frame: bounds(frame.querySelector('.group-shape')), heading: bounds(frame.querySelector('text')),
+        divider: bounds(frame.querySelector('.group-divider')), children: children.map(bounds) };
+    });
+  }, diagram.groups);
+  for (const group of geometry) {
+    assert.ok(group.heading.left >= group.frame.left && group.heading.right <= group.frame.right, `${group.id} heading fits its frame`);
+    assert.ok(group.heading.bottom <= group.divider.top, `${group.id} heading fits above its divider`);
+    for (const child of group.children) {
+      assert.ok(child.left > group.frame.left && child.right < group.frame.right, `${group.id} contains its child horizontally`);
+      assert.ok(child.top > group.divider.top && child.bottom < group.frame.bottom, `${group.id} contains its child below the heading`);
+    }
+  }
+  const cursor = new URL(page.url()).search;
+  await panel.getByRole('button', { name: 'Fit diagram', exact: true }).click();
+  for (const theme of ['dark', 'light']) {
+    const toggle = page.getByRole('button', { name: 'Toggle dark mode', exact: true });
+    if (await toggle.getAttribute('aria-pressed') !== String(theme === 'dark')) await toggle.click();
+    await page.screenshot({ path: path.join(artifacts, `${diagram.id}-groups-${theme}.png`), fullPage: true });
+  }
+  await page.getByRole('button', { name: 'Toggle dark mode', exact: true }).click();
+  await panel.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
+  assert.equal(new URL(page.url()).search, cursor);
 }
 
 async function stepNavigator() {
@@ -167,7 +199,7 @@ async function stepNavigator() {
   await text(page.locator('.path-hint'), '2/4');
   await fullWidthTabs();
   await page.keyboard.press('g'); await page.keyboard.press('g');
-  await page.getByRole('tab', { name: 'Event', exact: true }).click();
+  await page.getByRole('tab', { name: 'Details', exact: true }).click();
   await fullWidthTabs();
 }
 
@@ -314,7 +346,7 @@ async function focusedGraphStep() {
     const canvas = document.querySelector('.diagram-panel .viewport-scroll');
     const viewport = canvas.getBoundingClientRect();
     const content = canvas.querySelector('.viewport-content').getBoundingClientRect();
-    const node = canvas.querySelector('.graph-node.current rect').getBoundingClientRect();
+    const node = canvas.querySelector('.graph-node.current .node-shape').getBoundingClientRect();
     const aligned = (start, extent, focus, viewportStart, viewportExtent) => {
       const center = viewportStart + viewportExtent / 2;
       if (extent + 40 <= viewportExtent) return Math.abs(start + extent / 2 - center) < 2;
@@ -465,8 +497,8 @@ async function main() {
   await themeToggle.click();
   assert.equal(await page.locator('html').evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(9, 9, 11)');
   await page.locator('.explanation-card').click();
-  await page.getByRole('tab', { name: 'Event', exact: true }).waitFor();
-  assert.deepEqual(await page.getByRole('tab').allTextContents(), ['Event', 'Diagram', 'Data', 'Domain']);
+  await page.getByRole('tab', { name: 'Details', exact: true }).waitFor();
+  assert.deepEqual(await page.getByRole('tab').allTextContents(), ['Details', 'Diagram', 'Data', 'Domain']);
   await fullWidthTabs();
   await text(page.locator('.path-hint'), '1/4');
   assert.equal(await page.locator('.history-link').count(), 4);
@@ -476,41 +508,74 @@ async function main() {
    stage = 'centered step lens, boundary slots, animated navigation and reduced motion';
    await stepNavigator();
     stage = 'sidebar spacing and visibility-aware scenario navigation';
-   const sidebar = page.locator('.sidebar-scroll');
+    const sidebar = page.locator('.scenarios-scroll');
+    const steps = page.locator('.steps-scroll');
    const sidebarGeometry = () => page.locator('.scenario-link.selected').evaluate(element => {
      const { left, width } = element.getBoundingClientRect();
      return { left, width };
    });
    await page.emulateMedia({ reducedMotion: 'reduce' });
-   await page.setViewportSize({ width: 1440, height: 1800 });
+    await page.setViewportSize({ width: 1440, height: 2200 });
    await page.waitForFunction(() => {
-     const region = document.querySelector('.sidebar-scroll');
+      const region = document.querySelector('.scenarios-scroll');
      return region.scrollHeight <= region.clientHeight && region.style.getPropertyValue('--sidebar-scrollbar-width') === '0px';
    });
    const spaciousGeometry = await sidebarGeometry();
    await page.setViewportSize({ width: 1440, height: 1000 });
    await page.waitForFunction(() => {
-     const region = document.querySelector('.sidebar-scroll');
+      const region = document.querySelector('.scenarios-scroll');
      const scrollbarWidth = region.offsetWidth - region.clientWidth;
      return scrollbarWidth > 0 && parseFloat(region.style.getPropertyValue('--sidebar-scrollbar-width')) === scrollbarWidth;
    });
    assert.deepEqual(await sidebarGeometry(), spaciousGeometry);
-   await sidebar.evaluate(element => { element.scrollTop = 120; });
+    await sidebar.evaluate(element => { element.scrollTop = 0; });
    for (const [key, scenario] of [['j', 'Duplicate callback'], ['k', 'Successful callback']]) {
      const position = await sidebar.evaluate(element => element.scrollTop);
      await page.keyboard.press(key);
      await text(page.locator('.scenario-link.selected'), scenario);
      assert.equal(await sidebar.evaluate(element => element.scrollTop), position);
    }
-   await page.setViewportSize({ width: 1440, height: 650 });
-   await sidebar.evaluate(element => { element.scrollTop = 0; });
+     await page.setViewportSize({ width: 1440, height: 500 });
+    const split = await page.locator('.sidebar').evaluate(element => {
+      const scenarios = element.querySelector('.scenarios-scroll');
+      const steps = element.querySelector('.steps-scroll');
+       return { height: element.clientHeight, scenarios: scenarios.getBoundingClientRect().height, steps: element.querySelector('.walked-path').getBoundingClientRect().height,
+        scenariosOverflow: scenarios.scrollHeight > scenarios.clientHeight, stepsOverflow: steps.scrollHeight > steps.clientHeight };
+    });
+     assert.ok(split.scenarios <= split.height * .35 + .5, 'Scenarios use at most 35% of the sidebar');
+     assert.ok(split.steps >= split.height * .65 - 1, 'Steps use the remaining sidebar height');
+    assert.ok(split.scenariosOverflow && split.stepsOverflow, 'both lists overflow independently');
+    await sidebar.evaluate(element => { element.scrollTop = 120; });
+    const stepsStart = await steps.evaluate(element => element.scrollTop);
+    await sidebar.hover();
+    await page.mouse.wheel(0, 80);
+    await page.waitForFunction(() => document.querySelector('.scenarios-scroll').scrollTop > 120);
+    assert.equal(await steps.evaluate(element => element.scrollTop), stepsStart, 'scrolling scenarios keeps steps stationary');
+     const scenariosStart = await sidebar.evaluate(element => element.scrollTop);
+     const stepsHeadingBounds = await page.locator('.steps-heading').boundingBox();
+     await steps.hover();
+    await page.mouse.wheel(0, 80);
+    await page.waitForFunction(start => document.querySelector('.steps-scroll').scrollTop > start, stepsStart);
+     assert.equal(await sidebar.evaluate(element => element.scrollTop), scenariosStart, 'scrolling steps keeps scenarios stationary');
+     assert.deepEqual(await page.locator('.steps-heading').boundingBox(), stepsHeadingBounds, 'the step counter stays fixed while the list scrolls');
+     for (const [boundary, edge] of [['last', 'start'], ['first', 'end']]) {
+       if (boundary === 'last') await page.keyboard.press('G');
+       else { await page.keyboard.press('g'); await page.keyboard.press('g'); }
+       await steps.evaluate((element, edge) => { element.scrollTop = edge === 'start' ? 0 : element.scrollHeight; }, edge);
+       await page.waitForFunction(() => {
+         const region = document.querySelector('.steps-scroll').getBoundingClientRect();
+         const current = document.querySelector('.history-link.current').getBoundingClientRect();
+         return current.top >= region.top - 1 && current.bottom <= region.bottom + 1;
+       });
+     }
+     await steps.evaluate(element => { element.scrollTop = 0; });
+    await sidebar.evaluate(element => { element.scrollTop = 0; });
    await page.keyboard.press('j');
    await text(page.locator('.scenario-link.selected'), 'Duplicate callback');
    await page.waitForFunction(() => {
-     const region = document.querySelector('.sidebar-scroll');
-     const target = region.querySelector('.history-link.current').getBoundingClientRect();
-     const sticky = region.querySelector('.sidebar-context-content.pinned')?.getBoundingClientRect();
-     return target.top >= (sticky?.bottom ?? region.getBoundingClientRect().top) && target.bottom <= region.getBoundingClientRect().bottom;
+      const region = document.querySelector('.steps-scroll');
+      const target = region.querySelector('.history-link.current').getBoundingClientRect();
+      return target.top >= region.getBoundingClientRect().top && target.bottom <= region.getBoundingClientRect().bottom;
    });
    await page.setViewportSize({ width: 1440, height: 1000 });
    await page.keyboard.press('k');
@@ -540,14 +605,35 @@ async function main() {
    await text(page.locator('.entity-methods p'), orderMethod.description);
    assert.equal(await page.locator('.domain-entity[data-entity-id="order"] .domain-method').count(), 1);
    await page.screenshot({ path: path.join(artifacts, 'domain-methods.png'), fullPage: true });
-   await page.getByRole('tab', { name: 'Event', exact: true }).click();
+   const domainGeometry = await page.locator('.domain-entity').evaluateAll(entities => entities.map(entity => entity.getAttribute('transform')));
+   await text(page.locator('.domain-activity summary'), 'This step · 1 property difference · No method calls recorded');
+   await page.getByRole('button', { name: 'Next event', exact: true }).click();
+   await text(page.locator('.domain-activity summary'), 'This step · 3 property differences · 2 recorded calls');
+   assert.equal(await page.locator('.domain-method.called').count(), 2);
+   assert.match(await page.locator('[data-entity-id="order"] [data-attribute-id="paymentStatus"] title').textContent(), /"pending" → "paid"/);
+   assert.match(await page.locator('[data-entity-id="payment"] [data-attribute-id="failureReason"] title').textContent(), /Capture changed · Uncaptured → null/);
+   assert.deepEqual(await page.locator('.domain-entity').evaluateAll(entities => entities.map(entity => entity.getAttribute('transform'))), domainGeometry);
+   await page.locator('.domain-activity summary').click();
+   await page.locator('.domain-panel').getByRole('button', { name: 'Fit diagram', exact: true }).click();
+   const activityWasDark = await themeToggle.getAttribute('aria-pressed') === 'true';
+   if (activityWasDark) await themeToggle.click();
+   await page.screenshot({ path: path.join(artifacts, 'domain-step-activity-light.png'), fullPage: true });
+   await themeToggle.click();
+   await page.screenshot({ path: path.join(artifacts, 'domain-step-activity-dark.png'), fullPage: true });
+   if (!activityWasDark) await themeToggle.click();
+   await page.locator('.domain-activity summary').click();
+   await page.getByRole('button', { name: 'Previous event', exact: true }).click();
+    assert.equal(await page.locator('.domain-method.called').count(), 0);
+    await page.getByRole('tab', { name: 'Details', exact: true }).click();
   await page.getByRole('button', { name: 'Duplicate callback', exact: true }).click();
    assert.deepEqual(await page.locator('.history-visit-badge').allTextContents(), ['1', '2']);
     await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
      assert.equal(await page.locator('.diagram-panel .node-visit-badge').count(), 0);
      await page.locator('.history-link').nth(1).click();
      await text(page.locator('.path-hint'), '2/5');
-     await text(page.locator('.diagram-panel .node-visit-badge text'), '1');
+      await text(page.locator('.diagram-panel .node-visit-badge text'), '1');
+      assert.equal(await page.locator('.diagram-panel .graph-group.current').count(), 2);
+      await groupedFrames(stored.document.diagrams[0]);
      const sidebarBadgeInsets = await page.locator('.history-link.current').evaluate(element => {
        const row = element.getBoundingClientRect();
        const badge = element.querySelector('.history-visit-badge').getBoundingClientRect();
@@ -564,8 +650,8 @@ async function main() {
      await text(page.locator('.diagram-panel .node-visit-badge text'), '2');
     await page.getByRole('tab', { name: 'Data', exact: true }).click();
    await text(page.locator('.path-hint'), '4/5');
-   await values(page.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
-    await page.getByRole('tab', { name: 'Event', exact: true }).click();
+    await values(page.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
+     await page.getByRole('tab', { name: 'Details', exact: true }).click();
    const title = page.locator('.explanation-title');
    await text(title, stored.document.title);
    stage = 'deep route reload and browser Back/Forward restoration';
@@ -604,15 +690,12 @@ async function main() {
     await deepPage.getByRole('tab', { name: 'Data', exact: true }).click();
     await values(deepPage.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
    await deepContext.close();
-   stage = 'live revision pins view and explicit reload preserves occurrence ID';
+   stage = 'live revision automatically updates and preserves occurrence ID';
   const occurrence = stored.document.scenarios[1].occurrences[3];
   const oldNarration = occurrence.narration;
   occurrence.narration = `${oldNarration} Smoke revision two.`;
   await api(port, '/api/explanations/order-lifecycle', 'PUT', { expectedRevision: 1, document: stored.document });
-  await page.getByRole('button', { name: 'Reload revision', exact: true }).waitFor();
-  await text(page.locator('.narration'), oldNarration);
-   assert.match(await page.locator('.update-banner').textContent(), /Viewing r1/);
-  await page.getByRole('button', { name: 'Reload revision', exact: true }).click();
+   await page.getByRole('alert').filter({ hasText: 'Explanation updated' }).waitFor();
   await page.locator('.narration').filter({ hasText: occurrence.narration }).waitFor();
   await text(page.locator('.narration'), occurrence.narration);
   await text(page.locator('.step-tile[aria-current="step"] .step-trigger code'), occurrence.trigger);
@@ -657,7 +740,9 @@ async function main() {
      await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
      const shipmentPanel = page.locator('.diagram-panel');
      assert.equal(await shipmentPanel.locator('.graph-node.current').getAttribute('aria-label'), 'In transit · visited 2 times');
-     assert.deepEqual(await shipmentPanel.locator('.node-visit-badge text').allTextContents(), ['2']);
+      assert.deepEqual(await shipmentPanel.locator('.node-visit-badge text').allTextContents(), ['2']);
+      assert.deepEqual(await shipmentPanel.locator('.graph-group.current').evaluateAll(groups => groups.map(group => group.dataset.groupId)), ['carrier-handling', 'delivery-in-progress']);
+      await groupedFrames(stored.document.diagrams[1]);
     await page.screenshot({ path: path.join(artifacts, 'redelivery-transit.png'), fullPage: true });
       await page.getByRole('tab', { name: 'Data', exact: true }).click();
      await page.getByRole('button', { name: 'Next event', exact: true }).click();
@@ -687,17 +772,29 @@ async function main() {
   untrusted.description = payload;
   untrusted.diagrams[0].title = payload;
   untrusted.scenarios[0].title = payload;
-  untrusted.diagrams[0].nodes[0].label = payload;
+   untrusted.diagrams[0].nodes[0].label = payload;
+   untrusted.diagrams[0].groups[0].label = payload;
   untrusted.scenarios[0].occurrences[0].narration = payload;
    untrusted.scenarios[0].occurrences[0].after.instances[0].values.number = payload;
    untrusted.domain.entities[0].methods = [{ id: 'untrusted-method', signature: payload, description: payload }];
+   for (const scenario of untrusted.scenarios) {
+     for (const occurrence of scenario.occurrences) {
+       for (const call of occurrence.methodCalls ?? []) {
+         if (call.entityId === 'order') call.methodId = 'untrusted-method';
+       }
+     }
+   }
   await api(port, '/api/explanations/untrusted-smoke', 'PUT', { expectedRevision: 0, document: untrusted });
   await page.getByRole('button', { name: 'Lain explanation library', exact: true }).click();
   await page.locator('.explanation-card').filter({ hasText: 'Untrusted text smoke' }).click();
   await text(page.locator('.narration'), payload);
    await text(title, untrusted.title);
   assert.equal(await page.evaluate(() => globalThis.lainXss), undefined);
-   assert.equal(await page.locator('.workspace img, .workspace script, .app-header img, .app-header script').count(), 0);
+    assert.equal(await page.locator('.workspace img, .workspace script, .app-header img, .app-header script').count(), 0);
+    await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
+     assert.equal(await page.locator('.diagram-panel [data-group-id="callback-processing"] title').textContent(), payload);
+    assert.equal(await page.locator('.graph-group img, .graph-group script').count(), 0);
+    assert.equal(await page.evaluate(() => globalThis.lainXss), undefined);
    await page.getByRole('tab', { name: 'Domain', exact: true }).click();
    await page.locator('.domain-entity[data-entity-id="order"]').click();
    await text(page.locator('.entity-methods code'), payload);

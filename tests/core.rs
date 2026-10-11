@@ -22,7 +22,7 @@ fn document() -> Explanation {
             "relationships": [{
                 "id": "placed-by", "label": "Placed by",
                 "sourceEntityId": "order", "targetEntityId": "customer",
-                "sourceCardinality": "many", "targetCardinality": "one"
+                "sourceCardinality": "zeroOrMore", "targetCardinality": "zeroOrOne"
             }]
         },
         "diagrams": [{
@@ -123,11 +123,7 @@ async fn sequence_payloads_require_bounded_participants_and_exact_node_message_m
     let original = serde_json::to_value(sequence_document()).unwrap();
     for (pointer, replacement, error) in [
         ("/diagrams/0/sequence", json!(null), "require sequence data"),
-        (
-            "/diagrams/0/kind",
-            json!("process"),
-            "requires kind sequence",
-        ),
+        ("/diagrams/0/kind", json!("flow"), "requires kind sequence"),
         (
             "/diagrams/0/sequence/participants",
             json!([]),
@@ -236,7 +232,7 @@ async fn sequence_payloads_require_bounded_participants_and_exact_node_message_m
     }
     let mut graph = serde_json::to_value(document()).unwrap();
     assert!(graph["diagrams"][0].get("sequence").is_none());
-    graph["diagrams"][0]["kind"] = json!("process");
+    graph["diagrams"][0]["kind"] = json!("flow");
     graph["diagrams"][0]["sequence"] = json!(null);
     let graph: Explanation = serde_json::from_value(graph).unwrap();
     graph.validate().unwrap();
@@ -469,6 +465,134 @@ async fn assert_invalid(service: &AppService, document: Explanation, message: &s
         service.get("invalid").await,
         Err(ServiceError::NotFound)
     ));
+}
+
+#[tokio::test]
+async fn flow_roles_round_trip_and_require_a_flow_diagram() {
+    let (_directory, service) = service().await;
+    for role in ["action", "decision", "start", "end", "subprocess"] {
+        let mut value = serde_json::to_value(document()).unwrap();
+        value["diagrams"][0]["nodes"][0]["role"] = json!(role);
+        let authored: Explanation = serde_json::from_value(value.clone()).unwrap();
+        service.publish(role, request(0, authored)).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(service.get(role).await.unwrap().document).unwrap(),
+            value
+        );
+    }
+    for mut value in [
+        serde_json::to_value(document()).unwrap(),
+        serde_json::to_value(sequence_document()).unwrap(),
+    ] {
+        if value["diagrams"][0]["kind"] == "flow" {
+            value["diagrams"][0]["kind"] = json!("state");
+        }
+        value["diagrams"][0]["nodes"][0]["role"] = json!("decision");
+        assert_invalid(
+            &service,
+            serde_json::from_value(value).unwrap(),
+            "role requires kind flow",
+        )
+        .await;
+    }
+    let mut invalid = serde_json::to_value(document()).unwrap();
+    invalid["diagrams"][0]["nodes"][0]["role"] = json!("triangle");
+    assert!(serde_json::from_value::<Explanation>(invalid).is_err());
+}
+
+#[tokio::test]
+async fn detail_links_resolve_diagrams_and_require_subprocess_roles_on_flows() {
+    let (_directory, service) = service().await;
+    let mut value = serde_json::to_value(document()).unwrap();
+    let mut detail = serde_json::to_value(sequence_document()).unwrap()["diagrams"][0].clone();
+    detail["id"] = json!("detail");
+    value["diagrams"].as_array_mut().unwrap().push(detail);
+    value["diagrams"][0]["nodes"][0]["role"] = json!("subprocess");
+    value["diagrams"][0]["nodes"][0]["detailDiagramId"] = json!("detail");
+    service
+        .publish(
+            "subprocess",
+            request(0, serde_json::from_value(value.clone()).unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(service.get("subprocess").await.unwrap().document).unwrap(),
+        value
+    );
+    for (field, replacement, error) in [
+        (
+            "detailDiagramId",
+            json!("missing"),
+            "unknown detail diagram",
+        ),
+        (
+            "role",
+            json!("action"),
+            "detailDiagramId on a flow node requires role subprocess",
+        ),
+        (
+            "role",
+            json!(null),
+            "detailDiagramId on a flow node requires role subprocess",
+        ),
+    ] {
+        let mut invalid = value.clone();
+        invalid["diagrams"][0]["nodes"][0][field] = replacement;
+        assert_invalid(&service, serde_json::from_value(invalid).unwrap(), error).await;
+    }
+    let mut compatible = value.clone();
+    let node = compatible["diagrams"][0]["nodes"][0]
+        .as_object_mut()
+        .unwrap();
+    node.remove("detailDiagramId");
+    node.insert("subprocessDiagramId".into(), json!("detail"));
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<Explanation>(compatible).unwrap()).unwrap(),
+        value
+    );
+}
+
+#[tokio::test]
+async fn process_documents_load_and_publish_as_flow_with_recorded_data_intact() {
+    use sqlx::Connection;
+    let (directory, service) = service().await;
+    let expected = serde_json::to_value(document()).unwrap();
+    let mut compatible = expected.clone();
+    compatible["diagrams"][0]["kind"] = json!("process");
+    let options =
+        sqlx::sqlite::SqliteConnectOptions::new().filename(directory.path().join("lain.sqlite"));
+    let mut connection = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO explanations (id, revision, document_json, updated_at_ms) VALUES ('compatible', 7, ?, 123)")
+        .bind(compatible.to_string())
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    let loaded = service.get("compatible").await.unwrap();
+    assert_eq!(loaded.revision, 7);
+    assert_eq!(loaded.updated_at_ms, 123);
+    assert_eq!(serde_json::to_value(loaded.document).unwrap(), expected);
+    assert_eq!(service.list().await.unwrap()[0].diagram_count, 1);
+    let published = service
+        .publish(
+            "compatible",
+            request(7, serde_json::from_value(compatible).unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(published.revision, 8);
+    assert_eq!(serde_json::to_value(published.document).unwrap(), expected);
+    let persisted: String =
+        sqlx::query_scalar("SELECT document_json FROM explanations WHERE id = 'compatible'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&persisted).unwrap(),
+        expected
+    );
 }
 
 #[tokio::test]
@@ -825,7 +949,9 @@ async fn snapshot_links_enforce_duplicate_endpoint_and_both_cardinality_rules() 
     link.target_instance_id = "c2".into();
     snapshot.links.push(link);
     assert_invalid(&service, authored.clone(), "target cardinality one").await;
-    authored.domain.relationships[0].target_cardinality = lain::model::Cardinality::Many;
+    authored.domain.relationships[0].target_cardinality = lain::model::Cardinality::ExactlyOne;
+    assert_invalid(&service, authored.clone(), "target cardinality one").await;
+    authored.domain.relationships[0].target_cardinality = lain::model::Cardinality::ZeroOrMore;
     service
         .publish("many-targets", request(0, authored))
         .await
@@ -842,8 +968,53 @@ async fn snapshot_links_enforce_duplicate_endpoint_and_both_cardinality_rules() 
         .publish("many-sources", request(0, authored.clone()))
         .await
         .unwrap();
-    authored.domain.relationships[0].source_cardinality = lain::model::Cardinality::One;
+    authored.domain.relationships[0].source_cardinality = lain::model::Cardinality::ZeroOrOne;
+    assert_invalid(&service, authored.clone(), "source cardinality one").await;
+    authored.domain.relationships[0].source_cardinality = lain::model::Cardinality::ExactlyOne;
     assert_invalid(&service, authored, "source cardinality one").await;
+}
+
+#[tokio::test]
+async fn required_endpoints_enforce_minimum_links_in_both_snapshots() {
+    use lain::model::Cardinality;
+    let (_directory, service) = service().await;
+    for cardinality in [Cardinality::ExactlyOne, Cardinality::OneOrMore] {
+        for source in [false, true] {
+            let mut authored = document();
+            if source {
+                authored.domain.relationships[0].source_cardinality = cardinality;
+            } else {
+                authored.domain.relationships[0].target_cardinality = cardinality;
+            }
+            service
+                .publish(
+                    &format!("required-{cardinality:?}-{source}"),
+                    request(0, authored.clone()),
+                )
+                .await
+                .unwrap();
+            for before in [false, true] {
+                let mut invalid = authored.clone();
+                let occurrence = &mut invalid.scenarios[0].occurrences[0];
+                if before {
+                    occurrence.before = occurrence.after.clone();
+                    occurrence.before.links.clear();
+                } else {
+                    occurrence.after.links.clear();
+                }
+                assert_invalid(
+                    &service,
+                    invalid,
+                    if source {
+                        "requires at least one source link"
+                    } else {
+                        "requires at least one target link"
+                    },
+                )
+                .await;
+            }
+        }
+    }
 }
 
 #[tokio::test]
@@ -1116,7 +1287,12 @@ async fn concurrent_database_initialization_preserves_schema_and_data() {
                 .unwrap();
             sqlx::query("CREATE TABLE explanations (id TEXT PRIMARY KEY NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0), document_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0))").execute(&mut connection).await.unwrap();
             sqlx::query("INSERT INTO explanations VALUES ('legacy', 7, ?, 123)")
-                .bind(serde_json::to_string(&document()).unwrap())
+                .bind({
+                    let mut stored = serde_json::to_value(document()).unwrap();
+                    stored["domain"]["relationships"][0]["sourceCardinality"] = json!("many");
+                    stored["domain"]["relationships"][0]["targetCardinality"] = json!("one");
+                    stored.to_string()
+                })
                 .execute(&mut connection)
                 .await
                 .unwrap();

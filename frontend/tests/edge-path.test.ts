@@ -20,7 +20,7 @@ it('renders a straight connector as one segment despite floating-point noise', (
     .toBe('M253,55.00000000000001 L479,55.00000000000001');
 });
 
-it.each(['flow', 'state', 'process'] as const)('smooths %s branches while preserving node connections', kind => {
+it.each(['flow', 'state'] as const)('smooths %s branches while preserving node connections', kind => {
   const diagram: Diagram = { id: 'graph', title: 'Branching graph', kind,
     nodes: ['a', 'b', 'c'].map(id => ({ id, label: id, entityIds: [] })),
     edges: [['a', 'b'], ['a', 'c']].map(([sourceNodeId, targetNodeId], index) => ({
@@ -28,6 +28,10 @@ it.each(['flow', 'state', 'process'] as const)('smooths %s branches while preser
     })),
   };
   const layout = diagramLayout(diagram);
+  const source = layout.nodes.find(node => node.id === 'a')!;
+  for (const target of layout.nodes.filter(node => node.id !== 'a')) {
+    expect(target.x).toBeGreaterThan(source.x);
+  }
   for (const edge of layout.edges) {
     expect(edge.path).toContain('Q');
     expect(edge.path).not.toMatch(/NaN|Infinity/);
@@ -39,6 +43,34 @@ it.each(['flow', 'state', 'process'] as const)('smooths %s branches while preser
       expect(dx).toBeLessThanOrEqual(node.width / 2 + 0.001);
       expect(dy).toBeLessThanOrEqual(node.height / 2 + 0.001);
       expect(Math.abs(dx - node.width / 2) < 0.001 || Math.abs(dy - node.height / 2) < 0.001).toBe(true);
+    }
+  }
+});
+
+it('connects branches and self-loops to diamond and terminator boundaries with multiline labels', () => {
+  const diagram: Diagram = { id: 'flow', title: 'Flow roles', kind: 'flow',
+    nodes: [
+      { id: 'start', label: 'Start', entityIds: [], role: 'start' },
+      { id: 'decision', label: 'Is the payment receipt valid for this order?', entityIds: [], role: 'decision' },
+      { id: 'action', label: 'Capture payment', entityIds: [], role: 'subprocess' },
+      { id: 'end', label: 'Record completed work '.repeat(30), entityIds: [], role: 'end' },
+    ],
+    edges: [['start', 'decision'], ['decision', 'action'], ['decision', 'end'], ['decision', 'decision'], ['action', 'end']]
+      .map(([sourceNodeId, targetNodeId], index) => ({ id: `edge-${index}`, label: 'Recorded branch', sourceNodeId: sourceNodeId!, targetNodeId: targetNodeId! })),
+  };
+  const layout = diagramLayout(diagram);
+  for (const edge of layout.edges) {
+    expect(edge.path).not.toMatch(/NaN|Infinity/);
+    const points = [...edge.path.matchAll(/[ML]([^, ]+),([^ ]+)/g)].map(match => ({ x: Number(match[1]), y: Number(match[2]) }));
+    for (const [point, id] of [[points[0]!, edge.source], [points.at(-1)!, edge.target]] as const) {
+      const node = layout.nodes.find(node => node.id === id)!;
+      const dx = Math.abs(point.x - node.x);
+      const dy = Math.abs(point.y - node.y);
+      if (node.role === 'decision') expect(dx / (node.width / 2) + dy / (node.height / 2)).toBeCloseTo(1);
+      else if (node.role === 'start' || node.role === 'end') {
+        const capOffset = (node.width - node.height) / 2;
+        expect(Math.hypot(Math.max(0, dx - capOffset), dy)).toBeCloseTo(node.height / 2);
+      } else expect(Math.abs(dx - node.width / 2) < .001 || Math.abs(dy - node.height / 2) < .001).toBe(true);
     }
   }
 });

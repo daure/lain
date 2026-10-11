@@ -126,6 +126,10 @@ fn document() -> Value {
 
 fn sequence_document() -> Value {
     let mut value = document();
+    value["scenarios"][0]["description"] =
+        json!("A client records a self-message. The recording stops after that message.");
+    value["scenarios"][0]["occurrences"][0]["changeSummary"] =
+        json!("No instances are captured in either snapshot.");
     value["domain"]["entities"] = json!([{
         "id": "order", "label": "Order", "attributes": [],
         "methods": [{"id": "capture", "signature": "capturePayment(): void", "description": "Capture an authorized payment."}]
@@ -166,6 +170,56 @@ async fn rpc_response(mut response: Response) -> Value {
         }
     }
     panic!("MCP stream ended without a response")
+}
+
+#[tokio::test]
+async fn mcp_requires_explicit_bounds_on_each_relationship_endpoint() {
+    let server = Server::start().await;
+    let mut authored = document();
+    authored["domain"]["entities"] = json!([
+        {"id": "a", "label": "A", "attributes": []},
+        {"id": "b", "label": "B", "attributes": []}
+    ]);
+    authored["domain"]["relationships"] = json!([{
+        "id": "ab", "label": "Relates to", "sourceEntityId": "a", "targetEntityId": "b",
+        "sourceCardinality": "zeroOrOne", "targetCardinality": "zeroOrMore"
+    }]);
+    for field in ["sourceCardinality", "targetCardinality"] {
+        for ambiguous in ["one", "many"] {
+            let mut invalid = authored.clone();
+            invalid["domain"]["relationships"][0][field] = json!(ambiguous);
+            let response = rpc_response(server.mcp(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                "name": "publish_explanation", "arguments": {"id": "ambiguous", "expectedRevision": 0, "document": invalid}
+            }})).await).await;
+            assert_eq!(response["result"]["isError"], true);
+            assert!(
+                response["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains(field)
+            );
+        }
+    }
+    for (index, cardinality) in ["zeroOrOne", "exactlyOne", "zeroOrMore", "oneOrMore"]
+        .iter()
+        .enumerate()
+    {
+        authored["domain"]["relationships"][0]["sourceCardinality"] = json!(cardinality);
+        authored["domain"]["relationships"][0]["targetCardinality"] = json!(cardinality);
+        let response = rpc_response(server.mcp(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "publish_explanation", "arguments": {"id": format!("explicit-{index}"), "expectedRevision": 0, "document": authored}
+        }})).await).await;
+        let stored = tool_value(&response);
+        assert_eq!(stored["revision"], 1);
+        assert_eq!(
+            stored["document"]["domain"]["relationships"][0]["sourceCardinality"],
+            *cardinality
+        );
+        assert_eq!(
+            stored["document"]["domain"]["relationships"][0]["targetCardinality"],
+            *cardinality
+        );
+    }
 }
 
 fn tool_value(response: &Value) -> Value {
@@ -606,6 +660,22 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
             .contains("Redact")
     );
     assert!(!initialize.to_string().contains(TOKEN));
+    let instructions = initialize["result"]["instructions"].as_str().unwrap();
+    for guidance in [
+        "scenarios[].description",
+        "occurrences[].narration",
+        "occurrences[].changeSummary",
+        "methodCalls",
+        "stopping point",
+        "Never infer calls",
+        "detailDiagramId",
+        "State diagrams cannot be sources or targets",
+    ] {
+        assert!(
+            instructions.contains(guidance),
+            "missing guidance: {guidance}"
+        );
+    }
     let initialized = server
         .mcp(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
         .await;
@@ -633,6 +703,42 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
     assert!(publish["inputSchema"]["properties"]["document"].is_object());
     assert!(publish["inputSchema"].to_string().contains("occurrences"));
     let definitions = &publish["inputSchema"]["$defs"];
+    assert!(definitions["Node"]["properties"]["detailDiagramId"].is_object());
+    assert!(
+        !definitions["Node"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("detailDiagramId"))
+    );
+    assert_eq!(
+        definitions["Cardinality"]["enum"],
+        json!(["zeroOrOne", "exactlyOne", "zeroOrMore", "oneOrMore"])
+    );
+    for field in ["sourceCardinality", "targetCardinality"] {
+        assert!(
+            definitions["Relationship"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field))
+        );
+    }
+    for (definition, field) in [("Scenario", "description"), ("Occurrence", "changeSummary")] {
+        assert_eq!(
+            definitions[definition]["properties"][field]["type"],
+            "string"
+        );
+        assert!(
+            !definitions[definition]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field))
+        );
+        let guidance = definitions[definition]["properties"][field]["description"]
+            .as_str()
+            .unwrap()
+            .to_lowercase();
+        assert!(guidance.contains("agent-authored"));
+    }
     assert_eq!(
         definitions["Entity"]["properties"]["methods"]["items"]["$ref"],
         "#/$defs/EntityMethod"
@@ -644,6 +750,21 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
             .contains(&json!("methods"))
     );
     assert_eq!(definitions["EntityMethod"]["additionalProperties"], false);
+    assert_eq!(
+        definitions["Occurrence"]["properties"]["methodCalls"]["items"]["$ref"],
+        "#/$defs/MethodCall"
+    );
+    assert!(
+        !definitions["Occurrence"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("methodCalls"))
+    );
+    assert_eq!(definitions["MethodCall"]["additionalProperties"], false);
+    assert_eq!(
+        definitions["MethodCall"]["required"],
+        json!(["entityId", "methodId"])
+    );
     for field in ["id", "signature", "description"] {
         assert!(
             definitions["EntityMethod"]["required"]
@@ -654,8 +775,38 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
     }
     assert_eq!(
         definitions["DiagramKind"]["enum"],
-        json!(["flow", "state", "process", "sequence"])
+        json!(["flow", "state", "sequence"])
     );
+    assert_eq!(
+        definitions["FlowNodeRole"]["enum"],
+        json!(["action", "decision", "start", "end", "subprocess"])
+    );
+    assert!(
+        !definitions["Node"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("role"))
+    );
+    assert_eq!(
+        definitions["Diagram"]["properties"]["groups"]["items"]["$ref"],
+        "#/$defs/DiagramGroup"
+    );
+    assert!(
+        !definitions["Diagram"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("groups"))
+    );
+    assert_eq!(definitions["DiagramGroup"]["additionalProperties"], false);
+    for field in ["id", "label", "nodeIds"] {
+        assert!(
+            definitions["DiagramGroup"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field))
+        );
+    }
+    assert!(definitions["DiagramGroup"]["properties"]["parentGroupId"].is_object());
     assert!(definitions["Diagram"]["properties"]["sequence"].is_object());
     assert!(
         !definitions["Diagram"]["required"]
@@ -791,6 +942,7 @@ async fn rest_and_mcp_reject_traces_outside_the_shared_sequence_without_replacin
         "name": "publish_explanation", "arguments": {"id": "shared-sequence", "expectedRevision": 0, "document": document}
     }})).await).await;
     assert_eq!(published["result"]["isError"], false);
+    assert_eq!(tool_value(&published)["document"], document);
     assert_eq!(tool_value(&published)["document"], document);
     let mut invalid = document.clone();
     invalid["diagrams"][2]["sequence"]["body"][2]["operands"][0]["body"]

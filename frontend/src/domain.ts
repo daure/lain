@@ -1,10 +1,10 @@
 import dagre from '@dagrejs/dagre';
 import { roundedPath, type Point } from './edge-path';
-import { wrapLabel } from './layout';
-import type { Diagram, EntityMethod, Explanation, Relationship, Scenario } from './model';
+import { boxBounds, edgeBounds, enclosingBounds, groupFrames, normalizeGroupGaps, wrapLabel, type LayoutGroup } from './layout';
+import type { Cardinality, Diagram, EntityMethod, Explanation, Relationship, Scenario } from './model';
 
 type EntityRow = { id: string; label: string; labelLines: string[]; idLines: string[]; y: number; height: number };
-type MethodRow = EntityMethod & { signatureLines: string[]; descriptionLines: string[]; y: number; height: number };
+type MethodRow = EntityMethod & { signatureLines: string[]; y: number; height: number };
 export type DomainEntity = Point & {
   id: string; label: string; titleLines: string[]; rows: EntityRow[];
   width: number; height: number; headerHeight: number; titleX: number; shortcutNumber: number; methodsY: number; methods: MethodRow[];
@@ -13,13 +13,14 @@ type RelationshipEnd = Point & { angle: number; cardinality: Relationship['sourc
 type DomainRelationship = Relationship & Point & {
   path: string; labelLines: string[]; sourceEnd: RelationshipEnd; targetEnd: RelationshipEnd;
 };
-export type DomainLayout = { width: number; height: number; entities: DomainEntity[]; relationships: DomainRelationship[] };
+export type DomainLayout = { width: number; height: number; entities: DomainEntity[]; relationships: DomainRelationship[]; groups: (Omit<LayoutGroup, 'nodeIds'> & { entityIds: string[] })[] };
 
 export function scenarioDomain(diagram: Diagram, scenario: Scenario) {
   const nodes = new Map(diagram.nodes.map(node => [node.id, node]));
   const entityIds = new Set<string>();
   const relationshipIds = new Set<string>();
   for (const occurrence of scenario.occurrences) {
+    for (const call of occurrence.methodCalls ?? []) entityIds.add(call.entityId);
     for (const id of nodes.get(occurrence.nodeId)!.entityIds) entityIds.add(id);
     for (const snapshot of [occurrence.before, occurrence.after]) {
       for (const instance of snapshot.instances) entityIds.add(instance.entityId);
@@ -33,22 +34,22 @@ function entityTable(entity: Explanation['domain']['entities'][number], titleX: 
   const titleLines = wrapLabel(entity.label, Math.floor((320 - titleX - 60) / 8.4));
   const headerHeight = Math.max(44, titleLines.length * 20 + 20);
   let y = headerHeight;
-  const rows = entity.attributes.map(attribute => {
+  const rows = entity.attributes.map((attribute, index) => {
     const labelLines = wrapLabel(attribute.label, 23);
     const idLines = wrapLabel(attribute.id, 16);
-    const height = Math.max(32, Math.max(labelLines.length, idLines.length) * 18 + 14);
+    const bottomPadding = index === entity.attributes.length - 1 && !entity.methods?.length ? 3 : 0;
+    const height = Math.max(32, Math.max(labelLines.length, idLines.length) * 18 + 14) + bottomPadding;
     const row = { ...attribute, labelLines, idLines, y, height };
     y += height;
     return row;
   });
   if (!rows.length) y += 32;
   const methodsY = y;
-  if (entity.methods?.length) y += 32;
-  const methods = (entity.methods ?? []).map(method => {
+  if (entity.methods?.length) y += 24;
+  const methods = (entity.methods ?? []).map((method, index, methods) => {
     const signatureLines = wrapLabel(method.signature, 36);
-    const descriptionLines = method.description.trim() ? wrapLabel(method.description, 43) : [];
-    const height = signatureLines.length * 18 + descriptionLines.length * 16 + 14;
-    const row = { ...method, signatureLines, descriptionLines, y, height };
+    const height = signatureLines.length * 18 + (index === methods.length - 1 ? 17 : 6);
+    const row = { ...method, signatureLines, y, height };
     y += height;
     return row;
   });
@@ -110,14 +111,27 @@ function relationshipLabel(route: Point[], lineCount: number): Point {
   return { x: (longest.start.x + longest.end.x) / 2, y: longest.start.y - 12 - (lineCount - 1) * 9 };
 }
 
+function explicitCardinality(cardinality: Cardinality | 'one' | 'many'): Cardinality {
+  if (cardinality === 'one') return 'zeroOrOne';
+  if (cardinality === 'many') return 'zeroOrMore';
+  return cardinality;
+}
+
 export function domainLayout(domain: Explanation['domain']): DomainLayout {
-  if (!domain.entities.length) return { width: 640, height: 200, entities: [], relationships: [] };
-  const graph = new dagre.graphlib.Graph({ multigraph: true });
-  graph.setGraph({ rankdir: 'LR', marginx: 48, marginy: 48, ranksep: 160, nodesep: 64, edgesep: 32 });
+  if (!domain.entities.length) return { width: 640, height: 200, entities: [], relationships: [], groups: [] };
+  const headings = (domain.groups ?? []).map(group => ({ ...group, nodeIds: group.entityIds, lines: wrapLabel(group.label) }));
+  const graph = new dagre.graphlib.Graph({ multigraph: true, compound: true });
+  graph.setGraph({ rankdir: 'LR', marginx: 48, marginy: 48, ranksep: headings.length ? 24 : 160,
+    nodesep: 64, edgesep: 32 });
   graph.setDefaultEdgeLabel(() => ({}));
   const titleX = 34 + Math.max(2, String(domain.entities.length).length) * 9;
   const tables = domain.entities.map(entity => entityTable(entity, titleX));
   for (const entity of tables) graph.setNode(entity.id, { width: entity.width, height: entity.height });
+  for (const group of headings) graph.setNode(group.id, {});
+  for (const group of headings) {
+    if (group.parentGroupId) graph.setParent(group.id, group.parentGroupId);
+    for (const id of group.entityIds) graph.setParent(id, group.id);
+  }
   for (const relationship of domain.relationships) {
     const labelLines = wrapLabel(relationship.label, 28);
     graph.setEdge(relationship.sourceEntityId, relationship.targetEntityId, {
@@ -125,20 +139,103 @@ export function domainLayout(domain: Explanation['domain']): DomainLayout {
       height: labelLines.length * 18 + 12,
     }, relationship.id);
   }
-  dagre.layout(graph);
-  const shortcutNumbers = new Map([...tables].sort((a, b) => graph.node(a.id).x - graph.node(b.id).x || graph.node(a.id).y - graph.node(b.id).y)
-    .map((entity, index) => [entity.id, index + 1]));
-  const entities: DomainEntity[] = tables.map(entity => ({ ...entity, shortcutNumber: shortcutNumbers.get(entity.id)!, x: graph.node(entity.id).x, y: graph.node(entity.id).y }));
-  const byId = new Map(entities.map(entity => [entity.id, entity]));
-  const relationships = domain.relationships.map(relationship => {
-    const placed = graph.edge({ v: relationship.sourceEntityId, w: relationship.targetEntityId, name: relationship.id });
-    const points: Point[] = placed.points;
-    const sourceEnd = endpoint(points[0]!, points[1]!, byId.get(relationship.sourceEntityId)!, relationship.sourceCardinality);
-    const targetEnd = endpoint(points.at(-1)!, points.at(-2)!, byId.get(relationship.targetEntityId)!, relationship.targetCardinality);
-    const route = orthogonalRoute(points, sourceEnd, targetEnd);
-    const labelLines = wrapLabel(relationship.label, 28);
-    return { ...relationship, ...relationshipLabel(route, labelLines.length), labelLines,
-      path: roundedPath(route, 8), sourceEnd, targetEnd };
-  });
-  return { width: graph.graph().width!, height: graph.graph().height!, entities, relationships };
+  function place() {
+    dagre.layout(graph);
+    const entities: DomainEntity[] = tables.map(entity => ({ ...entity, shortcutNumber: 0, x: graph.node(entity.id).x, y: graph.node(entity.id).y }));
+    const byId = new Map(entities.map(entity => [entity.id, entity]));
+    const relationships = domain.relationships.map(relationship => {
+      const sourceCardinality = explicitCardinality(relationship.sourceCardinality);
+      const targetCardinality = explicitCardinality(relationship.targetCardinality);
+      const placed = graph.edge({ v: relationship.sourceEntityId, w: relationship.targetEntityId, name: relationship.id });
+      const points: Point[] = placed.points;
+      const sourceEnd = endpoint(points[0]!, points[1]!, byId.get(relationship.sourceEntityId)!, sourceCardinality);
+      const targetEnd = endpoint(points.at(-1)!, points.at(-2)!, byId.get(relationship.targetEntityId)!, targetCardinality);
+      const route = orthogonalRoute(points, sourceEnd, targetEnd);
+      const labelLines = wrapLabel(relationship.label, 28);
+      return { ...relationship, sourceCardinality, targetCardinality, ...relationshipLabel(route, labelLines.length), labelLines,
+        route, sourceEnd, targetEnd };
+    });
+    const edges = relationships.map(edge => ({ label: edge.label, lines: edge.labelLines,
+      x: edge.x, y: edge.y, source: edge.sourceEntityId, target: edge.targetEntityId, points: edge.route, labelLineHeight: 18 }));
+    const groups = groupFrames(headings, entities, edges, 'domain').map(({ nodeIds, ...group }) => ({ ...group, entityIds: nodeIds }));
+    return { entities, relationships, groups };
+  }
+  let placed = place();
+  for (let space = missingGroupSpace(domain, placed.groups); space > 0; space = missingGroupSpace(domain, placed.groups)) {
+    const settings = graph.graph();
+    graph.setGraph({ ...settings, nodesep: settings.nodesep! + space });
+    placed = place();
+  }
+  const { entities, relationships } = placed;
+  let groups = placed.groups;
+  const routedEdges = () => relationships.map(edge => ({ label: edge.label, lines: edge.labelLines,
+    x: edge.x, y: edge.y, source: edge.sourceEntityId, target: edge.targetEntityId, points: edge.route, labelLineHeight: 18 }));
+  function adjustGap(top: number, bottom: number, gap: number) {
+    const delta = gap - (bottom - top);
+    if (Math.abs(delta) < .001) return;
+    const moveY = (y: number) => y + delta * Math.min(1, Math.max(0, (y - top) / (bottom - top)));
+    const movement = new Map(entities.map(entity => [entity.id, moveY(entity.y) - entity.y]));
+    for (const entity of entities) entity.y += movement.get(entity.id)!;
+    for (const edge of relationships) {
+      edge.sourceEnd = { ...edge.sourceEnd, y: edge.sourceEnd.y + movement.get(edge.sourceEntityId)! };
+      edge.targetEnd = { ...edge.targetEnd, y: edge.targetEnd.y + movement.get(edge.targetEntityId)! };
+      edge.route = orthogonalRoute(edge.route.map(point => ({ x: point.x, y: moveY(point.y) })), edge.sourceEnd, edge.targetEnd);
+      Object.assign(edge, relationshipLabel(edge.route, edge.labelLines.length));
+    }
+    groups = groupFrames(headings, entities, routedEdges(), 'domain').map(({ nodeIds, ...group }) => ({ ...group, entityIds: nodeIds }));
+  }
+  normalizeGroupGaps(headings, () => groups, adjustGap);
+  numberEntities(domain, entities, groups);
+  let width = graph.graph().width!;
+  let height = graph.graph().height!;
+  if (groups.length) {
+    const bounds = enclosingBounds([...entities.map(boxBounds), ...groups.map(boxBounds), ...routedEdges().map(edgeBounds)]);
+    const dx = 32 - bounds.left;
+    const dy = 32 - bounds.top;
+    for (const item of [...entities, ...groups, ...relationships]) { item.x += dx; item.y += dy; }
+    for (const edge of relationships) {
+      edge.route = edge.route.map(point => ({ x: point.x + dx, y: point.y + dy }));
+      edge.sourceEnd = { ...edge.sourceEnd, x: edge.sourceEnd.x + dx, y: edge.sourceEnd.y + dy };
+      edge.targetEnd = { ...edge.targetEnd, x: edge.targetEnd.x + dx, y: edge.targetEnd.y + dy };
+    }
+    width = bounds.right - bounds.left + 64;
+    height = bounds.bottom - bounds.top + 64;
+  }
+  return { width, height, entities, groups, relationships: relationships.map(({ route, ...edge }) => ({ ...edge, path: roundedPath(route, 8) })) };
+}
+
+function missingGroupSpace(domain: Explanation['domain'], groups: DomainLayout['groups']): number {
+  const parents = new Map((domain.groups ?? []).map(group => [group.id, group.parentGroupId]));
+  let missing = 0;
+  for (const [index, group] of groups.entries()) {
+    const bounds = boxBounds(group);
+    for (const sibling of groups.slice(index + 1)) {
+      if (parents.get(group.id) !== parents.get(sibling.id)) continue;
+      const other = boxBounds(sibling);
+      if (bounds.right <= other.left || other.right <= bounds.left) continue;
+      const gap = Math.max(other.top - bounds.bottom, bounds.top - other.bottom);
+      missing = Math.max(missing, 32 - gap);
+    }
+  }
+  return Math.ceil(missing);
+}
+
+function numberEntities(domain: Explanation['domain'], entities: DomainEntity[], groups: DomainLayout['groups']) {
+  const definitions = domain.groups ?? [];
+  const parents = new Map(definitions.flatMap(group => group.entityIds.map(id => [id, group.id] as const)));
+  const frames = new Map(groups.map(group => [group.id, group]));
+  let number = 1;
+  function visit(parentId?: string) {
+    const children = definitions.filter(group => group.parentGroupId === parentId).map(group => frames.get(group.id)!);
+    const direct = entities.filter(entity => parents.get(entity.id) === parentId);
+    const items = [...children, ...direct].sort((a, b) => {
+      const left = a.x - a.width / 2 - (b.x - b.width / 2);
+      return Math.abs(left) > .5 ? left : a.y - a.height / 2 - (b.y - b.height / 2) || a.id.localeCompare(b.id);
+    });
+    for (const item of items) {
+      if ('shortcutNumber' in item) item.shortcutNumber = number++;
+      else visit(item.id);
+    }
+  }
+  visit();
 }
