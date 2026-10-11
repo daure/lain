@@ -67,6 +67,8 @@ jobs:
         run: |
           mkdir -p /tmp/opencode
           node --test tests/dev-start.test.mjs
+      - name: Check release installer
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -W error -m unittest discover -s scripts/tests
       - name: Install cargo-dist
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -78,6 +80,9 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: dist build --artifacts=all --target=x86_64-unknown-linux-gnu --tag="$RELEASE_TAG"
+      - name: Add automatic user service setup to installer
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/prepare_installer.py target/distrib/lain-installer.sh
       - name: Verify archive and installed executable
         if: startsWith(github.ref, 'refs/tags/v')
         run: |

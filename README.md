@@ -7,20 +7,22 @@ A local web viewer for agent-published software explanations. Agents publish a d
 Supports x86-64 Linux with glibc 2.39+ (Ubuntu 24.04 or newer). Requires `curl` and `tar`; systemd user services are needed for `lain setup`. Rust, Node, and a database server are not required.
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/daure/lain/releases/latest/download/lain-installer.sh -o /tmp/lain-installer.sh
-sh /tmp/lain-installer.sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/daure/lain/releases/latest/download/lain-installer.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-lain setup
 lain status
 lain demo
 lain
 ```
 
-The installer downloads the release executable to `~/.local/bin`. Follow its shell PATH instructions for future terminals. `lain demo` seeds an example once; agents publish your own explanations through [MCP](#agent-connection). On a machine without systemd, run `lain serve` in a terminal and `lain open --print-url` in another.
+The installer downloads the release executable to `~/.local/bin` and runs `lain setup` on first installation. Upgrades restart the existing Lain-managed user service, preserving its home, port, and unit settings. The service must use the installed executable; an unrelated unit or a different executable requires manual setup. Setup or restart failures make installation fail. Follow the installer's shell PATH instructions for future terminals. `lain demo` seeds an example once; agents publish your own explanations through [MCP](#agent-connection).
 
-To upgrade, run the installer again, then `systemctl --user restart lain.service` and `lain status`. Runtime data and credentials remain under `LAIN_HOME`. The installer places the executable; `lain setup` manages the service explicitly.
+To upgrade, run the installer again, then `lain status`. Runtime data and credentials remain under `LAIN_HOME`. If user systemd is unavailable, installation keeps the binary and prints manual setup instructions. On a machine without systemd, run `lain serve` in a terminal and `lain open --print-url` in another. Set `LAIN_NO_SETUP=1` on the installer process to manage the service yourself:
 
-Versioned archives, SHA-256 checksums, and installers are on the [releases page](https://github.com/daure/lain/releases). The pinned installer URL uses `/releases/download/v0.1.0/lain-installer.sh`.
+```sh
+curl -LsSf https://github.com/daure/lain/releases/latest/download/lain-installer.sh | LAIN_NO_SETUP=1 sh
+```
+
+Versioned archives, SHA-256 checksums, and installers are on the [releases page](https://github.com/daure/lain/releases). The pinned installer URL uses `/releases/download/v0.1.1/lain-installer.sh`.
 
 ## Build from source
 
@@ -199,14 +201,15 @@ GitHub Actions checks pushes to `main`. A stable `vX.Y.Z` tag matching `Cargo.to
 From a clean, verified `main` checkout with the release version committed in `Cargo.toml` and `Cargo.lock`:
 
 ```sh
-git tag -a v0.1.0 -m 'Release v0.1.0'
-git push --atomic origin main v0.1.0
+git tag -a v0.1.1 -m 'Release v0.1.1'
+git push --atomic origin main v0.1.1
 gh run list --workflow release.yml
 ```
 
 Use the matching new version for later tags. Local packaging requires cargo-dist 0.32.0 after `./scripts/build.sh`:
 
 ```sh
-dist build --artifacts=all --target=x86_64-unknown-linux-gnu --tag=v0.1.0
+dist build --artifacts=all --target=x86_64-unknown-linux-gnu --tag=v0.1.1
+python3 scripts/prepare_installer.py target/distrib/lain-installer.sh
 node tests/release-smoke.mjs target/release/lain
 ```
