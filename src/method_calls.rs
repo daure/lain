@@ -8,10 +8,13 @@ use crate::model::{Explanation, validate_id};
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MethodCall {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub entity_id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub method_id: String,
-    /// Optional receiver present in this occurrence's before or after snapshot.
+    /// Optional receiver present in this occurrence's before or after snapshot with the matching entity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "crate::model::NullableId")]
     pub instance_id: Option<String>,
 }
 

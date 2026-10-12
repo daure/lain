@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick, ref } from 'vue';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import fixture from '../../examples/order-lifecycle.json';
 import DomainView from '../src/components/DomainView.vue';
 import { domainLayout } from '../src/domain';
-import type { Explanation, Occurrence } from '../src/model';
+import type { Explanation, Occurrence, Scenario } from '../src/model';
 
 function pathCommands(path: string) {
   return [...path.matchAll(/([MLQ])([^MLQ]+)/g)].map(match => {
@@ -50,6 +50,48 @@ it.each([
   } finally { app.unmount(); root.remove(); }
 });
 
+it('shows neighboring After counts with initial Before and final After counts at scenario boundaries', async () => {
+  const domain: Explanation['domain'] = { entities: [{ id: 'item', label: 'Item', attributes: [] }], relationships: [] };
+  const empty = { instances: [], links: [] };
+  const populated = { instances: ['a', 'b'].map(id => ({ id, entityId: 'item', values: {} })), links: [] };
+  const visits: Occurrence[] = [
+    { id: 'empty', nodeId: 'work', incomingEdgeId: null, trigger: null, narration: '', before: populated, after: empty },
+    { id: 'created', nodeId: 'work', incomingEdgeId: 'again', trigger: null, narration: '', before: empty, after: populated },
+    { id: 'removed', nodeId: 'work', incomingEdgeId: 'again', trigger: null, narration: '', before: populated, after: empty },
+  ];
+  const scenario = ref<Scenario>({ id: 'recording', title: 'Recording', diagramId: 'flow', occurrences: visits });
+  const occurrence = ref(visits[0]!);
+  const diagram = { id: 'flow', title: 'Flow', kind: 'flow' as const, nodes: [{ id: 'work', label: 'Work', entityIds: ['item'] }],
+    edges: [{ id: 'again', sourceNodeId: 'work', targetNodeId: 'work', label: '' }] };
+  const root = document.createElement('div');
+  document.body.append(root);
+  const app = createApp({ render: () => h(DomainView, { domain, diagram, scenario: scenario.value, occurrence: occurrence.value, selectedEntityId: '' }) });
+  app.mount(root);
+  try {
+    const count = () => root.querySelector('.domain-count-values')!.textContent;
+    expect(count()).toBe('2 · 0 · 2');
+    expect(root.querySelector('.domain-instance-count')!.getAttribute('aria-label')).toContain('Scenario start (Before): 2');
+    occurrence.value = visits[1]!;
+    await nextTick();
+    await vi.waitFor(() => expect(count()).toBe('0 · 2 · 0'));
+    expect(root.querySelector('.domain-count-current')!.textContent).toBe('2');
+    expect(root.querySelector('.domain-instance-count')!.getAttribute('aria-label')).toContain('Previous: 0 · Current (After): 2 · Next: 0');
+    occurrence.value = visits[0]!;
+    await nextTick();
+    await vi.waitFor(() => expect(count()).toBe('2 · 0 · 2'));
+    occurrence.value = visits[1]!;
+    await nextTick();
+    occurrence.value = visits[2]!;
+    await nextTick();
+    await vi.waitFor(() => expect(count()).toBe('2 · 0 · 0'));
+    expect(root.querySelector('.domain-instance-count')!.getAttribute('aria-label')).toContain('Scenario end (After): 0');
+    scenario.value = { id: 'single', title: 'Single step', diagramId: 'flow', occurrences: [visits[1]!] };
+    occurrence.value = visits[1]!;
+    await nextTick();
+    expect(count()).toBe('0 · 2 · 2');
+  } finally { app.unmount(); root.remove(); }
+});
+
 it('shows scenario-wide domain usage from visited nodes and both snapshots while keeping unrelated definitions inspectable', async () => {
   const documentFixture = structuredClone(fixture) as Explanation;
   for (const id of ['node-only', 'snapshot-only', 'other-branch', 'unused']) {
@@ -77,7 +119,7 @@ it('shows scenario-wide domain usage from visited nodes and both snapshots while
     expect(entity('node-only').classList.contains('unrelated')).toBe(false);
     expect(entity('snapshot-only').classList.contains('unrelated')).toBe(false);
     expect(entity('other-branch').classList.contains('unrelated')).toBe(true);
-    expect(entity('unused').getAttribute('aria-label')).toBe(`unused · Outside Successful callback · Shortcut ${entity('unused').dataset.shortcutNumber}`);
+    expect(entity('unused').getAttribute('aria-label')).toBe(`unused · Outside New payment queues fulfillment · Shortcut ${entity('unused').dataset.shortcutNumber}`);
     expect(root.querySelector('[data-relationship-id="order-fulfillments"]')!.classList.contains('unrelated')).toBe(false);
     expect(root.querySelector('[data-relationship-id="unrecorded"]')!.classList.contains('unrelated')).toBe(true);
     const cardinalities = root.querySelectorAll('[data-relationship-id="order-payments"] .domain-cardinality');
@@ -269,16 +311,17 @@ it('correlates each recorded visit with property differences and explicit calls 
     expect(root.querySelector('[data-attribute-id="status"] title')!.textContent).toContain('removed · removed · "old" → Absent');
     expect(root.querySelector('[data-attribute-id="status"] title')!.textContent).toContain('created · created · Absent → "new"');
     expect(root.querySelector('.domain-method.called title')!.textContent).toContain('Called 2× in this step · a · Receiver not captured');
-    expect(root.querySelector('.domain-instance-count text')!.textContent).toBe('3');
+    expect(root.querySelector('.domain-count-values')!.textContent).toBe('2 · 2 · 1');
     expect(root.querySelectorAll('script')).toHaveLength(0);
     occurrence.value = revisit;
     await nextTick();
     expect(root.querySelectorAll('.domain-property.changed, .domain-property.created, .domain-property.removed')).toHaveLength(0);
     expect(root.querySelector('.domain-method.called')).not.toBeNull();
-    expect(root.querySelector('.domain-instance-count text')!.textContent).toBe('1');
+    await vi.waitFor(() => expect(root.querySelector('.domain-count-values')!.textContent).toBe('2 · 1 · 1'));
     occurrence.value = idle;
     await nextTick();
     expect(root.querySelector('.domain-method.called')).toBeNull();
+    await vi.waitFor(() => expect(root.querySelector('.domain-count-values')!.textContent).toBe('1 · 1 · 1'));
     expect(root.querySelector('.domain-entity')!.getAttribute('transform')).toBe(geometry);
   } finally { app.unmount(); root.remove(); }
 });

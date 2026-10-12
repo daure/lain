@@ -15,8 +15,8 @@ export function sequenceLayout(diagram: Diagram) {
   function body(steps: SequenceStep[], depth: number, parentId?: string) {
     for (const step of steps) {
       if (step.kind === 'message') {
-        rows.push({ nodeId: step.nodeId, y: cursor + 34 });
-        cursor += 64;
+        rows.push({ nodeId: step.nodeId, y: cursor + 50 });
+        cursor += 80;
         continue;
       }
       const frame: SequenceFrame = {

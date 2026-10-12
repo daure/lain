@@ -23,7 +23,8 @@ const stored = (id = 'order-lifecycle', revision = 1, document = fixture) => ({ 
 const current = () => new URLSearchParams(location.search).get('occurrence');
 const hero = () => document.querySelector('.step-announcement')?.textContent;
 const click = async (label: string) => {
-  [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent?.trim()) === label)!.click();
+  const dialog = document.querySelector('[role="dialog"]');
+  [...(dialog ?? document).querySelectorAll<HTMLButtonElement>('button')].find(button => (button.getAttribute('aria-label') ?? button.textContent?.trim()) === label)!.click();
   await nextTick();
 };
 const route = (scenario = 'duplicate-callback', occurrence = 'duplicate-verification', explanation = 'order-lifecycle') =>
@@ -49,32 +50,15 @@ afterEach(() => {
   history.replaceState(null, '', originalURL);
 });
 
-it('exchanges the launch code before restoring a deep route and retains IDs on reload', async () => {
-  history.replaceState(null, '', `${route()}&theme=dark#launch=one-use-code`);
-  let finishSession!: (response: Response) => void;
-  vi.stubGlobal('WebSocket', LiveSocket);
-  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
-  const fetch = vi.fn(async (path: string) => path === '/api/session'
-    ? new Promise<Response>(resolve => { finishSession = resolve; })
-    : Response.json(path === '/api/explanations' ? [summary] : stored()));
-  vi.stubGlobal('fetch', fetch);
-  const root = document.createElement('div'); document.body.append(root);
-  app = createApp(App).use(PrimeVue, { unstyled: true }).use(ToastService); app.mount(root);
-  expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/session']);
-  expect(location.hash).toBe('');
-  expect(current()).toBe('duplicate-verification');
-  finishSession(new Response(null, { status: 204 }));
-  await vi.waitFor(() => expect(LiveSocket.current?.onopen).toBeTypeOf('function'));
-  expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/session']);
-  expect(current()).toBe('duplicate-verification');
-  expect(document.querySelector('.workspace')).toBeNull();
-  LiveSocket.current.onopen?.();
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+it('restores a deep route and retains IDs on reload', async () => {
+  history.replaceState(null, '', `${route()}&theme=dark`);
+  await mount();
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   expect(new URLSearchParams(location.search).get('theme')).toBe('dark');
   expect(history.state).toBeNull();
-  app.unmount(); app = undefined; document.body.replaceChildren();
+  app!.unmount(); app = undefined; document.body.replaceChildren();
   await mount();
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   expect(current()).toBe('duplicate-verification');
 });
 
@@ -84,34 +68,34 @@ it('pushes complete selections and restores Back and Forward without fetching th
   const fetch = await mount();
   await vi.waitFor(() => expect(document.querySelector('.explanation-card')).not.toBeNull());
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click();
-  await vi.waitFor(() => expect(hero()).toContain('01 / 04'));
+  await vi.waitFor(() => expect(hero()).toContain('1/4'));
   expect(push).toHaveBeenCalledTimes(1);
-  await click('Duplicate callback');
-  document.querySelectorAll<HTMLButtonElement>('.history-link')[3]!.click();
-  await vi.waitFor(() => expect(current()).toBe('duplicate-verification'));
+  await click('Repeated callback keeps one fulfillment');
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'G', shiftKey: true, bubbles: true, cancelable: true }));
+  await vi.waitFor(() => expect(hero()).toContain('5/5'));
   const calls = fetch.mock.calls.length;
   history.back();
-  await vi.waitFor(() => expect(hero()).toContain('01 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('1/5'));
   history.back();
-  await vi.waitFor(() => expect(document.querySelector('.scenario-link.selected')?.textContent).toBe('Successful callback'));
+  await vi.waitFor(() => expect(document.querySelector('.scenario-link.selected')?.textContent).toBe('New payment queues fulfillment'));
   history.forward();
-  await vi.waitFor(() => expect(hero()).toContain('01 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('1/5'));
   history.forward();
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('5/5'));
   expect(fetch.mock.calls).toHaveLength(calls);
   document.querySelector<HTMLElement>('.explanation-title')!.click();
   await nextTick();
   expect(location.search).toBe('?theme=dark');
   history.back();
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
-  expect(current()).toBe('duplicate-verification');
+  await vi.waitFor(() => expect(hero()).toContain('5/5'));
+  expect(current()).toBe(fixture.scenarios[1]!.occurrences.at(-1)!.id);
 });
 
 it('canonicalizes missing and stale cursor IDs with replacement and rejects malformed explanation IDs', async () => {
   history.replaceState(null, '', route('stale-scenario', 'stale-occurrence'));
   const push = vi.spyOn(history, 'pushState');
   await mount();
-  await vi.waitFor(() => expect(hero()).toContain('01 / 04'));
+  await vi.waitFor(() => expect(hero()).toContain('1/4'));
   expect(new URLSearchParams(location.search).get('scenario')).toBe(fixture.scenarios[0]!.id);
   expect(current()).toBe(fixture.scenarios[0]!.occurrences[0]!.id);
   expect(push).not.toHaveBeenCalled();
@@ -120,7 +104,7 @@ it('canonicalizes missing and stale cursor IDs with replacement and rejects malf
   await vi.waitFor(() => expect(current()).toBe(fixture.scenarios[0]!.occurrences[0]!.id));
   history.replaceState(null, '', route('duplicate-callback', 'stale-occurrence'));
   window.dispatchEvent(new PopStateEvent('popstate'));
-  await vi.waitFor(() => expect(hero()).toContain('01 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('1/5'));
   expect(current()).toBe(fixture.scenarios[1]!.occurrences[0]!.id);
   history.replaceState(null, '', route('bad%2Fscenario', 'bad%2Foccurrence'));
   window.dispatchEvent(new PopStateEvent('popstate'));
@@ -140,7 +124,7 @@ it('automatically replaces removed cursor IDs with the nearest surviving step an
   documentFixture.domain.entities.push({ id: 'temporary', label: 'Temporary entity', attributes: [] });
   let revision = 1;
   await mount(async path => Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision, documentFixture)));
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   await click('Domain');
   document.querySelector<SVGGElement>('[data-entity-id="temporary"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await nextTick();
@@ -151,7 +135,7 @@ it('automatically replaces removed cursor IDs with the nearest surviving step an
   documentFixture.scenarios[1]!.occurrences.splice(3);
   documentFixture.domain.entities = documentFixture.domain.entities.filter(item => item.id !== 'temporary');
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision }) });
-  await vi.waitFor(() => expect(hero()).toContain('03 / 03'));
+  await vi.waitFor(() => expect(hero()).toContain('3/3'));
   expect(new URLSearchParams(location.search).get('scenario')).toBe('duplicate-callback');
   expect(current()).toBe('duplicate-existing');
   expect(document.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe('Domain');
@@ -163,7 +147,7 @@ it('automatically replaces removed cursor IDs with the nearest surviving step an
   documentFixture.scenarios = documentFixture.scenarios.filter(item => item.id !== 'duplicate-callback');
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision }) });
   await vi.waitFor(() => expect(current()).toBe('success-received'));
-  expect(document.body.textContent).toContain('Selected scenario was removed; moved to Successful callback.');
+  expect(document.body.textContent).toContain('Selected scenario was removed; moved to New payment queues fulfillment.');
   expect(history.length).toBe(entries);
   expect(push).not.toHaveBeenCalled();
 });
@@ -174,7 +158,7 @@ it('closes a removed node inspector while preserving the recorded selection and 
   documentFixture.diagrams[0]!.nodes.push({ id: 'off-path', label: 'Unrecorded step', entityIds: [], role: 'action' });
   let revision = 1;
   await mount(async path => Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision, documentFixture)));
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   await click('Diagram');
   document.querySelector<SVGGElement>('.diagram-panel [data-node-id="off-path"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await nextTick();
@@ -195,7 +179,7 @@ it('keeps the current document, cursor, and tab after a failed automatic update 
   await mount(async path => path !== '/api/explanations' && fail
     ? Response.json({ error: 'Revision unavailable' }, { status: 500 })
     : Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision, { ...fixture, title: `Revision ${revision}` })));
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   await click('Domain');
   const previousRoute = location.search;
   revision = 2; fail = true;
@@ -212,29 +196,26 @@ it('keeps the current document, cursor, and tab after a failed automatic update 
   expect(location.search).toBe(previousRoute);
 });
 
-it('keeps failed deep links retryable and leaves the homepage visible when authentication fails', async () => {
+it('keeps failed deep links retryable from the homepage', async () => {
   history.replaceState(null, '', route('duplicate-callback', 'duplicate-verification', 'missing'));
-  await mount(async path => Response.json(path === '/api/explanations' ? [summary] : { error: 'Explanation not found' },
-    { status: path === '/api/explanations' ? 200 : 404 }));
+  let finish!: (response: Response) => void;
+  await mount(async path => path === '/api/explanations/missing' ? new Promise<Response>(resolve => { finish = resolve; }) :
+    Response.json(path === '/api/explanations' ? [summary] : stored()));
+  await vi.waitFor(() => expect(document.querySelectorAll('.explanation-card')).toHaveLength(1));
+  const card = document.querySelector<HTMLButtonElement>('.explanation-card')!;
+  expect(document.querySelector('.library-view')?.getAttribute('aria-busy')).toBe('true');
+  expect(document.querySelector('.library-results')?.textContent).toBe('1 explanation');
+  finish(Response.json({ error: 'Explanation not found' }, { status: 404 }));
   await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('Explanation not found'));
   expect(new URLSearchParams(location.search).get('explanation')).toBe('missing');
-  expect(document.querySelector('.explanation-card')).not.toBeNull();
-  app!.unmount(); app = undefined; document.body.replaceChildren();
-  history.replaceState(null, '', `${route()}#launch=expired`);
-  const calls: string[] = [];
-  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
-    calls.push(path); return Response.json({ error: 'Expired code' }, { status: 401 });
-  }));
-  const root = document.createElement('div'); document.body.append(root);
-  app = createApp(App).use(PrimeVue, { unstyled: true }).use(ToastService); app.mount(root);
-  await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('fresh launch link'));
-  expect(calls).toEqual(['/api/session']);
-  expect(current()).toBe('duplicate-verification');
-  expect(location.hash).toBe('');
-  vi.stubGlobal('fetch', vi.fn(async path => Response.json(path === '/api/explanations' ? [summary] : stored())));
-  await click('Retry connection');
-  LiveSocket.current.onopen?.();
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  expect(document.querySelector('.explanation-card')).toBe(card);
+  expect(document.querySelectorAll('.explanation-card')).toHaveLength(1);
+  expect(document.querySelector('.library-view')?.getAttribute('aria-busy')).toBe('false');
+  expect(document.querySelector('.library-results')?.textContent).toBe('1 explanation');
+  card.click();
+  await vi.waitFor(() => expect(hero()).toContain('1/4'));
+  expect(new URLSearchParams(location.search).get('explanation')).toBe('order-lifecycle');
+  expect(document.querySelector('.library-view')).toBeNull();
 });
 
 it('cancels pending route selections on Back and ignores out-of-order document responses', async () => {
@@ -246,11 +227,11 @@ it('cancels pending route selections on Back and ignores out-of-order document r
   pop(route('successful-callback', 'success-received', 'first'));
   pop(route('duplicate-callback', 'duplicate-verification', 'second'));
   pending.get('/api/explanations/second')!(Response.json(stored('second')));
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   pending.get('/api/explanations/first')!(Response.json(stored('first')));
   await nextTick();
   expect(new URLSearchParams(location.search).get('explanation')).toBe('second');
-  expect(hero()).toContain('04 / 05');
+  expect(hero()).toContain('4/5');
   pop(route('duplicate-callback', 'duplicate-verification', 'third'));
   pop('/');
   pending.get('/api/explanations/third')!(Response.json(stored('third')));
@@ -265,7 +246,7 @@ it('replaces tombstoned active routes and cancels tombstoned pending documents',
   let finish!: (response: Response) => void;
   await mount(async path => path === '/api/explanations' ? Response.json(deleted ? [] : [summary]) :
     path.endsWith('/pending') ? new Promise<Response>(resolve => { finish = resolve; }) : Response.json(stored()));
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   const push = vi.spyOn(history, 'pushState');
   deleted = true;
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision: 2, deleted: true }) });
@@ -285,11 +266,248 @@ it('clears a deleted pinned explanation when a reconnect resync no longer lists 
   history.replaceState(null, '', route());
   let exists = true;
   await mount(async path => Response.json(path === '/api/explanations' ? exists ? [summary] : [] : stored()));
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   exists = false;
   LiveSocket.current.onopen?.();
   await vi.waitFor(() => expect(document.querySelector('.workspace')).toBeNull());
   expect(location.search).toBe('');
+});
+
+it('confirms deletion once and restores the same document through the notification without a socket event', async () => {
+  history.replaceState(null, '', '/');
+  let deleted = false;
+  let finish!: (response: Response) => void;
+  let finishRestore!: (response: Response) => void;
+  const fetch = await mount(async (path, options) => {
+    if (options?.method === 'DELETE') return new Promise<Response>(resolve => { finish = resolve; });
+    if (options?.method === 'PUT') {
+      return new Promise<Response>(resolve => { finishRestore = resolve; });
+    }
+    return Response.json(path === '/api/explanations' ? deleted ? [] : [summary] : stored());
+  });
+  await vi.waitFor(() => expect(document.querySelector('.delete-explanation')).not.toBeNull());
+  const remove = () => document.querySelector<HTMLButtonElement>('.delete-explanation')!;
+  const deletions = () => fetch.mock.calls.filter(([, options]) => options?.method === 'DELETE');
+  remove().click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(summary.title);
+  expect(document.activeElement?.textContent).toBe('Cancel');
+  expect(document.querySelector('.workspace')).toBeNull();
+  expect(deletions()).toHaveLength(0);
+  document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+  await nextTick();
+  expect(document.querySelector('.quick-actions-dialog')).toBeNull();
+  await click('Cancel');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(deletions()).toHaveLength(0);
+  expect(document.activeElement).toBe(document.querySelector('.explanation-card'));
+  remove().click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  await click('Delete explanation');
+  await click('Delete explanation');
+  await vi.waitFor(() => expect(deletions()).toHaveLength(1));
+  expect(deletions()[0]).toEqual(['/api/explanations/order-lifecycle', {
+    method: 'DELETE', headers: { 'If-Match': '"1"' },
+  }]);
+  expect(document.querySelector<HTMLButtonElement>('[autofocus]')?.disabled).toBe(true);
+  deleted = true;
+  finish(Response.json({ id: summary.id, revision: 2, deleted: true }));
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(document.querySelector('.explanation-card')).toBeNull();
+  expect(document.querySelector('.library-results')?.textContent).toBe('0 explanations');
+  expect(document.body.textContent).toContain('Explanation deleted');
+  expect(document.activeElement?.getAttribute('aria-label')).toBe('Search explanations');
+  expect(location.search).toBe('');
+  await click('Undo');
+  await click('Undo');
+  await vi.waitFor(() => expect(finishRestore).toBeTypeOf('function'));
+  expect(document.querySelector<HTMLButtonElement>('.notification-undo')?.disabled).toBe(true);
+  deleted = false;
+  finishRestore(Response.json(stored(summary.id, 3)));
+  await vi.waitFor(() => expect(document.querySelector('.explanation-card')).not.toBeNull());
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'PUT')).toEqual([
+    ['/api/explanations/order-lifecycle', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'If-Match': '"2"' },
+      body: JSON.stringify({ document: fixture }),
+    }],
+  ]);
+  expect(document.body.textContent).toContain('Explanation restored');
+});
+
+it('confirms whole-library deletion despite search and undoes only the confirmed cards', async () => {
+  history.replaceState(null, '', '/');
+  let items = [summary, { ...summary, id: 'hidden', title: 'Hidden explanation', description: '' }];
+  let finish!: (response: Response) => void;
+  const fetch = await mount(async (path, options) => {
+    const id = path.split('/').at(-1)!;
+    if (options?.method === 'PUT') {
+      const document = JSON.parse(options.body as string).document;
+      items.push({ ...summary, id, revision: 3, title: document.title, description: document.description });
+      return Response.json(stored(id, 3, document));
+    }
+    if (options?.method === 'DELETE') {
+      if (id === summary.id) return new Promise<Response>(resolve => { finish = resolve; });
+      items = items.filter(item => item.id !== id);
+      return Response.json({ id, revision: 2, deleted: true });
+    }
+    const item = items.find(item => item.id === id);
+    return Response.json(path === '/api/explanations' ? items : stored(id, 1, { ...fixture, title: item!.title, description: item!.description }));
+  });
+  await vi.waitFor(() => expect(document.querySelectorAll('.explanation-card')).toHaveLength(2));
+  const search = document.querySelector<HTMLInputElement>('.library-search input')!;
+  search.value = summary.title;
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await nextTick();
+  expect(document.querySelectorAll('.explanation-card')).toHaveLength(1);
+  await click('Delete all');
+  await vi.waitFor(() => expect(document.activeElement?.textContent).toBe('Cancel'));
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Delete all 2 explanations');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('including explanations hidden by search');
+  await click('Cancel');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(0);
+  await click('Delete all');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  items.push({ ...summary, id: 'new', title: 'New explanation', description: '' });
+  LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'new', revision: 1 }) });
+  await click('Delete all explanations');
+  await click('Delete all explanations');
+  expect(document.querySelector<HTMLButtonElement>('[autofocus]')?.disabled).toBe(true);
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+  items = items.filter(item => item.id !== summary.id);
+  finish(Response.json({ id: summary.id, revision: 2, deleted: true }));
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'DELETE').map(([path]) => path))
+    .toEqual(['/api/explanations/order-lifecycle', '/api/explanations/hidden']);
+  search.value = '';
+  search.dispatchEvent(new Event('input', { bubbles: true }));
+  await vi.waitFor(() => expect(document.querySelectorAll('.explanation-card')).toHaveLength(1));
+  expect(document.querySelector('.explanation-card')?.textContent).toContain('New explanation');
+  expect(document.body.textContent).toContain('Explanations deleted');
+  await click('Undo');
+  await vi.waitFor(() => expect(document.querySelectorAll('.explanation-card')).toHaveLength(3));
+  const restorations = fetch.mock.calls.filter(([, options]) => options?.method === 'PUT');
+  expect(restorations.map(([path]) => path)).toEqual(['/api/explanations/order-lifecycle', '/api/explanations/hidden']);
+  expect(restorations.map(([, options]) => options?.headers)).toEqual([
+    { 'Content-Type': 'application/json', 'If-Match': '"2"' },
+    { 'Content-Type': 'application/json', 'If-Match': '"2"' },
+  ]);
+  expect(document.body.textContent).toContain('Explanations restored');
+});
+
+it.each(['expiry', 'dismissal'])('releases deletion undo after notification %s', async reason => {
+  history.replaceState(null, '', '/');
+  let deleted = false;
+  const fetch = await mount(async (path, options) => {
+    if (options?.method === 'DELETE') {
+      deleted = true;
+      return Response.json({ id: summary.id, revision: 2, deleted: true });
+    }
+    return Response.json(path === '/api/explanations' ? deleted ? [] : [summary] : stored());
+  });
+  await vi.waitFor(() => expect(document.querySelector('.delete-explanation')).not.toBeNull());
+  document.querySelector<HTMLButtonElement>('.delete-explanation')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  vi.useFakeTimers();
+  await click('Delete explanation');
+  await vi.waitFor(() => expect(document.querySelector('.notification-undo')).not.toBeNull());
+  const undo = document.querySelector<HTMLButtonElement>('.notification-undo')!;
+  if (reason === 'expiry') {
+    await vi.advanceTimersByTimeAsync(7900);
+    expect(document.querySelector('.notification-undo')).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(500);
+  } else {
+    document.querySelector<HTMLButtonElement>('[data-pc-section="closeButton"]')!.click();
+    await vi.advanceTimersByTimeAsync(500);
+  }
+  expect(document.querySelector('.notification-undo')).toBeNull();
+  undo.click();
+  await nextTick();
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(0);
+});
+
+it.each([412, 500, 'network'] as const)('reports a %s undo failure without retrying publication', async status => {
+  history.replaceState(null, '', '/');
+  let deleted = false;
+  const fetch = await mount(async (path, options) => {
+    if (options?.method === 'DELETE') {
+      deleted = true;
+      return Response.json({ id: summary.id, revision: 2, deleted: true });
+    }
+    if (options?.method === 'PUT') {
+      if (status === 'network') throw new TypeError('Failed to fetch');
+      return Response.json({ error: status === 412 ? 'explanation changed' : 'storage error' }, { status });
+    }
+    return Response.json(path === '/api/explanations' ? deleted ? [] : [summary] : stored());
+  });
+  await vi.waitFor(() => expect(document.querySelector('.delete-explanation')).not.toBeNull());
+  document.querySelector<HTMLButtonElement>('.delete-explanation')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  await click('Delete explanation');
+  await vi.waitFor(() => expect(document.querySelector('.notification-undo')).not.toBeNull());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  await click('Undo');
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Undo failed'));
+  expect(document.querySelector('.notification-undo')).toBeNull();
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(1);
+  expect(document.querySelector('.explanation-card')).toBeNull();
+});
+
+it('stops bulk deletion on failure and reports partial progress before a fresh confirmation', async () => {
+  history.replaceState(null, '', '/');
+  let items = [summary, { ...summary, id: 'failed' }, { ...summary, id: 'remaining' }];
+  const fetch = await mount(async (path, options) => {
+    if (options?.method === 'DELETE') {
+      const id = path.split('/').at(-1)!;
+      if (id === 'failed') return Response.json({ error: 'Storage unavailable' }, { status: 500 });
+      items = items.filter(item => item.id !== id);
+      return Response.json({ id, revision: 2, deleted: true });
+    }
+    return Response.json(path === '/api/explanations' ? items : stored());
+  });
+  await vi.waitFor(() => expect(document.querySelectorAll('.explanation-card')).toHaveLength(3));
+  await click('Delete all');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  await click('Delete all explanations');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent)
+    .toContain('Deleted 1 of 3 explanations. Storage unavailable'));
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'DELETE').map(([path]) => path))
+    .toEqual(['/api/explanations/order-lifecycle', '/api/explanations/failed']);
+  expect(document.querySelectorAll('.explanation-card')).toHaveLength(2);
+  expect(document.activeElement?.textContent).toBe('Close');
+  await click('Close');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  await click('Delete all');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Delete all 2 explanations'));
+});
+
+it.each([500, 'network'] as const)('refreshes the library after a %s deletion failure and requires a fresh confirmation', async status => {
+  history.replaceState(null, '', '/');
+  let revision = 1;
+  const fetch = await mount(async (path, options) => {
+    if (options?.method === 'DELETE') {
+      revision = 2;
+      if (status === 'network') throw new TypeError('Failed to fetch');
+      return Response.json({ error: 'Storage unavailable' }, { status });
+    }
+    return Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored());
+  });
+  await vi.waitFor(() => expect(document.querySelector('.delete-explanation')).not.toBeNull());
+  document.querySelector<HTMLButtonElement>('.delete-explanation')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  await click('Delete explanation');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain('check the library'));
+  expect(document.querySelector('.explanation-card')).not.toBeNull();
+  expect(document.body.textContent).not.toContain('Explanation deleted');
+  expect(document.activeElement?.textContent).toBe('Close');
+  expect(fetch.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(1);
+  await click('Close');
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  document.querySelector<HTMLButtonElement>('.delete-explanation')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  await click('Delete explanation');
+  await vi.waitFor(() => expect(fetch.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(2));
 });
 
 it('cancels disconnected document reads before resync and permits fresh route navigation', async () => {
@@ -328,7 +546,7 @@ it('cancels disconnected document reads before resync and permits fresh route na
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision: 3 }) });
   await vi.waitFor(() => expect(document.querySelector('.explanation-card')).not.toBeNull());
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click();
-  await vi.waitFor(() => expect(hero()).toContain('01 / 04'));
+  await vi.waitFor(() => expect(hero()).toContain('1/4'));
   await click('Next event');
   expect(current()).toBe(fixture.scenarios[0]!.occurrences[1]!.id);
   expect(document.querySelector('[role="alert"]')).toBeNull();
@@ -338,7 +556,7 @@ it('ignores stale deletion notifications after automatically applying a newer pu
   history.replaceState(null, '', route());
   let revision = 1;
   await mount(async path => Response.json(path === '/api/explanations' ? [{ ...summary, revision }] : stored('order-lifecycle', revision)));
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   revision = 3;
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision: 3 }) });
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision: 2, deleted: true }) });
@@ -354,9 +572,9 @@ it('restores recreated library cards from an authoritative reconnect list after 
   let exists = true;
   let pending = false;
   let finish!: (response: Response) => void;
-  await mount(async path => path !== '/api/explanations' && pending ? new Promise<Response>(resolve => { finish = resolve; }) :
+  const fetch = await mount(async path => path !== '/api/explanations' && pending ? new Promise<Response>(resolve => { finish = resolve; }) :
     Response.json(path === '/api/explanations' ? exists ? [{ ...summary, revision }] : [] : stored('order-lifecycle', revision)));
-  await vi.waitFor(() => expect(hero()).toContain('04 / 05'));
+  await vi.waitFor(() => expect(hero()).toContain('4/5'));
   exists = false;
   LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision: 2, deleted: true }) });
   await vi.waitFor(() => expect(document.querySelector('.explanation-card')).toBeNull());
@@ -365,8 +583,26 @@ it('restores recreated library cards from an authoritative reconnect list after 
   await vi.waitFor(() => expect(document.querySelector('.explanation-card h2')?.textContent).toBe(summary.title));
   expect(document.querySelector('.workspace')).toBeNull();
   expect(location.search).toBe('');
-  document.querySelector<HTMLButtonElement>('.explanation-card')!.click();
-  await vi.waitFor(() => expect(hero()).toContain('01 / 04'));
+  pending = true;
+  const card = document.querySelector<HTMLButtonElement>('.explanation-card')!;
+  const reads = () => fetch.mock.calls.filter(([path]) => path === '/api/explanations/order-lifecycle');
+  const previousReads = reads().length;
+  card.click();
+  await nextTick();
+  expect(document.querySelector('.explanation-card')).toBe(card);
+  expect(document.querySelectorAll('.explanation-card')).toHaveLength(1);
+  expect(document.querySelector('.library-results')?.textContent).toBe('1 explanation');
+  expect(document.querySelector('.library-view')?.getAttribute('aria-busy')).toBe('true');
+  expect(document.querySelector('.workspace')).toBeNull();
+  card.click();
+  await nextTick();
+  expect(reads()).toHaveLength(previousReads + 1);
+  expect(reads().at(-1)![1]?.signal?.aborted).toBe(false);
+  finish(Response.json(stored('order-lifecycle', 3)));
+  await vi.waitFor(() => expect(hero()).toContain('1/4'));
+  expect(document.querySelector('.workspace')).not.toBeNull();
+  expect(document.querySelector('.library-view')).toBeNull();
+  pending = false;
   await click('Lain explanation library');
   pending = true;
   history.replaceState(null, '', route());

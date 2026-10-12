@@ -4,23 +4,22 @@ use axum::{
     Json, Router,
     body::{Body, to_bytes},
     extract::{
-        DefaultBodyLimit, Path, Request, State,
-        rejection::JsonRejection,
+        DefaultBodyLimit, Path, Query, Request, State,
+        rejection::{JsonRejection, QueryRejection},
         ws::{Message, WebSocket, WebSocketUpgrade, rejection::WebSocketUpgradeRejection},
     },
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
 };
 use rust_embed::RustEmbed;
-use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::{
-    auth::Auth,
-    model::{ChangeEvent, DeleteRequest, PublishRequest},
+    chart_export::{ExportError, ExportOptions, ExportTarget},
+    model::{ChangeEvent, PublishRequest},
     service::{AppService, ServiceError},
 };
 
@@ -34,14 +33,12 @@ struct Frontend;
 #[derive(Clone)]
 struct HttpState {
     service: AppService,
-    auth: Auth,
     port: u16,
 }
 
-pub fn router(service: AppService, auth: Auth, port: u16) -> Router {
+pub fn router(service: AppService, port: u16) -> Router {
     let state = HttpState {
         service: service.clone(),
-        auth: auth.with_port(port),
         port,
     };
     Router::new()
@@ -49,14 +46,17 @@ pub fn router(service: AppService, auth: Auth, port: u16) -> Router {
             "/api/health",
             get(|| async { Json(json!({"status": "ok"})) }),
         )
-        .route("/api/launch", post(launch))
-        .route("/api/session", post(session))
         .route("/api/explanations", get(list))
         .route(
             "/api/explanations/{id}",
             get(fetch).put(publish).delete(delete),
         )
         .route("/ws", get(websocket))
+        .route(
+            "/api/explanations/{id}/diagrams/{diagram_id}/export",
+            get(export_diagram),
+        )
+        .route("/api/explanations/{id}/domain/export", get(export_domain))
         .merge(crate::mcp::router(service).with_state(()))
         .fallback(static_asset)
         .with_state(state.clone())
@@ -76,15 +76,6 @@ async fn guard(State(state): State<HttpState>, request: Request, next: Next) -> 
         );
     }
     let path = request.uri().path();
-    let bearer_only = path == "/api/launch" || path == "/mcp" || path.starts_with("/mcp/");
-    let protected = bearer_only
-        || path == "/ws"
-        || (path.starts_with("/api/") && path != "/api/health" && path != "/api/session");
-    if (bearer_only && !state.auth.bearer_authorized(request.headers()))
-        || (protected && !bearer_only && !state.auth.authorized(request.headers()))
-    {
-        return error(StatusCode::UNAUTHORIZED, "authentication required");
-    }
     let is_mcp = path == "/mcp" || path.starts_with("/mcp/");
     let (parts, body) = request.into_parts();
     let body = match tokio::time::timeout(BODY_TIMEOUT, to_bytes(body, BODY_LIMIT)).await {
@@ -135,41 +126,6 @@ fn local_request(request: &Request, port: u16) -> bool {
     })
 }
 
-async fn launch(State(state): State<HttpState>, headers: HeaderMap) -> Json<serde_json::Value> {
-    let host = headers.get(header::HOST).unwrap().to_str().unwrap();
-    Json(json!({"url": format!("http://{host}/#launch={}", state.auth.launch_code())}))
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SessionRequest {
-    code: String,
-}
-
-async fn session(
-    State(state): State<HttpState>,
-    payload: Result<Json<SessionRequest>, JsonRejection>,
-) -> Response {
-    let Json(payload) = match payload {
-        Ok(payload) => payload,
-        Err(_) => return error(StatusCode::BAD_REQUEST, "invalid session request"),
-    };
-    let Some(session) = state.auth.exchange(&payload.code) else {
-        return error(StatusCode::UNAUTHORIZED, "invalid or expired launch code");
-    };
-    let mut response = Json(json!({"status": "ok"})).into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        format!(
-            "{}={session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200",
-            state.auth.cookie_name()
-        )
-        .parse()
-        .unwrap(),
-    );
-    response
-}
-
 async fn list(State(state): State<HttpState>) -> Response {
     service_response(state.service.list().await)
 }
@@ -178,28 +134,134 @@ async fn fetch(State(state): State<HttpState>, Path(id): Path<String>) -> Respon
     service_response(state.service.get(&id).await)
 }
 
+async fn export_diagram(
+    State(state): State<HttpState>,
+    Path((id, diagram_id)): Path<(String, String)>,
+    options: Result<Query<ExportOptions>, QueryRejection>,
+) -> Response {
+    export_response(state, id, ExportTarget::Diagram(diagram_id), options).await
+}
+
+async fn export_domain(
+    State(state): State<HttpState>,
+    Path(id): Path<String>,
+    options: Result<Query<ExportOptions>, QueryRejection>,
+) -> Response {
+    export_response(state, id, ExportTarget::Domain, options).await
+}
+
+async fn export_response(
+    state: HttpState,
+    id: String,
+    target: ExportTarget,
+    options: Result<Query<ExportOptions>, QueryRejection>,
+) -> Response {
+    let Query(options) = match options {
+        Ok(options) => options,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "invalid export options"),
+    };
+    let base_url = format!("http://127.0.0.1:{}", state.port);
+    match state
+        .service
+        .export_chart(&id, target, options, &base_url)
+        .await
+    {
+        Ok(download) => {
+            let filename = percent_encoding::utf8_percent_encode(
+                &download.filename,
+                percent_encoding::NON_ALPHANUMERIC,
+            );
+            let fallback: String = download
+                .filename
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_graphic() && !['"', '\\'].contains(&character)
+                        || character == ' '
+                    {
+                        character
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let disposition =
+                format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{filename}");
+            (
+                [
+                    (header::CONTENT_TYPE, download.mime_type.to_owned()),
+                    (header::CONTENT_DISPOSITION, disposition),
+                ],
+                download.bytes,
+            )
+                .into_response()
+        }
+        Err(ExportError::Service(error)) => service_response::<()>(Err(error)),
+        Err(ExportError::Invalid(message)) => error(StatusCode::BAD_REQUEST, &message),
+        Err(ExportError::Missing(kind)) => {
+            error(StatusCode::NOT_FOUND, &format!("{kind} not found"))
+        }
+        Err(ExportError::Unavailable(message)) => error(StatusCode::SERVICE_UNAVAILABLE, message),
+        Err(ExportError::Render(cause)) => {
+            tracing::warn!(error = %cause, "chart export failed");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "chart export failed")
+        }
+    }
+}
+
 async fn publish(
     State(state): State<HttpState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     payload: Result<Json<PublishRequest>, JsonRejection>,
 ) -> Response {
     let Json(payload) = match payload {
         Ok(payload) => payload,
         Err(_) => return error(StatusCode::BAD_REQUEST, "invalid publish request"),
     };
-    service_response(state.service.publish(&id, payload).await)
+    let revision = match expected_revision(&headers) {
+        Ok(revision) => revision,
+        Err(response) => return response,
+    };
+    service_response(
+        state
+            .service
+            .publish_with_revision(&id, payload, revision)
+            .await,
+    )
 }
 
 async fn delete(
     State(state): State<HttpState>,
     Path(id): Path<String>,
-    payload: Result<Json<DeleteRequest>, JsonRejection>,
+    headers: HeaderMap,
 ) -> Response {
-    let Json(payload) = match payload {
-        Ok(payload) => payload,
-        Err(_) => return error(StatusCode::BAD_REQUEST, "invalid delete request"),
+    let revision = match expected_revision(&headers) {
+        Ok(revision) => revision,
+        Err(response) => return response,
     };
-    service_response(state.service.delete(&id, payload).await)
+    service_response(state.service.delete_with_revision(&id, revision).await)
+}
+
+fn expected_revision(headers: &HeaderMap) -> Result<Option<u64>, Response> {
+    let values = headers.get_all(header::IF_MATCH);
+    let mut values = values.iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    let revision = value
+        .to_str()
+        .ok()
+        .and_then(|value| value.strip_prefix('"')?.strip_suffix('"'))
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|revision| *revision > 0 && *revision <= i64::MAX as u64);
+    if values.next().is_some() || revision.is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "If-Match must contain one quoted positive revision",
+        ));
+    }
+    Ok(revision)
 }
 
 fn service_response<T: serde::Serialize>(result: Result<T, ServiceError>) -> Response {
@@ -207,14 +269,16 @@ fn service_response<T: serde::Serialize>(result: Result<T, ServiceError>) -> Res
         Ok(value) => Json(value).into_response(),
         Err(ServiceError::Invalid(message)) => error(StatusCode::BAD_REQUEST, &message),
         Err(ServiceError::NotFound) => error(StatusCode::NOT_FOUND, "explanation not found"),
-        Err(ServiceError::Conflict) => error(StatusCode::CONFLICT, "revision conflict"),
+        Err(ServiceError::Conflict) => error(
+            StatusCode::PRECONDITION_FAILED,
+            "explanation changed; refresh the library before trying again",
+        ),
         Err(ServiceError::Storage(_)) => error(StatusCode::INTERNAL_SERVER_ERROR, "storage error"),
     }
 }
 
 async fn websocket(
     State(state): State<HttpState>,
-    headers: HeaderMap,
     upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> Response {
     let upgrade = match upgrade {
@@ -223,7 +287,7 @@ async fn websocket(
     };
     let changes = state.service.subscribe();
     upgrade
-        .on_upgrade(move |socket| invalidations(socket, changes, state.auth, headers))
+        .on_upgrade(move |socket| invalidations(socket, changes))
         .into_response()
 }
 
@@ -234,12 +298,7 @@ async fn send(socket: &mut WebSocket, message: Message) -> bool {
     )
 }
 
-async fn invalidations(
-    mut socket: WebSocket,
-    mut changes: broadcast::Receiver<ChangeEvent>,
-    auth: Auth,
-    headers: HeaderMap,
-) {
+async fn invalidations(mut socket: WebSocket, mut changes: broadcast::Receiver<ChangeEvent>) {
     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
     loop {
         tokio::select! {
@@ -261,7 +320,7 @@ async fn invalidations(
                 }
             }
             _ = heartbeat.tick() => {
-                if !auth.authorized(&headers) || !send(&mut socket, Message::Ping(Vec::new().into())).await { break; }
+                if !send(&mut socket, Message::Ping(Vec::new().into())).await { break; }
             }
         }
     }

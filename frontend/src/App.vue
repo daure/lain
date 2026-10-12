@@ -1,29 +1,29 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue';
 import Button from 'primevue/button';
 import Select from 'primevue/select';
-import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import GraphView from './components/GraphView.vue';
-import DrillLink from './components/DrillLink.vue';
 import ScenarioDetails from './components/ScenarioDetails.vue';
 import DomainView from './components/DomainView.vue';
 import SequenceView from './components/SequenceView.vue';
 import StepInspector from './components/StepInspector.vue';
-import SidebarContext from './components/SidebarContext.vue';
 import StepNavigator from './components/StepNavigator.vue';
 import QuickActionsDialog from './components/QuickActionsDialog.vue';
 import FocusChrome from './components/FocusChrome.vue';
 import FocusBreadcrumb from './components/FocusBreadcrumb.vue';
 import ExplanationLibrary from './components/ExplanationLibrary.vue';
+import Notifications from './components/Notifications.vue';
 import type DiagramViewport from './components/DiagramViewport.vue';
 import { arrowKeyActions, shiftedPanActions, isEditableTarget, quickActions, type QuickActionId } from './quick-actions';
 import { useLibrary } from './library';
 import { useNavigation } from './navigation';
 import { useBrowserNavigation } from './browser-navigation';
 import { diagramLayout } from './layout';
-import { activateDiagramNode, diagramLinkHint, diagramLinks } from './diagram-links';
+import { activateDiagramNode, diagramLinks } from './diagram-links';
 import { useTheme } from './theme';
+import { chartDownloadKey, chartExportUrl, downloadChartUrl } from './chart-download';
+import { viewportStatesKey } from './viewport-state';
 
 const { dark, toggleTheme } = useTheme();
 const toast = useToast();
@@ -35,8 +35,16 @@ const { summaries, active, loading, selecting, error, selectionError, connection
 const navigation = useNavigation();
 const routes = useBrowserNavigation(library, navigation);
 const { scenario, diagram, occurrence, index, history: walkedHistory, scenarioId } = navigation;
+provide(viewportStatesKey, new Map());
+const canvasStateKey = computed(() => `${active.value?.id}/${diagram.value?.id}/${scenario.value?.id}`);
 const tabs = ['Details', 'Diagram', 'Domain'] as const;
 const selectedTab = ref(0);
+provide(chartDownloadKey, async (format, scope) => {
+  if (!active.value || !diagram.value) throw new Error('No chart is available to export.');
+  const url = chartExportUrl(active.value.id, selectedTab.value === 2 ? undefined : diagram.value.id,
+    format, dark.value ? 'dark' : 'light', scope === 'scenario' ? scenarioId.value : undefined);
+  await downloadChartUrl(url);
+});
 const dataOpen = ref(true);
 const dataInspector = ref<InstanceType<typeof StepInspector>>();
 const dataToggleButton = ref<HTMLButtonElement>();
@@ -47,9 +55,9 @@ const activeCanvas = computed(() => selectedTab.value === 1 ? diagramView.value?
 const quickDialog = ref(false);
 const quickActionsDialog = ref<InstanceType<typeof QuickActionsDialog>>();
 const libraryView = ref<InstanceType<typeof ExplanationLibrary>>();
+const notifications = ref<InstanceType<typeof Notifications>>();
 const libraryState = ref({ query: '', selectedId: '', scrollTop: 0 });
-const sidebarContext = ref<InstanceType<typeof SidebarContext>>();
-let sidebarCenterPending = false;
+const scenariosRegion = ref<HTMLElement>();
 const quickButton = ref<HTMLButtonElement>();
 let focusOrigin: HTMLElement | null = null;
 let pendingDialog = false;
@@ -100,15 +108,6 @@ const visitedNodes = computed(() => walkedHistory.value.map(item => item.nodeId)
 const visitedEdges = computed(() => walkedHistory.value.flatMap(item => item.incomingEdgeId ? [item.incomingEdgeId] : []));
 const scenarioNodes = computed(() => scenario.value?.occurrences.map(item => item.nodeId) ?? []);
 const scenarioEdges = computed(() => scenario.value?.occurrences.flatMap(item => item.incomingEdgeId ? [item.incomingEdgeId] : []) ?? []);
-const historyVisitNumbers = computed(() => {
-  const visits = new Map<string, string[]>();
-  for (const item of scenario.value?.occurrences ?? []) {
-    const ids = visits.get(item.nodeId) ?? [];
-    ids.push(item.id);
-    visits.set(item.nodeId, ids);
-  }
-  return new Map([...visits.values()].filter(ids => ids.length > 1).flatMap(ids => ids.map((id, position) => [id, position + 1] as const)));
-});
 const connectionLabel = computed(() => ({ connected: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Not connected' })[connection.value]);
 
 watch(active, (next, previous) => {
@@ -137,12 +136,27 @@ watch(selectionError, message => {
   if (message && active.value) toast.add({ severity: 'error', summary: 'Explanation update failed', detail: `${message} The current view is unchanged.`, life: 6000 });
 });
 watch(scenarioId, (nextScenario, previousScenario) => {
-  const revealScenario = nextScenario !== previousScenario && !sidebarCenterPending;
   if (nextScenario !== previousScenario) { inspectedNodeId.value = ''; pickedOccurrenceId.value = null; }
   void nextTick(() => {
-    if (revealScenario) document.querySelector('.scenario-link.selected')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    const region = scenariosRegion.value;
+    const selected = region?.querySelector<HTMLElement>('.scenario-link.selected');
+    if (!region || !selected) return;
+    const links = [...region.querySelectorAll('.scenario-link')];
+    if (selected === links[0]) region.scrollTop = 0;
+    else if (selected === links.at(-1)) region.scrollTop = Math.max(0, region.scrollHeight - region.clientHeight);
+    else selected.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   });
 });
+watch(scenariosRegion, (region, _, onCleanup) => {
+  if (!region) return;
+  const update = () => region.style.setProperty('--sidebar-scrollbar-width', `${region.offsetWidth - region.clientWidth}px`);
+  const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
+  observer?.observe(region);
+  const nav = region.querySelector('nav');
+  if (nav) observer?.observe(nav);
+  update();
+  onCleanup(() => observer?.disconnect());
+}, { flush: 'post' });
 
 function restoreFocus() {
   if (!active.value) { libraryView.value?.focusSelectedCard(); return; }
@@ -254,7 +268,6 @@ function executeAction(id: QuickActionId, heldKey?: string) {
     if (quickDialog.value) { modalClosing = true; quickDialog.value = false; }
     return;
   }
-  sidebarCenterPending = true;
   if (id === 'H') {
     routes.reset(visualScenarios.value[0]!.id);
     selectTab(0, true);
@@ -265,10 +278,6 @@ function executeAction(id: QuickActionId, heldKey?: string) {
     const target = visualScenarios.value[scenarioPosition.value + (id === 'j' ? 1 : -1)];
     if (target) navigation.selectScenario(target.id);
   }
-  void nextTick(() => {
-    sidebarContext.value?.center(id === 'j' || id === 'k');
-    sidebarCenterPending = false;
-  });
   if (quickDialog.value) { modalClosing = true; quickDialog.value = false; }
 }
 
@@ -317,6 +326,7 @@ function canUseDomainNumbers(target: EventTarget | null) {
 }
 
 function onOwnedKeydown(event: KeyboardEvent) {
+  if (document.querySelector('[data-chart-export-menu]')) return;
   if (event.defaultPrevented || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !canUseDomainNumbers(event.target)) {
     domainView.value?.cancelNumberShortcut();
   } else if (domainView.value?.handleNumberShortcut(event, () => canUseDomainNumbers(document.activeElement))) {
@@ -350,6 +360,7 @@ function onOwnedKeydown(event: KeyboardEvent) {
     return;
   }
   if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'k') {
+    if (hasUnknownModal()) return;
     event.preventDefault(); event.stopPropagation();
     if (!event.repeat) showQuickActions();
     return;
@@ -364,6 +375,7 @@ function onOwnedKeydown(event: KeyboardEvent) {
 }
 
 function onGlobalKeydown(event: KeyboardEvent) {
+  if (document.querySelector('[data-chart-export-menu]')) return;
   const key = arrowKeyActions[event.key] ?? event.key;
   const awaitingFirstEvent = Date.now() < firstEventDeadline;
   firstEventDeadline = 0;
@@ -452,7 +464,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <Toast position="top-right" />
+  <Notifications ref="notifications" :restore="library.restore" />
   <FocusChrome :hidden="focusMode">
   <header class="app-header">
     <h1 v-if="active" class="header-identity">
@@ -463,7 +475,7 @@ onUnmounted(() => {
     </h1>
     <div class="header-actions">
       <span class="connection" role="status"><i :class="['pi', connection === 'connected' ? 'pi-check-circle' : 'pi-circle', connection]" aria-hidden="true" />{{ connectionLabel }}</span>
-      <button ref="quickButton" class="quick-actions-trigger" aria-label="Quick actions" title="Quick actions (Ctrl+K)" @click="showQuickActions"><i class="pi pi-search" aria-hidden="true" /><span>Quick actions</span><kbd>Ctrl K</kbd></button>
+      <button v-if="active" ref="quickButton" class="quick-actions-trigger" aria-label="Quick actions" title="Quick actions (Ctrl+K)" @click="showQuickActions"><i class="pi pi-search" aria-hidden="true" /><span>Quick actions</span><kbd>Ctrl K</kbd></button>
       <button class="theme-toggle" aria-label="Toggle dark mode" :aria-pressed="dark" :title="dark ? 'Switch to light mode' : 'Switch to dark mode'" @click="toggleTheme"><i :class="['pi', dark ? 'pi-sun' : 'pi-moon']" aria-hidden="true" /></button>
     </div>
   </header>
@@ -473,13 +485,12 @@ onUnmounted(() => {
     <FocusBreadcrumb :explanation="active.document.title" :diagram="diagram.title" :scenario="scenario.title" />
   </FocusChrome>
 
-  <ExplanationLibrary v-if="!active" ref="libraryView" v-model:state="libraryState" :summaries="summaries" :loading="loading" :selecting="selecting" :error="error" :selection-error="selectionError" @select="routes.select" @retry="library.retry" />
+  <ExplanationLibrary v-if="!active" ref="libraryView" v-model:state="libraryState" :summaries="summaries" :loading="loading" :selecting="selecting" :error="error" :selection-error="selectionError" :remove="library.remove" @deleted="notifications?.deleted($event)" @select="routes.select" @retry="library.retry" />
 
   <div v-else-if="scenario && diagram && occurrence" :class="['workspace', { 'focus-mode': focusMode }]">
     <FocusChrome class="focus-sidebar-slot" :hidden="focusMode">
-    <aside class="sidebar" aria-label="Scenarios and walked history">
-      <div class="sidebar-scroll scenarios-scroll" tabindex="0" role="region" aria-label="Scenario navigation">
-      <SidebarContext ref="sidebarContext" :diagram="diagram" :scenario="scenario" />
+    <aside class="sidebar" aria-label="Scenarios">
+      <div ref="scenariosRegion" class="sidebar-scroll scenarios-scroll" tabindex="0" role="region" aria-label="Scenario navigation">
       <div class="path-heading"><span class="eyebrow">Scenarios</span></div>
       <nav aria-label="Scenarios">
         <section v-for="group in active.document.diagrams" :key="group.id" :class="['scenario-group', { inactive: group.id !== diagram.id }]" :data-diagram-id="group.id">
@@ -488,25 +499,6 @@ onUnmounted(() => {
         </section>
       </nav>
       </div>
-      <section class="walked-path">
-        <div class="path-heading steps-heading"><span class="eyebrow">Steps</span><span class="muted path-hint">{{ index + 1 }}/{{ scenario.occurrences.length }}</span></div>
-        <div class="sidebar-scroll steps-scroll" tabindex="0" role="region" aria-label="Recorded steps navigation">
-        <ol>
-          <li v-for="(item, position) in scenario.occurrences" :key="item.id" :class="['history-item', { 'current-step': item.id === occurrence.id, 'has-detail': detailLinks.has(item.nodeId) }]">
-            <button :class="['history-link', { current: item.id === occurrence.id, future: position > index, 'has-detail': detailLinks.has(item.nodeId) }]" :aria-current="item.id === occurrence.id ? 'step' : undefined"
-                    :aria-description="detailLinks.has(item.nodeId) ? diagramLinkHint(detailLinks.get(item.nodeId)).slice(2) : undefined"
-                    @click="navigation.selectOccurrence(item.id)" @keydown.enter="activateDiagramNode($event, detailLinks.get(item.nodeId), () => navigation.selectOccurrence(item.id), openDetail)">
-              <span class="history-symbol" aria-hidden="true">{{ position === scenario.occurrences.length - 1 ? (item.id === occurrence.id ? '■' : '□') : item.id === occurrence.id ? '●' : position > index ? '○' : '✓' }}</span>
-              <span class="history-title">{{ diagram.nodes.find(node => node.id === item.nodeId)?.label }}</span>
-              <small><i class="pi pi-bolt" aria-hidden="true" /><span>{{ item.trigger ?? 'No trigger captured' }}</span>
-                <DrillLink v-if="detailLinks.has(item.nodeId)" :link="detailLinks.get(item.nodeId)!" @open="openDetail" />
-              </small>
-              <span v-if="historyVisitNumbers.has(item.id)" class="history-visit-badge" role="img" :aria-label="`Visit ${historyVisitNumbers.get(item.id)}`">{{ historyVisitNumbers.get(item.id) }}</span>
-            </button>
-          </li>
-        </ol>
-        </div>
-      </section>
     </aside>
     </FocusChrome>
 
@@ -521,14 +513,17 @@ onUnmounted(() => {
           <div class="event-tablist" role="tablist" aria-label="Event views" @keydown="onTabKeydown">
             <button v-for="(tab, position) in tabs" :id="`event-tab-${position}`" :key="tab" role="tab" :aria-selected="selectedTab === position" :aria-controls="`event-panel-${position}`" :tabindex="selectedTab === position ? 0 : -1" @click="selectTab(position)">{{ tab }}</button>
           </div>
-          <button ref="dataToggleButton" type="button" class="data-toggle" aria-label="Toggle data inspector" aria-controls="step-inspector" :aria-expanded="dataOpen" title="Toggle data inspector (n)" @click="toggleData"><i class="pi pi-table" aria-hidden="true" />{{ dataOpen ? 'Hide data' : 'Show data' }}<kbd>n</kbd></button>
+          <button ref="dataToggleButton" type="button" class="data-toggle" aria-label="Toggle data inspector" aria-controls="step-inspector" aria-describedby="data-toggle-tooltip" aria-keyshortcuts="n" :aria-expanded="dataOpen" @click="toggleData">
+            <i class="pi pi-table" aria-hidden="true" /><span v-if="!focusMode">{{ dataOpen ? 'Hide data' : 'Show data' }}</span>
+            <span id="data-toggle-tooltip" class="data-toggle-tooltip" role="tooltip">Toggle data panel <span class="data-toggle-shortcut">N</span></span>
+          </button>
           </div>
           <div class="event-workspace">
           <div class="event-panels">
           <ScenarioDetails v-show="selectedTab === 0" id="event-panel-0" role="tabpanel" aria-labelledby="event-tab-0" tabindex="0" :document="active.document" :scenario="scenario" :occurrence="occurrence" />
           <div v-if="selectedTab === 1" id="event-panel-1" class="diagram-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-1" tabindex="0">
-            <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" :links="detailLinks" @inspect="inspectNode" @open="openDetail" />
-            <GraphView v-else-if="graph" ref="diagramView" :key="diagram.id" :layout="graph" :title="diagram.title" :current-node-id="occurrence.nodeId" :current-occurrence-id="`${scenario.id}/${occurrence.id}`" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" :links="detailLinks" interactive @select="inspectNode" @open="openDetail" />
+            <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :state-key="`${canvasStateKey}/diagram`" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" :links="detailLinks" @inspect="inspectNode" @open="openDetail" />
+            <GraphView v-else-if="graph" ref="diagramView" :key="diagram.id" :state-key="`${canvasStateKey}/diagram`" :layout="graph" :title="diagram.title" :scenario-title="scenario.title" :current-node-id="occurrence.nodeId" :current-occurrence-id="`${scenario.id}/${occurrence.id}`" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" :links="detailLinks" interactive @select="inspectNode" @open="openDetail" />
             <div v-if="inspectedNode" class="node-inspector"><h3>{{ inspectedNode.label }}</h3><p class="muted">Entities: {{ inspectedNode.entityIds.map(id => active?.document.domain.entities.find(entity => entity.id === id)?.label).join(', ') || 'None linked' }}</p>
               <p v-if="!nodeOccurrences.length" class="offpath-note">Off this scenario’s path. You can inspect this node, but it has no captured occurrence here. The current event stays unchanged.</p>
               <div v-else-if="nodeOccurrences.length > 1" class="occurrence-picker"><p>This node appears {{ nodeOccurrences.length }} times. Choose an occurrence; each visit has its own snapshots.</p><Select v-model="pickedOccurrenceId" :options="nodeOccurrences" option-label="label" option-value="id" placeholder="Choose a recorded occurrence" aria-label="Recorded occurrence" /><Button label="Go to occurrence" :disabled="!pickedOccurrenceId" @click="pickedOccurrenceId && navigation.selectOccurrence(pickedOccurrenceId)" /></div>
@@ -536,7 +531,7 @@ onUnmounted(() => {
             </div>
           </div>
           <div v-if="selectedTab === 2" id="event-panel-2" class="domain-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-2" tabindex="0">
-            <DomainView ref="domainView" :domain="active.document.domain" :diagram="diagram" :scenario="scenario" :occurrence="occurrence" :selected-entity-id="inspectedEntityId" @select="id => inspectedEntityId = id" @inspect="inspectProperty" />
+            <DomainView ref="domainView" :state-key="`${canvasStateKey}/domain`" :domain="active.document.domain" :diagram="diagram" :scenario="scenario" :occurrence="occurrence" :selected-entity-id="inspectedEntityId" @select="id => inspectedEntityId = id" @inspect="inspectProperty" />
             <div v-if="inspectedEntity" class="node-inspector"><h3>{{ inspectedEntity.label }}</h3><p class="eyebrow">{{ inspectedEntity.id }}</p><dl class="entity-attributes"><template v-for="attribute in inspectedEntity.attributes" :key="attribute.id"><dt>{{ attribute.label }}</dt><dd>{{ attribute.id }}</dd></template></dl>
               <section v-if="inspectedEntity.methods?.length" class="entity-methods" aria-label="Entity methods">
                 <h4>Methods</h4>
@@ -563,9 +558,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.history-link.has-detail{position:relative;padding-right:36px}
-.history-link.has-detail small{position:relative}
-.history-link small > .drill-link{position:absolute;right:-28px;top:50%;transform:translateY(-50%)}
 .entity-methods{border-top:1px solid var(--line);margin-top:16px;padding-top:16px}
 .entity-methods h4{margin:0 0 12px}
 .entity-method{margin-bottom:16px;overflow-wrap:anywhere}

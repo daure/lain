@@ -138,8 +138,9 @@ it('underlines matching first digits and confirms by Enter, a second digit, or e
     expect(viewport.dataset.fitted).toBe('false');
     expect(viewport.dataset.scale).toBe(scale);
     const [x, y] = entity(10).getAttribute('transform')!.match(/[\d.]+/g)!.map(Number);
-    const centerX = 320 + (x! + 160) * Number(scale) - scroller.scrollLeft;
-    const centerY = 180 + (y! + Number(entity(10).querySelector('.domain-entity-surface')!.getAttribute('height')) / 2) * Number(scale) - scroller.scrollTop;
+    const content = viewport.querySelector<HTMLElement>('.viewport-content')!;
+    const centerX = parseFloat(content.style.left) + (x! + 160) * Number(scale) - scroller.scrollLeft;
+    const centerY = parseFloat(content.style.top) + (y! + Number(entity(10).querySelector('.domain-entity-surface')!.getAttribute('height')) / 2) * Number(scale) - scroller.scrollTop;
     expect(centerX).toBeGreaterThanOrEqual(20);
     expect(centerX).toBeLessThanOrEqual(620);
     expect(centerY).toBeGreaterThanOrEqual(20);

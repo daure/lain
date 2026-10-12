@@ -10,7 +10,7 @@ const nodeLabels = computed(() => new Map(props.diagram.nodes.map(node => [node.
 const current = computed(() => props.scenario.occurrences[props.index]!);
 const currentLabel = computed(() => nodeLabels.value.get(current.value.nodeId) ?? current.value.nodeId);
 const trigger = computed(() => current.value.trigger ?? 'No trigger captured');
-const stepNumber = (position: number) => String(position + 1).padStart(2, '0');
+const stepCounter = (position: number) => `${position + 1}/${props.scenario.occurrences.length}`;
 const steps = computed(() => {
   const start = Math.max(0, props.index - 2);
   return props.scenario.occurrences.slice(start, props.index + 3).map((occurrence, offset) => ({
@@ -25,7 +25,7 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
 
 <template>
   <nav class="step-navigator" aria-label="Recorded steps">
-    <p class="step-announcement" role="status" aria-atomic="true">Occurrence {{ stepNumber(index) }} / {{ stepNumber(scenario.occurrences.length - 1) }} · Current · {{ currentLabel }} · {{ trigger }}</p>
+    <p class="step-announcement" role="status" aria-atomic="true">Occurrence {{ stepCounter(index) }} · Current · {{ currentLabel }} · {{ trigger }}</p>
     <div class="step-rail">
       <div class="step-runway" aria-hidden="true" />
       <div class="step-lens" aria-hidden="true" />
@@ -33,7 +33,7 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
                :class="['step-tile', { 'is-current': step.offset === 0, 'is-visible': Math.abs(step.offset) <= 1, 'has-detail': links?.has(step.occurrence.nodeId) }]"
               :style="{ transform: `translateX(${(step.offset + 1) * 100}%)` }"
               :data-occurrence-id="step.occurrence.id"
-               :aria-label="`${role(step.offset)} step: ${step.label} (occurrence ${stepNumber(step.position)} / ${stepNumber(scenario.occurrences.length - 1)})${diagramLinkHint(links?.get(step.occurrence.nodeId))}`"
+                :aria-label="`${role(step.offset)} step: ${step.label} (occurrence ${stepCounter(step.position)})${diagramLinkHint(links?.get(step.occurrence.nodeId))}`"
               :aria-current="step.offset === 0 ? 'step' : undefined"
                :aria-disabled="step.offset === 0 && !links?.get(step.occurrence.nodeId)?.scenarioId ? 'true' : undefined"
               :aria-hidden="Math.abs(step.offset) > 1 ? 'true' : undefined"
@@ -43,7 +43,7 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
         <span class="step-heading">
           <span class="step-marker" aria-hidden="true">{{ step.position === scenario.occurrences.length - 1 ? (step.offset === 0 ? '■' : '□') : step.offset === 0 ? '●' : step.offset < 0 ? '✓' : '○' }}</span>
           <span class="step-title" :title="step.label" :role="step.offset === 0 ? 'heading' : undefined" :aria-level="step.offset === 0 ? 2 : undefined">
-            <span class="step-number">{{ stepNumber(step.position) }}</span>
+            <span class="step-number">{{ stepCounter(step.position) }}</span>
             <span class="step-label">{{ step.label }}</span>
           </span>
         </span>
@@ -61,7 +61,7 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
 .step-rail{position:relative;height:84px;overflow:hidden;isolation:isolate;border-radius:12px}
 .step-runway{position:absolute;inset:16px 0;background:var(--soft);border-radius:8px}
 .step-lens{position:absolute;top:6px;bottom:6px;left:calc(100% / 3 + 8px);width:calc(100% / 3 - 16px);border:1px solid #a9bee3;border-radius:12px;background:linear-gradient(180deg,#f4f8ff,#e1ebfd);box-shadow:0 6px 16px #192e4912}
-.step-tile{position:absolute;top:0;left:0;width:calc(100% / 3);height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-width:0;padding:4px 18px;border:0;border-radius:12px;background:transparent;color:var(--muted);opacity:0;pointer-events:none;transition:transform .3s cubic-bezier(.22,.68,0,1),opacity .3s ease,color .3s ease}
+.step-tile{position:absolute;top:0;left:0;width:calc(100% / 3);height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-width:0;padding:4px 18px;border:0;border-radius:12px;background:transparent;color:var(--muted);opacity:0;pointer-events:none;will-change:transform;transition:transform .3s cubic-bezier(.22,.68,0,1),opacity .3s ease,color .3s ease}
 .step-tile.is-visible{opacity:1;pointer-events:auto}
 .step-tile.is-current{color:var(--text);pointer-events:none}
 .step-tile.is-visible:not(.is-current):hover{color:var(--text);background:color-mix(in srgb,var(--blue) 7%,transparent)}
@@ -69,7 +69,7 @@ const role = (offset: number) => offset < 0 ? 'Previous' : offset > 0 ? 'Next' :
 .step-tile.is-current.has-detail{pointer-events:auto}
 .step-trigger .drill-link{position:absolute;right:0;top:50%;transform:translateY(-50%);pointer-events:auto}
 .step-tile.has-detail .step-trigger{position:relative;padding-right:20px}
-.step-heading{display:flex;align-items:center;justify-content:center;gap:5px;flex:0 1 auto;min-width:0;min-height:0;max-width:100%;transform:scale(.8);transition:transform .3s cubic-bezier(.22,.68,0,1)}
+.step-heading{display:flex;align-items:center;justify-content:center;gap:5px;flex:0 1 auto;min-width:0;min-height:0;max-width:100%;transform:scale(.8);will-change:transform;transition:transform .3s cubic-bezier(.22,.68,0,1)}
 .is-current .step-heading{transform:scale(1)}
 .step-marker{display:grid;place-items:center;flex-shrink:0;width:24px;height:24px;font-size:12px;color:var(--text);border-radius:6px}
 .is-current .step-marker{font-size:10px}

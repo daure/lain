@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "title": "Order lifecycle",
-   "description": "Follow payment callbacks through capture, duplicate acknowledgement, and issuer decline. Walk parcels through first-attempt delivery, redelivery, and return to sender. Inspect the three payment exchanges as ordered messages with concrete recorded state. The synthetic shared domain groups commerce entities, API DTOs, and an external payment gateway; gateway and DTO definitions illustrate integration boundaries without captured instances.",
+  "description": "An order moves through payment, packing, and delivery. Scenarios cover repeated payment notices, declined payments, delivery retries, and returns. See how saved payment records prevent duplicate work and how parcel records retain failed attempts and final delivery or return outcomes.",
   "domain": {
     "entities": [
       { "id": "order", "label": "Order", "attributes": [{ "id": "number", "label": "Order number" }, { "id": "paymentStatus", "label": "Payment status" }, { "id": "total", "label": "Total (EUR)" }], "methods": [
@@ -159,24 +159,58 @@
     {
       "id": "payment-capture-sequence", "title": "Payment capture exchange", "kind": "sequence",
       "nodes": [
-        { "id": "capture-payment", "label": "Capture authorized payment", "entityIds": ["payment"], "detailDiagramId": "payment-capture-flow" },
-        { "id": "mark-order-paid", "label": "Mark order paid", "entityIds": ["order"] }
+        { "id": "capture-payment", "label": "Capture the authorized payment", "entityIds": ["payment"], "detailDiagramId": "payment-capture-flow" },
+        { "id": "mark-order-paid", "label": "Mark the order paid", "entityIds": ["order"] }
       ],
       "edges": [{ "id": "capture-mark-paid", "sourceNodeId": "capture-payment", "targetNodeId": "mark-order-paid", "label": "Capture succeeds" }],
       "sequence": {
-        "participants": [{ "id": "service", "label": "Payment service" }, { "id": "payment", "label": "Payment" }, { "id": "order", "label": "Order" }],
+        "participants": [{ "id": "service", "label": "Order payment application service" }, { "id": "payment", "label": "Authorized customer payment awaiting settlement and capture" }, { "id": "order", "label": "Order" }],
         "messages": [
           { "nodeId": "capture-payment", "fromParticipantId": "service", "toParticipantId": "payment" },
           { "nodeId": "mark-order-paid", "fromParticipantId": "service", "toParticipantId": "order" }
         ],
         "body": [{ "kind": "message", "nodeId": "capture-payment" }, { "kind": "message", "nodeId": "mark-order-paid" }]
       }
+    },
+    {
+      "id": "dispatch-preparation-flow", "title": "Dispatch preparation", "kind": "flow",
+      "groups": [
+        { "id": "dispatch-intake", "label": "Dispatch intake", "nodeIds": ["start", "scan", "prepare", "save"] },
+        { "id": "packing", "label": "Priority packing", "nodeIds": ["priority", "pack", "invoice", "documents"] },
+        { "id": "dispatch", "label": "Carrier dispatch", "nodeIds": ["wait", "notify", "end"] }
+      ],
+      "nodes": [
+        { "id": "start", "label": "Begin dispatch preparation", "entityIds": ["fulfillment"], "role": "start" },
+        { "id": "scan", "label": "Scan packing request", "entityIds": ["fulfillment"], "role": "inputOutput" },
+        { "id": "prepare", "label": "Prepare workstation", "entityIds": ["fulfillment"], "role": "preparation" },
+        { "id": "save", "label": "Save dispatch work", "entityIds": ["fulfillment"], "role": "database" },
+        { "id": "priority", "label": "Expedite priority order", "entityIds": ["fulfillment"], "role": "priorityAction" },
+        { "id": "pack", "label": "Pack parcel by hand", "entityIds": ["fulfillment"], "role": "manualOperation" },
+        { "id": "invoice", "label": "Create invoice", "entityIds": ["fulfillment"], "role": "document" },
+        { "id": "documents", "label": "Print dispatch documents", "entityIds": ["fulfillment"], "role": "multiDocument" },
+        { "id": "wait", "label": "Wait for carrier", "entityIds": ["fulfillment"], "role": "delay" },
+        { "id": "notify", "label": "Send dispatch notice", "entityIds": ["fulfillment"], "role": "outputInput" },
+        { "id": "end", "label": "Dispatch preparation complete", "entityIds": ["fulfillment"], "role": "end" }
+      ],
+      "edges": [
+        { "id": "start-scan", "sourceNodeId": "start", "targetNodeId": "scan", "label": "Request available" },
+        { "id": "scan-prepare", "sourceNodeId": "scan", "targetNodeId": "prepare", "label": "Request scanned" },
+        { "id": "prepare-save", "sourceNodeId": "prepare", "targetNodeId": "save", "label": "Workstation ready" },
+        { "id": "save-priority", "sourceNodeId": "save", "targetNodeId": "priority", "label": "Work saved" },
+        { "id": "priority-pack", "sourceNodeId": "priority", "targetNodeId": "pack", "label": "Priority confirmed" },
+        { "id": "pack-invoice", "sourceNodeId": "pack", "targetNodeId": "invoice", "label": "Parcel packed" },
+        { "id": "invoice-documents", "sourceNodeId": "invoice", "targetNodeId": "documents", "label": "Invoice ready" },
+        { "id": "documents-wait", "sourceNodeId": "documents", "targetNodeId": "wait", "label": "Documents printed" },
+        { "id": "carrier-wait", "sourceNodeId": "wait", "targetNodeId": "wait", "label": "Carrier still pending" },
+        { "id": "wait-notify", "sourceNodeId": "wait", "targetNodeId": "notify", "label": "Carrier arrives" },
+        { "id": "notify-end", "sourceNodeId": "notify", "targetNodeId": "end", "label": "Notice sent" }
+      ]
     }
   ],
   "scenarios": [
     {
-      "id": "successful-callback", "title": "Successful callback", "diagramId": "payment-flow",
-      "description": "In this synthetic example, a gateway sends a new authorized-payment callback for pending order ORD-1042. The service verifies the receipt, captures EUR 89.90, and queues one fulfillment item. The recording ends with the order paid and ready for packing.",
+      "id": "successful-callback", "title": "New payment queues fulfillment", "diagramId": "payment-flow",
+      "description": "In this synthetic example, a gateway sends a new authorized-payment callback for pending order ORD-1042. The service verifies the receipt, captures EUR 89.90, and queues one fulfillment item. The recording ends with the order paid and ready for packing.\n\nThe shared domain groups commerce records, payment messages, and an external payment gateway. Gateway and message definitions illustrate integration boundaries; their instances are outside this recording’s captured state.",
       "occurrences": [
         {
           "id": "success-received", "nodeId": "callback", "incomingEdgeId": null,
@@ -244,7 +278,7 @@
       ]
     },
     {
-      "id": "duplicate-callback", "title": "Duplicate callback", "diagramId": "payment-flow",
+      "id": "duplicate-callback", "title": "Repeated callback keeps one fulfillment", "diagramId": "payment-flow",
       "description": "In this synthetic example, the gateway retries event evt_481 after its payment and fulfillment work have been recorded. The service reads and verifies the handled receipt, then acknowledges the retry with HTTP 200. The paid order retains exactly one fulfillment item.",
       "occurrences": [
         {
@@ -337,7 +371,7 @@
       ]
     },
     {
-      "id": "declined-payment", "title": "Declined payment", "diagramId": "payment-flow",
+      "id": "declined-payment", "title": "Declined payment stops fulfillment", "diagramId": "payment-flow",
       "description": "In this synthetic example, the issuer declines the payment for pending order ORD-1043 because funds are insufficient. The service checks the new receipt, records the decline, and acknowledges the callback. The recording ends with a declined order and no fulfillment work.",
       "occurrences": [
         {
@@ -388,7 +422,7 @@
       ]
     },
     {
-      "id": "parcel-delivered", "title": "Parcel delivered", "diagramId": "shipment-state",
+      "id": "parcel-delivered", "title": "First delivery closes fulfillment", "diagramId": "shipment-state",
       "description": "In this synthetic example, Rotterdam packs paid order ORD-1042 for Utrecht. DemoParcel collects and delivers the parcel on the first attempt. The queue closes the fulfillment item, while the order keeps a durable link to the delivered shipment.",
       "occurrences": [
         {
@@ -453,7 +487,7 @@
       ]
     },
     {
-      "id": "sequence-successful-callback", "title": "Successful payment exchange", "diagramId": "payment-sequence",
+      "id": "sequence-successful-callback", "title": "New payment exchange queues fulfillment", "diagramId": "payment-sequence",
       "description": "This synthetic exchange follows a new authorized-payment callback between the gateway, payment service, receipt store, and fulfillment queue. Receipt verification permits capture and fulfillment. The recording ends with order ORD-1042 paid and one work item queued.",
       "occurrences": [
         {
@@ -520,7 +554,7 @@
       ]
     },
     {
-      "id": "delivery-retry", "title": "Delivery after redelivery", "diagramId": "shipment-state",
+      "id": "delivery-retry", "title": "Retry delivers the parcel", "diagramId": "shipment-state",
       "description": "In this synthetic example, DemoParcel cannot deliver the Utrecht parcel because the recipient is unavailable. The recipient schedules redelivery and the parcel revisits In transit before delivery on the second attempt. Closing fulfillment retains both attempts and the delivery timestamp on the shipment.",
       "occurrences": [
         {
@@ -616,7 +650,7 @@
       ]
     },
     {
-      "id": "returned-to-sender", "title": "Returned to sender", "diagramId": "shipment-state",
+      "id": "returned-to-sender", "title": "Declined redelivery returns the parcel", "diagramId": "shipment-state",
       "description": "In this synthetic example, the recipient is unavailable for delivery and declines redelivery. DemoParcel returns the parcel to Rotterdam and the queue closes its fulfillment item. The order retains the returned shipment; this recording covers parcel handling and contains no refund event.",
       "occurrences": [
         {
@@ -697,7 +731,7 @@
       ]
     },
     {
-      "id": "sequence-duplicate-callback", "title": "Duplicate payment exchange", "diagramId": "payment-sequence",
+      "id": "sequence-duplicate-callback", "title": "Repeated payment exchange keeps one fulfillment", "diagramId": "payment-sequence",
       "description": "This synthetic exchange follows a gateway retry of handled event evt_481. The payment service reads the receipt twice through the verification loop, then acknowledges the duplicate. The existing payment and single fulfillment item remain intact.",
       "occurrences": [
         {
@@ -788,7 +822,7 @@
       ]
     },
     {
-      "id": "sequence-declined-payment", "title": "Declined payment exchange", "diagramId": "payment-sequence",
+      "id": "sequence-declined-payment", "title": "Declined payment exchange stops fulfillment", "diagramId": "payment-sequence",
       "description": "This synthetic exchange follows an issuer-declined callback for order ORD-1043. The payment service verifies a new receipt and takes the insufficient-funds branch. The recording ends with the decline acknowledged and no fulfillment item created.",
       "occurrences": [
         {
@@ -839,7 +873,7 @@
       ]
     },
     {
-      "id": "capture-authorized-payment", "title": "Capture and mark paid", "diagramId": "payment-capture-flow",
+      "id": "capture-authorized-payment", "title": "Authorized payment marks order paid", "diagramId": "payment-capture-flow",
       "description": "This synthetic detail recording expands payment capture for ORD-1042 into two actions. Payment pay-72 starts pending with an authorized amount of EUR 89.90. The service captures it, then marks the order paid.\n\nOnly the order and payment are captured here. Receipt acknowledgement and fulfillment queuing belong to the surrounding callback recording.",
       "occurrences": [
         {
@@ -873,7 +907,7 @@
       ]
     },
     {
-      "id": "capture-payment-exchange", "title": "Capture interaction", "diagramId": "payment-capture-sequence",
+      "id": "capture-payment-exchange", "title": "Captured payment marks the order paid", "diagramId": "payment-capture-sequence",
       "description": "This synthetic sequence shows the payment service capturing pay-72 and then marking ORD-1042 paid. It expands the capture message from the callback sequence into the two domain operations.\n\nThe recording captures order and payment state only, and ends with a captured payment and paid order. The linked flow presents these operations as ordered actions.",
       "occurrences": [
         {
@@ -903,6 +937,84 @@
             { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
             { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } }
           ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] }
+        }
+      ]
+    },
+    {
+      "id": "priority-order-dispatch", "title": "Priority order packed and dispatched", "diagramId": "dispatch-preparation-flow",
+      "description": "In this synthetic example, a Rotterdam warehouse operator scans a priority packing request, prepares the workstation, and saves the dispatch work. The operator packs the parcel and prints its invoice and dispatch documents. Two recorded carrier checks retain separate snapshots. The recording ends after the carrier arrives and the dispatch notice is sent. Only one fulfillment work item is captured.",
+      "occurrences": [
+        {
+          "id": "dispatch-start", "nodeId": "start", "incomingEdgeId": null, "trigger": "Packing request queued",
+          "narration": "The warehouse receives a priority packing request. Work item ful-shape-demo is queued in Rotterdam.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-scan", "nodeId": "scan", "incomingEdgeId": "start-scan", "trigger": "Barcode scanned",
+          "narration": "The scanner reads the packing request. The input/output parallelogram marks data entering the workflow, and the work item becomes received.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "received", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-prepare", "nodeId": "prepare", "incomingEdgeId": "scan-prepare", "trigger": "Workstation configured",
+          "narration": "The operator prepares the packing workstation. The preparation hexagon marks setup before processing the parcel.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "received", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "prepared", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-save", "nodeId": "save", "incomingEdgeId": "prepare-save", "trigger": "Dispatch work persisted",
+          "narration": "The system saves the prepared dispatch work. The database cylinder describes persistent storage; the recorded work stage becomes stored.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "prepared", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "stored", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-priority", "nodeId": "priority", "incomingEdgeId": "save-priority", "trigger": "Priority request selected",
+          "narration": "The operator selects this work for expedited handling. The bottom-wide trapezoid marks prioritized work, and the captured stage becomes priority.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "stored", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "priority", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-pack", "nodeId": "pack", "incomingEdgeId": "priority-pack", "trigger": "Operator seals the parcel",
+          "narration": "The operator packs and seals the parcel by hand. The top-wide trapezoid describes a human-performed operation, and the work item becomes packed.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "priority", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-invoice", "nodeId": "invoice", "incomingEdgeId": "pack-invoice", "trigger": "Invoice generated",
+          "narration": "The system creates one invoice for the packed parcel. The document shape describes that single sheet, and the work stage becomes invoiced.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "invoiced", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-documents", "nodeId": "documents", "incomingEdgeId": "invoice-documents", "trigger": "Document bundle printed",
+          "narration": "The operator prints the invoice, packing slip, and carrier paperwork. Stacked document sheets describe the bundle, and the work becomes documentsReady.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "invoiced", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "documentsReady", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-first-wait", "nodeId": "wait", "incomingEdgeId": "documents-wait", "trigger": "Carrier pickup pending",
+          "narration": "The parcel and documents are ready, but the carrier has not arrived. The D-shaped delay marks this recorded wait, and the work becomes waiting.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "documentsReady", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "waiting", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-second-wait", "nodeId": "wait", "incomingEdgeId": "carrier-wait", "trigger": "Second carrier check",
+          "narration": "A second check finds the carrier still pending. This separate occurrence revisits the same delay node with unchanged captured values.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "waiting", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "waiting", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-notify", "nodeId": "notify", "incomingEdgeId": "wait-notify", "trigger": "Carrier arrives",
+          "narration": "The carrier arrives and the system sends the dispatch notice. The reversed input/output parallelogram describes outgoing data, and the work becomes notified.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "waiting", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "notified", "warehouse": "Rotterdam" } }], "links": [] }
+        },
+        {
+          "id": "dispatch-complete", "nodeId": "end", "incomingEdgeId": "notify-end", "trigger": "Parcel handed to carrier",
+          "narration": "The operator hands the prepared parcel to the carrier. The work item becomes dispatched, and the pill-shaped terminator marks the recording's completion.",
+          "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "notified", "warehouse": "Rotterdam" } }], "links": [] },
+          "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } }], "links": [] }
         }
       ]
     }

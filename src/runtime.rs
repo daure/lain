@@ -21,7 +21,6 @@ const UNIT_MARKER: &str = "# Managed by lain setup.\n";
 pub struct Runtime {
     pub home: PathBuf,
     pub port: u16,
-    pub token: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -59,18 +58,6 @@ impl Runtime {
             serde_json::from_str(&load_or_create(&config_path, &initial_config, 4096)?)
                 .context("invalid runtime config.json")?;
         ensure!(config.port != 0, "saved port must be greater than zero");
-        let token_path = home.join("token");
-        let token = load_or_create(&token_path, &new_token(), 256)?;
-        let token = token.trim_end_matches('\n').to_owned();
-        ensure!(
-            token.len() >= 32
-                && token.len() <= 128
-                && token
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
-            "invalid credential file: {}",
-            token_path.display()
-        );
         for filename in ["lain.sqlite", "lain.sqlite-wal", "lain.sqlite-shm"] {
             let path = home.join(filename);
             match fs::symlink_metadata(&path) {
@@ -86,7 +73,6 @@ impl Runtime {
         Ok(Self {
             home,
             port: port.unwrap_or(config.port),
-            token,
         })
     }
 
@@ -178,19 +164,14 @@ impl Runtime {
             "$schema": "https://opencode.ai/config.json",
             "mcp": {"servers": {"lain": {
             "type": "remote", "url": format!("{}/mcp", self.base_url()),
-            "oauth": false, "protocol": "legacy",
-            "headers": {"Authorization": "Bearer {env:LAIN_TOKEN}"}
+            "oauth": false, "protocol": "legacy"
         }}}});
         println!(
-            "OpenCode V2 client settings (merge manually; never paste the credential):\n{}",
+            "OpenCode V2 client settings (merge manually):\n{}",
             serde_json::to_string_pretty(&settings)?
         );
         println!(
-            "Set LAIN_TOKEN in your agent client's environment from {}. Do not put it in the service unit.",
-            self.home.join("token").display()
-        );
-        println!(
-            "Agent instructions: Publish captured snapshots only. Redact secrets before publication. Preserve occurrence IDs across revisits. Read the current revision before replacing a document; resolve conflicts instead of overwriting. Use schemaVersion 1 and validate every reference."
+            "Agent instructions: Call get_context first for authoring guidance and the current explanation index. Discover the document schema through publish_explanation."
         );
         println!(
             "The user service starts at login. For pre-login startup, ask your administrator about loginctl enable-linger; setup does not enable it."
@@ -202,7 +183,7 @@ impl Runtime {
         let deadline = Instant::now() + Duration::from_secs(10);
         let address = SocketAddr::from(([127, 0, 0, 1], self.port));
         while Instant::now() < deadline {
-            if authenticated_ready(address, &self.token)? {
+            if daemon_ready(address) {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(100));
@@ -221,7 +202,9 @@ impl Runtime {
             return Ok(());
         }
         let original = fs::symlink_metadata(&path)?;
-        let temporary_path = self.home.join(format!(".config.{}.tmp", new_token()));
+        let temporary_path = self
+            .home
+            .join(format!(".config.{}.tmp", temporary_suffix()));
         let mut temporary = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -333,7 +316,7 @@ fn read_private_file(path: &Path, limit: u64) -> Result<String> {
     Ok(text)
 }
 
-fn new_token() -> String {
+fn temporary_suffix() -> String {
     let bytes: [u8; 32] = rand::rng().random();
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -411,14 +394,14 @@ fn run_systemctl(arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn authenticated_ready(address: SocketAddr, token: &str) -> Result<bool> {
+fn daemon_ready(address: SocketAddr) -> bool {
     let check = || -> Result<Option<u16>> {
         let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(300))?;
         stream.set_read_timeout(Some(Duration::from_millis(300)))?;
         stream.set_write_timeout(Some(Duration::from_millis(300)))?;
         write!(
             stream,
-            "GET /api/explanations HTTP/1.0\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+            "GET /api/explanations HTTP/1.0\r\nHost: {address}\r\nConnection: close\r\n\r\n"
         )?;
         use std::io::BufRead;
         let mut response = String::new();
@@ -450,13 +433,7 @@ fn authenticated_ready(address: SocketAddr, token: &str) -> Result<bool> {
             }
         }
     };
-    match check().unwrap_or(None) {
-        Some(200) => Ok(true),
-        Some(401) => bail!(
-            "daemon rejected this home's credential; another home's service may be using this port. Choose --port and retry setup"
-        ),
-        _ => Ok(false),
-    }
+    check().unwrap_or(None) == Some(200)
 }
 
 #[cfg(test)]

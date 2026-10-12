@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { access } from 'node:fs/promises';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
@@ -94,15 +95,31 @@ async function free(port) {
   });
 }
 
+async function skipOccupied(t) {
+  if (!(await free(38475)) || !(await free(5173))) {
+    t.skip('Development ports 38475/5173 are occupied; existing listeners must stay untouched.');
+    return true;
+  }
+  return false;
+}
+
+async function hasWatcher() {
+  for (const directory of process.env.PATH.split(':')) {
+    try { await access(resolve(directory, 'watchexec'), 1); return true; }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'EACCES') throw error; }
+  }
+  return false;
+}
+
 async function request(base, path, options = {}) {
   return fetch(`${base}${path}`, { ...options, signal: AbortSignal.timeout(5_000) });
 }
 
-async function rpc(token, message) {
+async function rpc(message) {
   const response = await request(backend, '/mcp', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+      'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-03-26',
     },
     body: JSON.stringify(message),
@@ -147,9 +164,11 @@ async function ready(running) {
   }
 }
 
-test('npm start serves authenticated Rust, Vite and MCP, preserves data, and owns server lifetimes', {
+test('npm start serves local Rust, Vite and MCP, preserves data, and owns server lifetimes', {
   timeout: 540_000,
-}, async () => {
+}, async t => {
+  if (await skipOccupied(t)) return;
+  if (!(await hasWatcher())) return t.skip('Watchexec is required for the real npm start integration test.');
   const temporary = await mkdtemp('/tmp/opencode/lain-dev-start-');
   const home = resolve(temporary, 'state');
   let running;
@@ -158,54 +177,36 @@ test('npm start serves authenticated Rust, Vite and MCP, preserves data, and own
     assert.equal(await free(5173), true, 'test needs free Vite port 5173');
     running = launch('npm', ['start'], project, { LAIN_DEV_HOME: home });
     await ready(running);
-    const token = (await readFile(resolve(home, 'token'), 'utf8')).trim();
-    assert.ok(!running.output().includes(token), 'bearer credential stays out of launcher logs');
-    const authorization = { Authorization: `Bearer ${token}` };
-    assert.equal((await request(backend, '/api/explanations')).status, 401);
-    assert.equal((await request(viewer, '/api/explanations')).status, 401);
-    const listed = await request(backend, '/api/explanations', { headers: authorization });
+    const listed = await request(backend, '/api/explanations');
     assert.deepEqual((await listed.json()).map(item => [item.id, item.revision]), [['order-lifecycle', 1]]);
     const page = await request(viewer, '/');
     assert.match(await page.text(), /\/@vite\/client/);
 
-    const url = new URL(running.output().match(/Open within 60 seconds: (http:\/\/\S+)/)[1]);
+    const url = new URL(running.output().match(/Open: (http:\/\/\S+)/)[1]);
     assert.equal(url.origin, viewer);
     assert.equal(url.search, '');
-    const code = new URLSearchParams(url.hash.slice(1)).get('launch');
-    const sessionOptions = {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: viewer },
-      body: JSON.stringify({ code }),
-    };
-    const session = await request(viewer, '/api/session', sessionOptions);
-    assert.equal(session.status, 200);
-    const cookie = session.headers.get('set-cookie');
-    assert.match(cookie, /lain_session_38475=/);
-    assert.match(cookie, /HttpOnly/);
-    const browserHeaders = { Cookie: cookie.split(';')[0], Origin: viewer };
-    const proxied = await request(viewer, '/api/explanations', { headers: browserHeaders });
+    const proxied = await request(viewer, '/api/explanations', { headers: { Origin: viewer } });
     assert.equal(proxied.status, 200);
     assert.equal((await proxied.json())[0].id, 'order-lifecycle');
-    assert.equal((await request(viewer, '/api/session', sessionOptions)).status, 401);
-    assert.equal((await request(backend, '/mcp', { method: 'POST' })).status, 401);
 
-    const initialized = await rpc(token, {
+    const initialized = await rpc({
       jsonrpc: '2.0', id: 1, method: 'initialize', params: {
         protocolVersion: '2025-03-26', capabilities: {},
         clientInfo: { name: 'dev-start-test', version: '1' },
       },
     });
     assert.ok(initialized.result.capabilities.tools);
-    await rpc(token, { jsonrpc: '2.0', method: 'notifications/initialized' });
-    const tools = await rpc(token, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     assert.deepEqual(tools.result.tools.map(tool => tool.name).sort(),
-      ['delete_explanation', 'get_explanation', 'list_explanations', 'publish_explanation']);
+      ['delete_explanation', 'get_context', 'get_explanation', 'list_explanations', 'publish_explanation']);
 
-    const stored = await request(backend, '/api/explanations/order-lifecycle', { headers: authorization });
+    const stored = await request(backend, '/api/explanations/order-lifecycle');
     const document = (await stored.json()).document;
     document.title = 'Preserved development data';
     const updated = await request(backend, '/api/explanations/order-lifecycle', {
-      method: 'PUT', headers: { ...authorization, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedRevision: 1, document }),
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document }),
     });
     assert.equal(updated.status, 200);
 
@@ -220,8 +221,7 @@ test('npm start serves authenticated Rust, Vite and MCP, preserves data, and own
     // Starting outside the checkout still uses project-relative builds and state selection.
     running = launch(process.execPath, [launcher], temporary, { LAIN_DEV_HOME: home });
     await ready(running);
-    assert.ok((await readFile(resolve(home, 'token'), 'utf8')).trim() === token);
-    const preserved = await request(backend, '/api/explanations', { headers: authorization });
+    const preserved = await request(backend, '/api/explanations');
     assert.deepEqual((await preserved.json()).map(item => [item.title, item.revision]),
       [['Preserved development data', 2]]);
     assert.ok(!running.output().includes('Published order-lifecycle'));
@@ -255,6 +255,7 @@ test('npm start serves authenticated Rust, Vite and MCP, preserves data, and own
 test('occupied development ports fail without stopping their listeners or creating runtime state', {
   timeout: 30_000,
 }, async t => {
+  if (await skipOccupied(t)) return;
   for (const port of [38475, 5173]) {
     await t.test(`occupied loopback port ${port}`, async () => {
       const temporary = await mkdtemp('/tmp/opencode/lain-dev-occupied-');
@@ -271,7 +272,7 @@ test('occupied development ports fail without stopping their listeners or creati
         assert.match(running.output(), /no existing process was stopped/);
         assert.equal(listener.listening, true);
         assert.equal(await free(port), false);
-        await assert.rejects(readFile(resolve(temporary, 'token')), { code: 'ENOENT' });
+        await assert.rejects(readFile(resolve(temporary, 'config.json')), { code: 'ENOENT' });
       } finally {
         if (running) await dispose(running);
         await new Promise(accept => listener.close(accept));
@@ -284,6 +285,7 @@ test('occupied development ports fail without stopping their listeners or creati
 test('build failures and interrupts clean npm descendants even when descendants ignore SIGTERM', {
   timeout: 30_000,
 }, async t => {
+  if (await skipOccupied(t)) return;
   for (const mode of ['failure', 'interrupt']) {
     await t.test(mode, async () => {
       const temporary = await mkdtemp('/tmp/opencode/lain-dev-build-');
@@ -330,6 +332,7 @@ setInterval(() => {}, 1000);
 test('shutdown signals only live build groups after completed groups become extinct', {
   timeout: 30_000,
 }, async t => {
+  if (await skipOccupied(t)) return;
   for (const mode of ['immediate', 'delayed', 'spawn-error']) {
     await t.test(mode, async () => {
       const temporary = await mkdtemp('/tmp/opencode/lain-dev-retire-');

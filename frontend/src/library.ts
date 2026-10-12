@@ -1,12 +1,13 @@
 import { ref, shallowRef } from 'vue';
-import type { ChangeEvent, ExplanationSummary, StoredExplanation } from './model';
+import type { ChangeEvent, Explanation, ExplanationSummary, StoredExplanation } from './model';
+
+export type DeletedExplanation = { id: string; document: Explanation; revision: number };
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...options, credentials: 'same-origin' });
+  const response = await fetch(path, options);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: unknown } | null;
-    const message = response.status === 401 ? 'Browser session expired. Run “lain open” to open a new session.'
-      : typeof body?.error === 'string' ? body.error : `Request failed (${response.status}).`;
+    const message = typeof body?.error === 'string' ? body.error : `Request failed (${response.status}).`;
     throw new Error(message);
   }
   const body = await response.text();
@@ -83,7 +84,7 @@ export function useLibrary() {
     try {
       const stored = await request<StoredExplanation>(`/api/explanations/${encodeURIComponent(id)}`, { signal: controller.signal });
       if (stopped || requestId !== documentRequest) return false;
-      if (stored.revision < minimumRevision) throw new Error('The latest explanation revision is not available yet. Retry the update.');
+      if (stored.revision < minimumRevision) throw new Error('The latest explanation is not available yet. Retry the update.');
       active.value = stored;
       noteRevision(stored);
       latestRevision.value = Math.max(stored.revision, seenRevisions.get(id) ?? 0);
@@ -115,6 +116,56 @@ export function useLibrary() {
     selectionError.value = '';
   }
 
+  function applyDeletion(event: ChangeEvent) {
+    if (event.revision < (seenRevisions.get(event.id) ?? 0)) return;
+    deletedRevisions.set(event.id, event.revision);
+    seenRevisions.set(event.id, event.revision);
+    summaries.value = summaries.value.filter(item => item.id !== event.id);
+    if (active.value?.id === event.id || pendingId === event.id) back();
+    deletion.value = event;
+  }
+
+  async function remove(item: ExplanationSummary) {
+    try {
+      const saved = await request<StoredExplanation>(`/api/explanations/${encodeURIComponent(item.id)}`);
+      const event = await request<ChangeEvent>(`/api/explanations/${encodeURIComponent(item.id)}`, {
+        method: 'DELETE', headers: { 'If-Match': `"${saved.revision}"` },
+      });
+      if (!stopped) {
+        applyDeletion(event);
+        void resync();
+      }
+      return { id: item.id, document: saved.document, revision: event.revision } satisfies DeletedExplanation;
+    } catch (cause) {
+      void resync();
+      throw cause;
+    }
+  }
+
+  async function restore(item: DeletedExplanation) {
+    try {
+      const stored = await request<StoredExplanation>(`/api/explanations/${encodeURIComponent(item.id)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', 'If-Match': `"${item.revision}"` },
+        body: JSON.stringify({ document: item.document }),
+      });
+      if (!stopped && stored.revision >= (seenRevisions.get(item.id) ?? 0)) {
+        noteRevision(stored);
+        summaries.value = [...summaries.value.filter(summary => summary.id !== item.id), {
+          id: stored.id, revision: stored.revision, updatedAtMs: stored.updatedAtMs,
+          title: stored.document.title, description: stored.document.description,
+          diagramCount: stored.document.diagrams.length, scenarioCount: stored.document.scenarios.length,
+        }].sort((a, b) => a.id.localeCompare(b.id));
+      }
+    } finally {
+      void resync();
+    }
+  }
+
+  function scheduleReconnect() {
+    connection.value = 'reconnecting';
+    retryTimer = setTimeout(() => { void connect(); }, Math.min(500 * 2 ** attempts++, 15000));
+  }
+
   function connect() {
     if (stopped) return;
     connection.value = attempts ? 'reconnecting' : 'connecting';
@@ -141,11 +192,7 @@ export function useLibrary() {
           && typeof message.revision === 'number' && Number.isSafeInteger(message.revision) && message.revision > 0
           && message.revision >= (seenRevisions.get(message.id) ?? 0)) {
           if ('deleted' in message && message.deleted === true) {
-            deletedRevisions.set(message.id, message.revision);
-            seenRevisions.set(message.id, message.revision);
-            summaries.value = summaries.value.filter(item => item.id !== message.id);
-            if (active.value?.id === message.id || pendingId === message.id) back();
-            deletion.value = { id: message.id, revision: message.revision };
+            applyDeletion({ id: message.id, revision: message.revision, deleted: true });
           } else {
             noteRevision({ id: message.id, revision: message.revision });
           }
@@ -158,12 +205,12 @@ export function useLibrary() {
       clearTimeout(timeout);
       if (stopped || socket !== currentSocket) return;
       cancelSelection();
-      connection.value = 'reconnecting';
+      ready.value = false;
       if (loading.value) {
-        error.value = 'Cannot connect to Lain. Check the daemon, or run “lain open” for a fresh browser session.';
+        error.value = 'Cannot connect to Lain. Check that the daemon is running.';
         loading.value = false;
       }
-      retryTimer = setTimeout(connect, Math.min(500 * 2 ** attempts++, 15000));
+      scheduleReconnect();
     };
   }
 
@@ -172,23 +219,7 @@ export function useLibrary() {
     ready.value = false;
     loading.value = true;
     error.value = '';
-    const fragment = new URLSearchParams(location.hash.slice(1));
-    const code = fragment.get('launch');
-    if (code !== null) {
-      history.replaceState(null, '', location.pathname + location.search);
-      try {
-        await request<unknown>('/api/session', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
-        });
-      } catch (cause) {
-        error.value = `${(cause as Error).message} Run “lain open” for a fresh launch link.`;
-        loading.value = false;
-        connection.value = 'offline';
-        return false;
-      }
-    }
-    if (stopped) return false;
-    connect();
+    void connect();
     return true;
   }
 
@@ -208,5 +239,5 @@ export function useLibrary() {
     void start();
   }
 
-  return { summaries, active, loading, selecting, error, selectionError, ready, deletion, connection, latestRevision, start, stop, select, back, retry, resync };
+  return { summaries, active, loading, selecting, error, selectionError, ready, deletion, connection, latestRevision, start, stop, select, remove, restore, back, retry, resync };
 }

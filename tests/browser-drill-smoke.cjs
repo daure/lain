@@ -46,8 +46,8 @@ async function main() {
           if (await toggle.getAttribute('aria-pressed') !== String(theme === 'dark')) await toggle.click();
           await page.screenshot({ path: path.join(artifacts, `${diagram.id}-${width}-${theme}.png`) });
         }
-        for (const surface of ['sidebar', 'navigator', 'diagram']) {
-          const ownerSelector = { sidebar: '.history-link.current', navigator: '.step-tile.is-current', diagram: `.diagram-panel [data-node-id="${nodeId}"][role="button"]` }[surface];
+        for (const surface of ['navigator', 'diagram']) {
+          const ownerSelector = { navigator: '.step-tile.is-current', diagram: `.diagram-panel [data-node-id="${nodeId}"][role="button"]` }[surface];
           const owner = page.locator(ownerSelector);
           const icon = surface === 'diagram' ? page.locator('.diagram-panel .drill-link') : owner.locator('.drill-link');
           assert.equal(await icon.getAttribute('aria-hidden'), 'true');
@@ -75,13 +75,10 @@ async function main() {
             const text = element.parentElement.querySelector('code, span:not(.drill-link)');
             return getComputedStyle(element).color === getComputedStyle(text).color;
           }), `${surface} icon follows its trigger text color`);
-          if (surface === 'sidebar') await icon.click();
-          else {
-            await page.keyboard.press('Tab');
-            await owner.focus();
-            assert.equal(await owner.evaluate(element => element.matches(':focus-visible')), true);
-            await page.keyboard.press('Enter');
-          }
+          await page.keyboard.press('Tab');
+          await owner.focus();
+          assert.equal(await owner.evaluate(element => element.matches(':focus-visible')), true);
+          await page.keyboard.press('Enter');
           await page.waitForURL(url => url.searchParams.get('scenario') === targetScenario.id);
           assert.equal(new URL(page.url()).searchParams.get('occurrence'), targetScenario.occurrences[0].id);
           assert.equal(await page.getByRole('tab', { name: 'Diagram', exact: true }).getAttribute('aria-selected'), 'true');
@@ -123,10 +120,6 @@ async function main() {
         if (sourceId === 'successful-callback') {
           for (const key of ['h', 'l', 'l']) {
             await page.keyboard.press(key);
-            assert.ok(await page.locator('.history-link.has-detail .drill-link').evaluate(element => {
-              const text = element.parentElement.querySelector('span:not(.drill-link)');
-              return getComputedStyle(element).color === getComputedStyle(text).color;
-            }), 'sidebar drill color follows upcoming, selected, and visited text');
             assert.ok(await page.locator('.graph .drill-link').evaluate(element => {
               const node = element.previousElementSibling;
               const expected = document.createElement('span');

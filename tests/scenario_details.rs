@@ -42,13 +42,7 @@ async fn scenario_prose_and_visit_summaries_persist_across_reopen() {
         "Verification read: no instances captured.".into();
     let expected = serde_json::to_value(&authored).unwrap();
     service
-        .publish(
-            "details",
-            PublishRequest {
-                expected_revision: 0,
-                document: authored,
-            },
-        )
+        .publish("details", PublishRequest { document: authored })
         .await
         .unwrap();
     drop(service);
@@ -80,7 +74,6 @@ async fn optional_prose_accepts_omission_and_empty_strings_and_enforces_text_lim
             .publish(
                 id,
                 PublishRequest {
-                    expected_revision: 0,
                     document: serde_json::from_value(payload).unwrap(),
                 },
             )
@@ -97,13 +90,7 @@ async fn optional_prose_accepts_omission_and_empty_strings_and_enforces_text_lim
         };
         *text = "x".repeat(32 * 1024 + 1);
         let result = service
-            .publish(
-                "oversized",
-                PublishRequest {
-                    expected_revision: 0,
-                    document: authored,
-                },
-            )
+            .publish("oversized", PublishRequest { document: authored })
             .await;
         assert!(
             matches!(result, Err(ServiceError::Invalid(error)) if error.contains("text bytes"))

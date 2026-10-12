@@ -46,13 +46,7 @@ async fn flow_and_sequence_detail_links_preserve_recordings_across_publication()
     );
     let expected = serde_json::to_value(&document).unwrap();
     service
-        .publish(
-            "order",
-            PublishRequest {
-                expected_revision: 0,
-                document,
-            },
-        )
+        .publish("order", PublishRequest { document })
         .await
         .unwrap();
     let saved = service.get("order").await.unwrap();
@@ -69,7 +63,6 @@ async fn invalid_detail_links_fail_before_replacing_the_saved_recording() {
         .publish(
             "order",
             PublishRequest {
-                expected_revision: 0,
                 document: document(),
             },
         )
@@ -107,13 +100,7 @@ async fn invalid_detail_links_fail_before_replacing_the_saved_recording() {
             .unwrap();
         node.detail_diagram_id = Some(target.into());
         let result = service
-            .publish(
-                "order",
-                PublishRequest {
-                    expected_revision: 1,
-                    document: invalid,
-                },
-            )
+            .publish("order", PublishRequest { document: invalid })
             .await;
         assert!(matches!(result, Err(ServiceError::Invalid(message)) if message.contains(error)));
         assert_eq!(service.get("order").await.unwrap().revision, 1);

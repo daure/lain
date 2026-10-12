@@ -64,13 +64,7 @@ async fn publication_enforces_shared_order_branches_and_loop_revisits_atomically
     let authored = interaction(body(), &["start", "a", "c", "c", "end"]);
     let expected = serde_json::to_value(&authored).unwrap();
     service
-        .publish(
-            "interaction",
-            PublishRequest {
-                expected_revision: 0,
-                document: authored,
-            },
-        )
+        .publish("interaction", PublishRequest { document: authored })
         .await
         .unwrap();
     for trace in [
@@ -84,7 +78,6 @@ async fn publication_enforces_shared_order_branches_and_loop_revisits_atomically
             .publish(
                 "interaction",
                 PublishRequest {
-                    expected_revision: 1,
                     document: interaction(body(), &trace),
                 },
             )

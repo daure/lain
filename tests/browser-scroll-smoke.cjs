@@ -120,113 +120,8 @@ async function keyboardEnd(selector, lastChild) {
     const element = document.querySelector(selector);
     return Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop) < 2;
   }, selector);
-  if (lastChild === '.history-link.current') await page.locator(lastChild).focus();
   await visibleInViewport(page.locator(lastChild));
   await boundedWorkspace();
-}
-
-async function sidebarStickyHandoff() {
-  const region = page.locator('.sidebar-scroll');
-  await region.evaluate(element => { element.scrollTop = 0; });
-  await page.waitForFunction(() => {
-    const element = document.querySelector('.sidebar-scroll');
-    return element.scrollTop === 0 && !element.querySelector('.sidebar-context-content').classList.contains('pinned');
-  });
-  const geometry = await region.evaluate(element => {
-    const title = element.querySelector('.group-heading h3');
-    const pinnedTitle = element.querySelector('.sidebar-pinned-heading h3');
-    const selected = element.querySelector('.scenario-link.selected');
-    const pinnedHeading = element.querySelector('.sidebar-pinned-heading');
-    const glyphTop = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getClientRects()[0].top; };
-    return {
-      titleSwitch: title.getBoundingClientRect().top - pinnedTitle.getBoundingClientRect().top,
-      scenarioSwitch: selected.getBoundingClientRect().top - pinnedHeading.getBoundingClientRect().bottom,
-      titleTop: glyphTop(title), pinnedTitleTop: glyphTop(pinnedTitle),
-      scenarioTop: glyphTop(selected), pinnedScenarioTop: pinnedHeading.getBoundingClientRect().bottom + glyphTop(selected) - selected.getBoundingClientRect().top,
-      firstScenario: selected === selected.parentElement.querySelector('.scenario-link'),
-      naturalGap: element.querySelector('.scenario-link').getBoundingClientRect().top - title.parentElement.getBoundingClientRect().bottom,
-    };
-  });
-  assert.ok(geometry.titleSwitch > 0, 'the heading starts in the natural sidebar padding');
-  for (const kind of ['title', 'scenario']) {
-    const activation = Math.ceil(geometry[kind === 'scenario' && geometry.firstScenario ? 'titleSwitch' : `${kind}Switch`]);
-    for (const top of [activation - 2, activation - 1, activation, activation + 1, activation + 2, activation + 1, activation, activation - 1, activation - 2]) {
-      await region.evaluate((element, top) => { element.scrollTop = top; }, top);
-      await page.waitForFunction(({ top, kind, activation }) => {
-        const element = document.querySelector('.sidebar-scroll');
-        const pinned = kind === 'title' ? element.querySelector('.sidebar-context-content').classList.contains('pinned') : !!element.querySelector('.sidebar-pinned-scenario');
-        return element.scrollTop === top && pinned === (top >= activation);
-      }, { top, kind, activation });
-      const actual = await region.evaluate((element, kind) => {
-        const pinned = kind === 'title' ? element.querySelector('.sidebar-context-content').classList.contains('pinned') : !!element.querySelector('.sidebar-pinned-scenario');
-        const node = kind === 'title' ? element.querySelector(pinned ? '.sidebar-pinned-heading h3' : '.group-heading h3')
-          : element.querySelector(pinned ? '.sidebar-pinned-scenario' : '.scenario-link.selected');
-        const range = document.createRange(); range.selectNodeContents(node);
-        return range.getClientRects()[0].top;
-      }, kind);
-      const pairedScenario = kind === 'scenario' && geometry.firstScenario && top >= activation;
-      const expected = pairedScenario ? geometry.pinnedScenarioTop : Math.max(geometry[`${kind}Top`] - top, geometry[kind === 'title' ? 'pinnedTitleTop' : 'pinnedScenarioTop']);
-      assert.ok(Math.abs(actual - expected) < 1, `${kind} keeps its text position across the padded sticky handoff at ${top}px: ${actual} vs ${expected}`);
-      if (pairedScenario) {
-        const pinnedGap = await region.evaluate(element => {
-          const heading = element.querySelector('.sidebar-pinned-heading');
-          const labelBottom = Math.max(...[...heading.children].map(child => child.getBoundingClientRect().bottom));
-          return element.querySelector('.sidebar-pinned-scenario').getBoundingClientRect().top - labelBottom;
-        });
-        assert.ok(Math.abs(pinnedGap - geometry.naturalGap) < 1, `diagram/scenario spacing stays ${geometry.naturalGap}px across the sticky handoff, got ${pinnedGap}px`);
-      }
-    }
-  }
-}
-
-async function sidebarKeyboardCentering() {
-  const region = page.locator('.sidebar-scroll');
-  async function centered(selector) {
-    await page.waitForFunction(selector => {
-      const region = document.querySelector('.sidebar-scroll');
-      const bounds = region.getBoundingClientRect();
-      const selected = region.querySelector(selector).getBoundingClientRect();
-      const sticky = parseFloat(region.style.getPropertyValue('--sidebar-context-height')) || 0;
-      const delta = selected.top + selected.height / 2 - (bounds.top + (region.clientHeight + sticky) / 2);
-      return Math.abs(delta) < 2;
-    }, selector);
-  }
-  await region.locator('.scenario-link').nth(35).evaluate(element => element.click());
-  await page.locator('.scenario-link.selected').waitFor();
-  await region.locator('.history-link').nth(2).evaluate(element => element.click());
-  await region.evaluate(element => { element.scrollTop = 0; });
-  const before = await positions();
-  await page.keyboard.press('j');
-  await page.waitForFunction(() => document.querySelector('.sidebar-scroll').scrollTop > 0);
-  const during = await region.evaluate(element => element.scrollTop);
-  await centered('.history-link.current');
-  const after = await positions();
-  assert.ok(during < after.sidebar - 2, 'scenario-step scrolling moves through intermediate positions');
-  delete before.sidebar; delete after.sidebar;
-  assert.deepEqual(after, before, 'sidebar keyboard navigation keeps other scroll regions stationary');
-  await page.keyboard.press('k');
-  await centered('.history-link.current');
-  assert.equal(await region.locator('.history-link').nth(2).getAttribute('aria-current'), 'step', 'returning to a scenario centers its saved occurrence');
-  for (const key of ['j', 'j', 'k', 'j']) await page.keyboard.press(key);
-  await centered('.history-link.current');
-  await region.locator('.scenario-link').first().evaluate(element => element.click());
-  await region.locator('.history-link').nth(50).evaluate(element => element.click());
-  await region.evaluate(element => { element.scrollTop = 0; });
-  await page.keyboard.press('l');
-  await centered('.history-link.current');
-  await page.keyboard.press('h');
-  await centered('.history-link.current');
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.keyboard.press('l');
-  await centered('.history-link.current');
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await region.evaluate(element => { element.scrollTop = 0; });
-  await page.keyboard.press('l');
-  await page.waitForFunction(() => document.querySelector('.sidebar-scroll').scrollTop > 0);
-  await region.evaluate(element => { element.dispatchEvent(new WheelEvent('wheel')); element.scrollTop = 200; });
-  await page.waitForTimeout(300);
-  assert.equal(await region.evaluate(element => element.scrollTop), 200, 'manual scroll cancels centering');
-  await region.locator('.history-link').nth(1).evaluate(element => element.click());
 }
 
 async function dialogs() {
@@ -297,7 +192,7 @@ async function notices(mock) {
   await visibleInViewport(retry);
   await page.keyboard.press('Enter');
   await region.waitFor({ state: 'hidden' });
-  assert.match(await page.locator('.path-hint').textContent(), /2\/100/);
+  assert.match(await page.locator('.step-tile.is-current .step-number').textContent(), /2\/100/);
   await boundedWorkspace();
 }
 
@@ -340,8 +235,7 @@ async function main() {
     await page.locator('.explanation-card').last().click();
     await page.locator('.event-controls').waitFor();
     await page.getByRole('button', { name: 'Next event', exact: true }).click();
-    assert.equal(await page.locator('.history-link').count(), 100);
-    assert.equal(await page.locator('.history-link.future').count(), 98);
+    assert.equal(await page.locator('.step-tile.is-current .step-number').textContent(), '2/100');
     const sidebarBounds = await page.locator('.sidebar-scroll').evaluate(element => {
       const inner = element.getBoundingClientRect();
       const outer = element.parentElement.getBoundingClientRect();
@@ -350,29 +244,13 @@ async function main() {
     });
     assert.ok(Math.abs(sidebarBounds.top) < 1 && Math.abs(sidebarBounds.bottom) <= 1, `full-height sidebar scrollbar: ${JSON.stringify(sidebarBounds)}`);
     assert.ok(Math.abs(sidebarBounds.right - sidebarBounds.border) < 1, `flush sidebar scrollbar: ${JSON.stringify(sidebarBounds)}`);
-    await sidebarStickyHandoff();
-    await page.locator('.scenario-link').nth(1).evaluate(element => element.click());
-    await sidebarStickyHandoff();
-    await sidebarKeyboardCentering();
     await boundedWorkspace();
     await wheelInside('.sidebar-scroll', 'sidebar');
-    await page.locator('.sidebar-pinned-scenario').waitFor();
-    assert.equal(await page.locator('.sidebar-pinned-heading h3').textContent(), stored.document.diagrams[0].title);
-    assert.equal(await page.locator('.sidebar-pinned-scenario').textContent(), 'Duplicate callback');
-    await visibleInViewport(page.locator('.sidebar-context-content'));
-    const stickyTop = await page.locator('.sidebar-scroll').evaluate(element => {
-      const bounds = element.getBoundingClientRect();
-      const pinned = element.querySelector('.sidebar-context-content');
-      return { gap: pinned.getBoundingClientRect().top - bounds.top,
-        coversTop: pinned.contains(document.elementFromPoint(bounds.left + 30, bounds.top + 4)) };
-    });
-    assert.ok(Math.abs(stickyTop.gap) < 1 && stickyTop.coversTop, `pinned sidebar context covers the scrollport from its top: ${JSON.stringify(stickyTop)}`);
     if (viewport.width > 1200) {
       await wheelInside('.state-panel', 'state');
       await wheelInside('.event-story', 'story');
       await keyboardEnd('.state-panel', '.snapshot-note');
       await keyboardEnd('.event-story', '.event-context');
-      await visibleInViewport(page.locator('.sidebar-context-content'));
     } else {
       await wheelInside('.event-content', 'content');
       await keyboardEnd('.event-content', '.snapshot-note');
@@ -384,9 +262,8 @@ async function main() {
     // Real navigation grows the walked prefix without bypassing component state.
     for (let index = 2; index < 100; index++) await page.getByRole('button', { name: 'Next event', exact: true }).click();
     await visibleInViewport(page.getByRole('button', { name: 'Replay scenario', exact: true }));
-    await keyboardEnd('.sidebar-scroll', '.history-link.current');
     await page.getByRole('button', { name: 'Replay scenario', exact: true }).click();
-    assert.equal(await page.locator('.history-link.future').count(), 99);
+    assert.equal(await page.locator('.step-tile.is-current .step-number').textContent(), '1/100');
     await visibleInViewport(page.getByRole('button', { name: 'Next event', exact: true }));
     await page.getByRole('button', { name: stored.document.scenarios[79].title, exact: true }).click();
     await boundedWorkspace();

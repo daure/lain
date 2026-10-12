@@ -2,9 +2,8 @@ use std::{path::PathBuf, process::Command, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
-use lain::{auth::Auth, http, runtime::Runtime, service::AppService};
-use reqwest::{Client, StatusCode};
-use serde::Deserialize;
+use lain::{http, runtime::Runtime, service::AppService};
+use reqwest::Client;
 
 #[derive(Parser)]
 #[command(
@@ -36,13 +35,8 @@ enum Commands {
     },
     /// Check daemon health; return a nonzero exit code when unavailable.
     Status,
-    /// Publish the bundled order-lifecycle example without replacing existing data.
+    /// Publish the three bundled demos, replacing saved explanations with matching IDs.
     Demo,
-}
-
-#[derive(Deserialize)]
-struct Launch {
-    url: String,
 }
 
 #[tokio::main]
@@ -69,7 +63,6 @@ fn client() -> Result<Client> {
 async fn serve(runtime: Runtime) -> Result<()> {
     let _daemon_lock = runtime.daemon_lock()?;
     let service = AppService::open(&runtime.database_path()).await?;
-    let auth = Auth::new(runtime.token);
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], runtime.port));
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -82,7 +75,7 @@ async fn serve(runtime: Runtime) -> Result<()> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     println!("Lain listening on http://127.0.0.1:{}", runtime.port);
-    axum::serve(listener, http::router(service, auth, runtime.port))
+    axum::serve(listener, http::router(service, runtime.port))
         .with_graceful_shutdown(async move {
             tokio::select! {
                 _ = interrupt.recv() => (),
@@ -96,15 +89,12 @@ async fn serve(runtime: Runtime) -> Result<()> {
 async fn status(runtime: &Runtime) -> Result<()> {
     let response = client()?
         .get(format!("{}/api/explanations", runtime.base_url()))
-        .bearer_auth(&runtime.token)
         .send()
         .await
-        .context(
-            "Lain unavailable; run lain setup or lain serve with the same --home and --port",
-        )?;
+        .context("Lain unavailable; run lain setup or lain serve on the configured --port")?;
     ensure!(
         response.status().is_success(),
-        "Lain identity check failed ({}); check the service uses the same --home and --port",
+        "Lain readiness check failed ({}); check the service uses the configured --port",
         response.status()
     );
     let body: serde_json::Value = response
@@ -113,72 +103,61 @@ async fn status(runtime: &Runtime) -> Result<()> {
         .context("invalid Lain explanation-list response")?;
     ensure!(
         body.is_array(),
-        "Lain identity check did not return an explanation list"
+        "Lain readiness check did not return an explanation list"
     );
     println!("Lain running at {}", runtime.base_url());
     Ok(())
 }
 
 async fn open(runtime: &Runtime, print_url: bool) -> Result<()> {
-    let response = client()?
-        .post(format!("{}/api/launch", runtime.base_url()))
-        .bearer_auth(&runtime.token)
-        .send()
-        .await
-        .context(
-            "Lain unavailable; run lain setup or lain serve with the same --home and --port",
-        )?;
-    ensure!(
-        response.status().is_success(),
-        "launch failed ({}); check the service uses the same --home and --port",
-        response.status()
-    );
-    let launch: Launch = response.json().await.context("invalid launch response")?;
-    let url = reqwest::Url::parse(&launch.url).context("invalid launch URL")?;
-    ensure!(
-        url.scheme() == "http"
-            && url.host_str() == Some("127.0.0.1")
-            && url.port_or_known_default() == Some(runtime.port)
-            && url.username().is_empty()
-            && url.password().is_none(),
-        "launch URL is not the configured local viewer"
-    );
+    let url = runtime.base_url();
     if print_url {
-        println!("{}", launch.url);
+        println!("{url}");
         return Ok(());
     }
-    let opened = Command::new("xdg-open").arg(&launch.url).status();
+    status(runtime).await?;
+    let opened = Command::new("xdg-open").arg(&url).status();
     match opened {
         Ok(status) if status.success() => Ok(()),
         _ => bail!(
-            "cannot open a browser; run lain open --print-url with the same --home and --port, then open the URL within 60 seconds"
+            "cannot open a browser; run lain open --print-url with the same --port, then open the URL"
         ),
     }
 }
 
 async fn demo(runtime: &Runtime) -> Result<()> {
-    let document: serde_json::Value =
-        serde_json::from_str(include_str!("../examples/order-lifecycle.json"))?;
-    let response = client()?
-        .put(format!(
-            "{}/api/explanations/order-lifecycle",
-            runtime.base_url()
-        ))
-        .bearer_auth(&runtime.token)
-        .json(&serde_json::json!({"expectedRevision": 0, "document": document}))
-        .send()
-        .await
-        .context("Lain unavailable; run lain setup or lain serve first")?;
-    if response.status() == StatusCode::CONFLICT {
-        bail!(
-            "order-lifecycle already exists; demo preserves existing data. Read its current revision before publishing an intentional update."
+    let client = client()?;
+    for (id, source) in [
+        (
+            "order-lifecycle",
+            include_str!("../examples/order-lifecycle.json"),
+        ),
+        (
+            "release-promotion",
+            include_str!("../examples/release-promotion.json"),
+        ),
+        (
+            "incident-recovery",
+            include_str!("../examples/incident-recovery.json"),
+        ),
+    ] {
+        let document: serde_json::Value =
+            serde_json::from_str(source).with_context(|| format!("invalid demo document {id}"))?;
+        let response = client
+            .put(format!("{}/api/explanations/{id}", runtime.base_url()))
+            .json(&serde_json::json!({"document": document}))
+            .send()
+            .await
+            .with_context(|| {
+                format!("demo {id}: Lain unavailable; run lain setup or lain serve first")
+            })?;
+        ensure!(
+            response.status().is_success(),
+            "demo {id} publication failed ({})",
+            response.status()
         );
+        println!("Published {id}.");
     }
-    ensure!(
-        response.status().is_success(),
-        "demo publication failed ({})",
-        response.status()
-    );
-    println!("Published order-lifecycle. Run lain to open the viewer.");
+    println!("Run lain to open the viewer.");
     Ok(())
 }

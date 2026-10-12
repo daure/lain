@@ -23,11 +23,8 @@ fn method() -> EntityMethod {
     }
 }
 
-fn request(expected_revision: u64, document: Explanation) -> PublishRequest {
-    PublishRequest {
-        expected_revision,
-        document,
-    }
+fn request(document: Explanation) -> PublishRequest {
+    PublishRequest { document }
 }
 
 #[tokio::test]
@@ -49,10 +46,7 @@ async fn legacy_entities_publish_and_reload_with_optional_methods_omitted() {
             .all(|entity| entity.get("methods").is_none())
     );
     let decoded: Explanation = serde_json::from_value(legacy.clone()).unwrap();
-    service
-        .publish("legacy", request(0, decoded))
-        .await
-        .unwrap();
+    service.publish("legacy", request(decoded)).await.unwrap();
     assert_eq!(
         serde_json::to_value(service.get("legacy").await.unwrap().document).unwrap(),
         legacy
@@ -71,10 +65,7 @@ async fn methods_preserve_authored_order_and_plain_text_across_database_reopen()
     untrusted.description = "<img src=x onerror=alert(1)>".into();
     authored.domain.entities[0].methods = vec![method(), untrusted];
     let expected = serde_json::to_value(&authored).unwrap();
-    service
-        .publish("methods", request(0, authored))
-        .await
-        .unwrap();
+    service.publish("methods", request(authored)).await.unwrap();
     drop(service);
     let reopened = AppService::open(&path).await.unwrap();
     let stored = reopened.get("methods").await.unwrap();
@@ -91,7 +82,7 @@ async fn invalid_method_definitions_preserve_the_committed_revision() {
     let mut authored = document();
     authored.domain.entities[0].methods = vec![method()];
     service
-        .publish("methods", request(0, authored.clone()))
+        .publish("methods", request(authored.clone()))
         .await
         .unwrap();
     let original = serde_json::to_value(authored).unwrap();
@@ -128,10 +119,7 @@ async fn invalid_method_definitions_preserve_the_committed_revision() {
         let mut invalid = original.clone();
         invalid["domain"]["entities"][0]["methods"] = replacement;
         let result = service
-            .publish(
-                "methods",
-                request(1, serde_json::from_value(invalid).unwrap()),
-            )
+            .publish("methods", request(serde_json::from_value(invalid).unwrap()))
             .await;
         assert!(
             matches!(result, Err(ServiceError::Invalid(error)) if error.contains(message)),
@@ -165,7 +153,7 @@ async fn method_ids_are_not_snapshot_attribute_keys() {
         .find(|instance| instance.entity_id == "order")
         .unwrap();
     order.values.insert("capture".into(), json!("called"));
-    let result = service.publish("methods", request(0, authored)).await;
+    let result = service.publish("methods", request(authored)).await;
     assert!(
         matches!(result, Err(ServiceError::Invalid(error)) if error.contains("unknown attribute"))
     );

@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import ChartExport from './ChartExport.vue';
+import { viewportStatesKey } from '../viewport-state';
 
 type OverviewNode = { x: number; y: number; width: number; height: number; active?: boolean };
 const props = withDefaults(defineProps<{
@@ -13,13 +15,19 @@ const props = withDefaults(defineProps<{
   focusPoint?: { x: number; y: number };
   focusKey?: string;
   sceneKey?: string;
+  stateKey?: string;
   focusInset?: (top: number) => number;
+  exportScenario?: boolean;
+  scenarioTitle?: string;
 }>(), { enabled: true, overviewNodes: () => [], overviewEdges: () => [] });
 const emit = defineEmits<{ change: [] }>();
 const root = ref<HTMLElement>();
 const region = ref<HTMLElement>();
 const scale = ref(1);
 const fitted = ref(true);
+const states = inject(viewportStatesKey, undefined);
+let activeStateKey = props.stateKey;
+let restoring = false;
 let following = false;
 let selectedFocusPoint: { x: number; y: number } | undefined;
 const view = ref({ width: 0, height: 0, left: 0, top: 0 });
@@ -27,8 +35,8 @@ const inset = 20;
 const fitScale = computed(() => Math.min(1, Math.max(1, view.value.width - inset * 2) / props.width, Math.max(1, view.value.height - inset * 2) / props.height));
 const minScale = computed(() => Math.min(.1, fitScale.value));
 const offset = computed(() => ({
-  x: view.value.width / 2,
-  y: view.value.height / 2,
+  x: props.width * scale.value <= view.value.width ? (view.value.width - props.width * scale.value) / 2 : inset,
+  y: props.height * scale.value <= view.value.height ? (view.value.height - props.height * scale.value) / 2 : inset,
 }));
 const stageStyle = computed(() => ({
   width: `${Math.max(view.value.width, props.width * scale.value + offset.value.x * 2)}px`,
@@ -225,6 +233,7 @@ async function zoom(factor: number) {
 }
 
 function resize() {
+  if (restoring) { void restoreState(); return; }
   track();
   if (fitted.value) void fit();
   else if (following) void centerCurrent(animation !== undefined);
@@ -280,12 +289,42 @@ function onMapKeydown(event: KeyboardEvent) {
   else void zoom(event.key === '-' ? .8 : 1.25);
 }
 
-watch(() => props.sceneKey, () => {
+function saveState() {
+  if (!activeStateKey || !props.enabled || restoring || !view.value.width || !view.value.height) return;
+  states?.set(activeStateKey, { scale: scale.value, fitted: fitted.value, left: view.value.left, top: view.value.top });
+}
+
+async function restoreState() {
+  cancelMotion();
+  endDrag();
+  following = false;
   selectedFocusPoint = undefined;
-  fitted.value = true;
-  void fit();
+  restoring = true;
+  const version = zoomVersion;
+  const saved = activeStateKey ? states?.get(activeStateKey) : undefined;
+  fitted.value = saved?.fitted ?? true;
+  scale.value = saved?.scale ?? 1;
+  await nextTick();
+  track();
+  await nextTick();
+  if (version !== zoomVersion || !view.value.width || !view.value.height) return;
+  if (fitted.value) {
+    scale.value = fitScale.value;
+    await nextTick();
+    if (version !== zoomVersion) return;
+    pan(offset.value.x + props.width * scale.value / 2 - view.value.width / 2,
+      offset.value.y + props.height * scale.value / 2 - view.value.height / 2);
+  } else pan(saved!.left, saved!.top);
+  restoring = false;
+}
+
+watch(() => [props.stateKey, props.sceneKey], () => {
+  saveState();
+  activeStateKey = props.stateKey;
+  void restoreState();
 }, { flush: 'post' });
 watch(() => [props.width, props.height], () => {
+  if (restoring) return;
   cancelMotion();
   selectedFocusPoint = undefined;
   void nextTick(() => {
@@ -294,16 +333,21 @@ watch(() => [props.width, props.height], () => {
     else pan(view.value.left, view.value.top);
   });
 }, { flush: 'post' });
-watch(() => [props.focusKey, props.focusPoint?.x, props.focusPoint?.y], () => { selectedFocusPoint = undefined; void centerCurrent(true); }, { flush: 'post' });
+watch(() => [props.focusKey, props.focusPoint?.x, props.focusPoint?.y], () => {
+  if (restoring) return;
+  selectedFocusPoint = undefined;
+  void centerCurrent(true);
+}, { flush: 'post' });
 onMounted(() => {
   if (typeof ResizeObserver !== 'undefined') {
     observer = new ResizeObserver(resize);
     observer.observe(root.value!);
+    observer.observe(region.value!);
   }
   window.addEventListener('resize', resize);
-  resize();
+  void restoreState();
 });
-onUnmounted(() => { observer?.disconnect(); window.removeEventListener('resize', resize); cancelMotion(); });
+onUnmounted(() => { saveState(); observer?.disconnect(); window.removeEventListener('resize', resize); cancelMotion(); });
 defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt, panBy, releasePan, cancelPan });
 </script>
 
@@ -333,6 +377,7 @@ defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt,
         <button aria-label="Zoom in" title="Zoom in (=)" :disabled="scale >= 8" @click="zoom(1.25)"><i class="pi pi-plus" aria-hidden="true" /></button>
         <button aria-label="Fit diagram" title="Fit diagram" :aria-pressed="fitted" @click="fit()"><i class="pi pi-expand" aria-hidden="true" /></button>
         <button class="actual-size" aria-label="Zoom to 100% and focus" title="100% and focus" :aria-pressed="!fitted && scale === 1" @click="actualSize()">1:1</button>
+        <ChartExport :viewport="() => root" :title="title" :width="width" :height="height" :scenario="exportScenario === true" :scenario-title="scenarioTitle" />
       </div>
     </div>
   </div>
@@ -347,13 +392,13 @@ defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt,
 .viewport-sticky{position:sticky;top:0;height:0;z-index:2}
 .viewport-tools{position:absolute;right:16px;bottom:16px;z-index:3;display:grid;gap:8px}
 .diagram-minimap{display:block;visibility:hidden;width:100%;min-width:0;height:110px;box-sizing:border-box;contain:inline-size;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);box-shadow:0 2px 8px #0002;touch-action:none;cursor:grab}
-.viewport-tools:hover .diagram-minimap{visibility:visible}
+.viewport-tools:hover:not(:has([data-chart-export-menu])) .diagram-minimap{visibility:visible}
 .diagram-minimap:active,.viewport-scroll:active{cursor:grabbing}
 .minimap-edge{fill:none;stroke:var(--muted);stroke-width:1.5}
 .minimap-node{fill:var(--soft);stroke:var(--muted);stroke-width:1}
 .minimap-node.active{fill:var(--blue);stroke:var(--blue)}
 .minimap-window{fill:var(--blue);fill-opacity:.12;stroke:var(--blue);stroke-width:2;vector-effect:non-scaling-stroke}
-.viewport-buttons{display:flex;align-items:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);box-shadow:0 2px 8px #0002;padding:3px;gap:2px}
+.viewport-buttons{position:relative;display:flex;align-items:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);box-shadow:0 2px 8px #0002;padding:3px;gap:2px}
 .viewport-buttons button{display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:4px;background:transparent;color:var(--text)}
 .viewport-buttons button:hover{background:var(--soft)}
 .viewport-buttons button[aria-pressed="true"]{color:var(--blue);background:color-mix(in srgb,var(--blue) 12%,transparent)}

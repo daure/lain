@@ -31,7 +31,8 @@ const cursor = () => new URLSearchParams(location.search).get('occurrence');
 const scenario = (id: string) => fixture.scenarios.find(item => item.id === id)!;
 const select = async (id: string, index = 0) => {
   button(scenario(id).title).click(); await settle();
-  document.querySelectorAll<HTMLButtonElement>('.history-link')[index]!.click(); await settle();
+  await press('g'); await press('g');
+  for (let step = 0; step < index; step++) await press('l');
 };
 const drill = async () => {
   document.querySelector<HTMLElement>('.step-tile.is-current .drill-link')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));

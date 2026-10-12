@@ -134,8 +134,8 @@ async function cancelHandoff(query, origin, sameTurn) {
       dispatch('Escape'); dispatch('h'); await Promise.resolve();
       return { queued, dismissed: document.querySelector('.step-announcement').textContent, leaving: element.isConnected };
     });
-    for (const sample of result.queued) { assert.equal(sample.event, before); assert.equal(sample.scenario, 'Duplicate callback'); }
-    assert.match(result.dismissed, /01 \/ 05/); assert.equal(result.leaving, true);
+    for (const sample of result.queued) { assert.equal(sample.event, before); assert.equal(sample.scenario, 'Repeated callback keeps one fulfillment'); }
+    assert.match(result.dismissed, /1\/5/); assert.equal(result.leaving, true);
   } else {
     await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
   }
@@ -194,8 +194,8 @@ async function dismissDuringNavigation(mode, origin, sameTurn) {
     }
   }
   for (const [index, sample] of samples.entries()) {
-    assert.match(sample.event, index === 0 ? /02 \/ 05/ : index === 2 ? /01 \/ 03/ : /03 \/ 05/);
-    assert.equal(sample.scenario, index === 2 ? 'Declined payment' : 'Duplicate callback');
+    assert.match(sample.event, index === 0 ? /2\/5/ : index === 2 ? /1\/3/ : /3\/5/);
+    assert.equal(sample.scenario, index === 2 ? 'Declined payment stops fulfillment' : 'Repeated callback keeps one fulfillment');
     assert.equal(sample.leaving, true, `${mode}: navigation must run before the outgoing dialog leaves the DOM`);
     if (sameTurn) assert.equal(sample.prevented, true, 'outgoing controls must not consume navigation keys');
     if (mode === 'quick') assert.equal(sample.query, '', 'outgoing search must not receive navigation text');
@@ -206,15 +206,13 @@ async function dismissDuringNavigation(mode, origin, sameTurn) {
 
 async function assertDuplicateStep(step) {
   const labels = ['Callback received', 'Receipt checked', 'Event already handled', 'Receipt checked', 'Ignore the duplicate callback'];
-  assert.match(await eventText(), new RegExp(`0${step} / 05`));
+  assert.match(await eventText(), new RegExp(`${step}/5`));
   assert.equal(await page.locator('.graph-dialog .graph-node.current').getAttribute('aria-label'), step === 4 ? `${labels[step - 1]} · visited 2 times` : labels[step - 1]);
-  assert.equal(await page.locator('.step-tile[aria-current="step"] .step-title').textContent(), `0${step} / ${labels[step - 1]}`);
+  assert.equal(await page.locator('.step-tile[aria-current="step"] .step-label').textContent(), labels[step - 1]);
   assert.equal(await page.locator('.graph-dialog .graph-node.visited').count(), [1, 2, 3, 3, 4][step - 1]);
   assert.equal(await page.locator('.graph-dialog .graph-edge.walked').count(), step - 1);
   assert.deepEqual(await page.locator('.graph-dialog .node-visit-badge text').allTextContents(), step >= 4 ? ['2'] : []);
-  assert.equal(await page.locator('.history-link').count(), 5);
-  assert.equal(await page.locator('.history-link.future').count(), 5 - step);
-  assert.equal(await page.locator('.path-hint').textContent(), `${step}/5`);
+  assert.equal(await page.locator('.step-tile.is-current .step-number').textContent(), `${step}/5`);
   assert.deepEqual(await page.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre').allTextContents(),
     [['0', '0'], ['0', '1'], ['1', '1'], ['1', '2'], ['2', '2']][step - 1]);
   await assertScenarioPath();
@@ -301,11 +299,11 @@ async function exercise() {
   await page.screenshot({ path: path.join(artifacts, `${stage}-explanation-title.png`), fullPage: true });
   await page.locator('.event-content').focus();
   await page.keyboard.press('Shift+G');
-  assert.match(await eventText(), /04 \/ 04/);
+  assert.match(await eventText(), /4\/4/);
   await page.keyboard.press('g');
-  assert.match(await eventText(), /04 \/ 04/);
+  assert.match(await eventText(), /4\/4/);
   await page.keyboard.press('g');
-  assert.match(await eventText(), /01 \/ 04/);
+  assert.match(await eventText(), /1\/4/);
   await page.locator('.event-content').focus(); await page.keyboard.press('l');
   const previous = page.getByRole('button', { name: 'Previous event', exact: true });
   await previous.focus(); await openQuick();
@@ -317,21 +315,21 @@ async function exercise() {
   assert.equal(await search().inputValue(), 'Previous event', 'Ctrl+K must preserve the open palette query');
   await page.keyboard.press('Enter');
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
-  assert.match(await eventText(), /01 \/ 04/);
+  assert.match(await eventText(), /1\/4/);
   assert.equal(await previous.isDisabled(), true);
   assert.equal(await trigger.evaluate(element => document.activeElement === element), true, 'disabled origin must fall back to Quick actions');
   await page.locator('.event-content').focus();
   await page.keyboard.press('d'); await page.keyboard.press('e');
   assert.equal(await page.getByRole('dialog').count(), 0, 'plain D/E must leave shortcut ownership unchanged');
   await page.keyboard.press('h'); await page.keyboard.press('k');
-  assert.match(await eventText(), /01 \/ 04/);
+  assert.match(await eventText(), /1\/4/);
   for (let index = 0; index < 6; index++) await page.keyboard.press('l');
-  assert.match(await eventText(), /04 \/ 04/);
+  assert.match(await eventText(), /4\/4/);
   await page.keyboard.press('j');
-  assert.equal(await scenarioText(), 'Duplicate callback');
+  assert.equal(await scenarioText(), 'Repeated callback keeps one fulfillment');
   await page.keyboard.press('l'); await page.keyboard.press('k');
-  assert.match(await eventText(), /04 \/ 04/);
-  await page.keyboard.press('j'); assert.match(await eventText(), /02 \/ 05/);
+  assert.match(await eventText(), /4\/4/);
+  await page.keyboard.press('j'); assert.match(await eventText(), /2\/5/);
 
   const origin = page.getByRole('button', { name: 'Diagram', exact: true });
   await origin.focus(); await openQuick();
@@ -342,18 +340,18 @@ async function exercise() {
   assert.equal(await search().inputValue(), 'hjkldeio');
   assert.equal(await page.getByRole('option').count(), 0);
   assert.match(await page.locator('.quick-empty').textContent(), /No actions match/);
-  assert.equal(await scenarioText(), 'Duplicate callback');
-  assert.match(await eventText(), /02 \/ 05/);
+  assert.equal(await scenarioText(), 'Repeated callback keeps one fulfillment');
+  assert.match(await eventText(), /2\/5/);
   await search().fill('recorded occurrence');
   assert.equal(await page.getByRole('option').count(), 2);
   await search().fill('Next event'); await page.keyboard.press('Enter');
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
-  assert.match(await eventText(), /03 \/ 05/);
+  assert.match(await eventText(), /3\/5/);
   assert.equal(await origin.evaluate(element => document.activeElement === element), true);
   await openQuick(); assert.equal(await search().inputValue(), '');
   await page.getByRole('option', { name: /Previous event/ }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
-  assert.match(await eventText(), /02 \/ 05/);
+  assert.match(await eventText(), /2\/5/);
 
   for (const query of ['Scenario Diagram', 'Domain ERD']) {
     await cancelHandoff(query, origin, true);
@@ -371,33 +369,33 @@ async function exercise() {
   for (const step of [4, 3, 2, 1, 1]) { await page.keyboard.press('h'); await assertDuplicateStep(step); }
   await page.keyboard.press('l'); await assertDuplicateStep(2);
   await page.keyboard.press('k');
-  assert.equal(await scenarioText(), 'Successful callback'); assert.match(await eventText(), /04 \/ 04/);
+  assert.equal(await scenarioText(), 'New payment queues fulfillment'); assert.match(await eventText(), /4\/4/);
   await page.keyboard.press('h'); await page.keyboard.press('h'); await assertScenarioPath();
   await page.keyboard.press('k');
-  assert.equal(await scenarioText(), 'Successful callback'); assert.match(await eventText(), /02 \/ 04/);
+  assert.equal(await scenarioText(), 'New payment queues fulfillment'); assert.match(await eventText(), /2\/4/);
   await page.keyboard.press('j');
-  assert.equal(await scenarioText(), 'Duplicate callback'); await assertDuplicateStep(2);
+  assert.equal(await scenarioText(), 'Repeated callback keeps one fulfillment'); await assertDuplicateStep(2);
   await page.screenshot({ path: path.join(artifacts, `${stage}-scenario-path.png`), fullPage: true });
   await page.keyboard.press('j');
-  assert.equal(await scenarioText(), 'Declined payment'); await assertScenarioPath();
+  assert.equal(await scenarioText(), 'Declined payment stops fulfillment'); await assertScenarioPath();
   await graphDialog.getByRole('button', { name: 'Record the declined payment', exact: true }).focus();
   await page.keyboard.press('j');
   const shipmentDialog = await graphReady('Shipment lifecycle');
-  assert.equal(await scenarioText(), 'Parcel delivered'); await assertScenarioPath();
+  assert.equal(await scenarioText(), 'First delivery closes fulfillment'); await assertScenarioPath();
   assert.equal(await shipmentDialog.getByRole('button', { name: 'Back to event', exact: true }).evaluate(element => document.activeElement === element), true, 'removed graph-node focus must return to the dialog footer');
   await page.keyboard.press('Tab');
   assert.equal(await shipmentDialog.evaluate(element => element.contains(document.activeElement)), true, 'Tab must stay in the open graph after its layout changes');
   await shipmentDialog.getByRole('button', { name: 'Close', exact: true }).focus();
-  await page.keyboard.press('l'); assert.match(await eventText(), /02 \/ 04/); await assertScenarioPath();
-  await page.keyboard.press('j'); assert.equal(await scenarioText(), 'Parcel delivered');
+  await page.keyboard.press('l'); assert.match(await eventText(), /2\/4/); await assertScenarioPath();
+  await page.keyboard.press('j'); assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await page.keyboard.press('k'); await graphReady('Payment handling');
-  assert.equal(await scenarioText(), 'Declined payment');
+  assert.equal(await scenarioText(), 'Declined payment stops fulfillment');
   await page.keyboard.press('k');
-  assert.equal(await scenarioText(), 'Duplicate callback'); await assertDuplicateStep(2);
+  assert.equal(await scenarioText(), 'Repeated callback keeps one fulfillment'); await assertDuplicateStep(2);
   const offPath = graphDialog.getByRole('button', { name: 'Capture the payment', exact: true });
   await offPath.focus(); await page.keyboard.press('Enter');
   assert.match(await graphDialog.locator('.offpath-note').textContent(), /current event stays unchanged/);
-  assert.match(await eventText(), /02 \/ 05/);
+  assert.match(await eventText(), /2\/5/);
   await graphDialog.getByRole('button', { name: 'Receipt checked', exact: true }).click();
   const select = page.getByRole('combobox', { name: 'Recorded occurrence' });
   await select.focus(); await page.keyboard.type('hjkldeio');
@@ -410,7 +408,7 @@ async function exercise() {
   });
   assert.equal(await select.getAttribute('aria-expanded'), 'true', 'Select overlay must retain keyboard ownership');
   assert.equal(await graphDialog.count(), 1);
-  assert.equal(await scenarioText(), 'Duplicate callback'); assert.match(await eventText(), /02 \/ 05/);
+  assert.equal(await scenarioText(), 'Repeated callback keeps one fulfillment'); assert.match(await eventText(), /2\/5/);
   await page.keyboard.press('Escape'); await page.getByRole('listbox').waitFor({ state: 'hidden' });
   assert.equal(await graphDialog.count(), 1, 'Escape must close only the Select overlay');
   await select.focus(); await openQuick();
@@ -423,7 +421,7 @@ async function exercise() {
   await openQuick(); await closeDialog(origin);
 
   await origin.focus(); await page.keyboard.press('l');
-  assert.match(await eventText(), /03 \/ 05/);
+  assert.match(await eventText(), /3\/5/);
   for (const mode of ['i', 'o', 'quick']) {
     await dismissDuringNavigation(mode, origin, true);
     await dismissDuringNavigation(mode, origin, false);
@@ -431,17 +429,17 @@ async function exercise() {
 
   await origin.focus();
   await page.keyboard.press('j'); await page.keyboard.press('j');
-  assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await page.keyboard.press('i');
   await graphReady('Shipment lifecycle');
   const unchangedGraph = await eventText();
   await page.keyboard.press('j');
-  assert.equal(await eventText(), unchangedGraph); assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await eventText(), unchangedGraph); assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await page.keyboard.press('k'); await graphReady('Payment handling');
-  assert.equal(await scenarioText(), 'Declined payment');
+  assert.equal(await scenarioText(), 'Declined payment stops fulfillment');
   await page.keyboard.press('j'); await graphReady('Shipment lifecycle');
-  assert.equal(await eventText(), unchangedGraph); assert.equal(await scenarioText(), 'Parcel delivered');
-  await page.keyboard.press('l'); assert.match(await eventText(), /03 \/ 04/);
+  assert.equal(await eventText(), unchangedGraph); assert.equal(await scenarioText(), 'First delivery closes fulfillment');
+  await page.keyboard.press('l'); assert.match(await eventText(), /3\/4/);
   await page.keyboard.press('h'); assert.equal(await eventText(), unchangedGraph);
   await page.getByRole('dialog').evaluate(element => {
     for (const key of ['i', 'o']) element.dispatchEvent(new KeyboardEvent('keydown', { key, repeat: true, bubbles: true, cancelable: true }));
@@ -456,21 +454,21 @@ async function exercise() {
   await origin.focus(); await page.keyboard.press('o');
   const erd = await graphReady('Domain / Entity relationships');
   for (const key of ['h', 'l']) await page.keyboard.press(key);
-  assert.equal(await eventText(), unchangedGraph); assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await eventText(), unchangedGraph); assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await erd.getByRole('button', { name: 'Order', exact: true }).focus();
   await page.keyboard.press('k');
-  assert.equal(await scenarioText(), 'Declined payment'); assert.equal(await erd.count(), 1);
+  assert.equal(await scenarioText(), 'Declined payment stops fulfillment'); assert.equal(await erd.count(), 1);
   await page.keyboard.press('k');
-  assert.equal(await scenarioText(), 'Duplicate callback'); assert.match(await eventText(), /03 \/ 05/);
+  assert.equal(await scenarioText(), 'Repeated callback keeps one fulfillment'); assert.match(await eventText(), /3\/5/);
   for (const key of ['h', 'l']) await page.keyboard.press(key);
-  assert.match(await eventText(), /03 \/ 05/);
+  assert.match(await eventText(), /3\/5/);
   await page.keyboard.press('j'); await page.keyboard.press('j'); await page.keyboard.press('j');
   assert.equal(await erd.count(), 1); assert.equal(await page.getByRole('dialog').count(), 1);
   assert.equal(await erd.locator('.scenario-path, .graph-node.on-scenario, .graph-node.off-scenario, .graph-edge.on-scenario, .graph-edge.off-scenario').count(), 0, 'ERD must retain neutral rendering');
   assert.equal(await erd.getByRole('button', { name: 'Order', exact: true }).evaluate(element => getComputedStyle(element.querySelector('rect')).stroke), 'rgb(36, 99, 219)', 'focused ERD nodes must remain highlighted');
   await erd.getByRole('button', { name: 'Close', exact: true }).focus(); await page.mouse.move(0, 0);
   assert.equal(await erd.locator('.graph-node rect').first().evaluate(element => getComputedStyle(element).stroke), 'rgb(210, 221, 235)');
-  assert.equal(await eventText(), unchangedGraph); assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await eventText(), unchangedGraph); assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await closeDialog(origin, 'o');
   await origin.focus(); await page.keyboard.press('i');
   const instantDialog = await graphReady('Shipment lifecycle');
@@ -486,10 +484,10 @@ async function exercise() {
   });
   const unchanged = await eventText();
   await page.locator('#typing-probe').focus(); await page.keyboard.type('hjkldeio');
-  assert.equal(await eventText(), unchanged); assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await eventText(), unchanged); assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await openQuick(); await closeDialog(page.locator('#typing-probe'));
   await page.locator('#editable-probe').focus(); await page.keyboard.type('hjkldeio');
-  assert.equal(await eventText(), unchanged); assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await eventText(), unchanged); assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   assert.equal(await page.getByRole('dialog').count(), 0);
   await page.evaluate(() => { document.getElementById('typing-probe').remove(); document.getElementById('editable-probe').remove(); });
   await origin.focus(); await page.keyboard.press('i'); await graphReady('Shipment lifecycle');
@@ -501,14 +499,14 @@ async function exercise() {
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('dialog').count(), 1, 'unknown modal must keep ownership above the diagram');
   assert.equal(await page.locator('#host-modal-probe').count(), 1);
-  assert.equal(await eventText(), unchanged); assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await eventText(), unchanged); assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await page.locator('#host-modal-probe').evaluate(element => element.remove());
   await closeDialog(origin);
 
   await origin.focus(); await page.keyboard.press('j');
-  assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await page.keyboard.press('Control+h'); await page.keyboard.press('Shift+K');
-  assert.equal(await scenarioText(), 'Parcel delivered');
+  assert.equal(await scenarioText(), 'First delivery closes fulfillment');
   await assertBounded();
   await trigger.click(); await search().waitFor();
   assert.equal(await search().evaluate(element => document.activeElement === element), true);
@@ -603,7 +601,7 @@ async function exerciseSequence(documentFixture) {
   if (page.viewportSize().width < 700) assert.ok(overflow.scroll > overflow.client, 'mobile sequence scrolls internally');
   await assertInstantSwitches(dialog, ['o', 'i', 'o', 'i'], 'Payment callback sequence');
   await page.keyboard.press('k'); await graphReady('Shipment lifecycle');
-  assert.equal(await scenarioText(), 'Returned to sender');
+  assert.equal(await scenarioText(), 'Declined redelivery returns the parcel');
   await page.keyboard.press('j'); await graphReady('Payment callback sequence');
   await assertSequenceStep(dialog, successful, 3);
 
@@ -669,7 +667,7 @@ async function exerciseSequence(documentFixture) {
   await closeDialog(origin);
   await page.locator('.event-graph .sequence-message.current').focus();
   await page.keyboard.press('h');
-  assert.match(await eventText(), /05 \/ 06/);
+  assert.match(await eventText(), /5\/6/);
   assert.deepEqual(await compact.locator('.sequence-message text').allTextContents(), ['4. Capture the payment', '5. Queue fulfillment']);
   if (page.viewportSize().width < 700) await compact.evaluate(element => { element.scrollLeft = 280; });
   await page.screenshot({ path: path.join(artifacts, `${stage}-sequence-compact-revisit.png`), fullPage: true });
@@ -742,7 +740,7 @@ async function exerciseTheme(documentFixture) {
   assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
   assert.equal(await page.evaluate(() => localStorage.getItem('lain-theme')), 'dark');
   await page.locator('.explanation-card').first().click(); await page.locator('.event-controls').waitFor();
-  await page.getByRole('button', { name: 'Duplicate callback', exact: true }).click();
+  await page.getByRole('button', { name: 'Repeated callback keeps one fulfillment', exact: true }).click();
   for (let step = 0; step < 3; step++) await page.getByRole('button', { name: 'Next event', exact: true }).click();
   await assertDarkSurface(page.locator('.sidebar'));
   assert.equal(await page.locator('.event-graph .graph-node.visited:not(.current) text').first().evaluate(element => getComputedStyle(element).fill), 'rgb(121, 170, 255)');
@@ -750,7 +748,7 @@ async function exerciseTheme(documentFixture) {
   await assertBounded();
   const route = page.url();
   await page.reload(); await page.locator('.event-controls').waitFor();
-  assert.equal(page.url(), route); assert.match(await eventText(), /04 \/ 05/);
+  assert.equal(page.url(), route); assert.match(await eventText(), /4\/5/);
   assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
   await page.getByRole('button', { name: 'Diagram', exact: true }).click();
   const graph = await graphReady('Payment handling');

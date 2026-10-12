@@ -13,12 +13,13 @@ const props = withDefaults(defineProps<{
   diagram: Diagram;
   scenario: Scenario;
   currentOccurrenceId: string;
+  stateKey?: string;
   compact?: boolean;
   links?: Map<string, DiagramLink>;
 }>(), { compact: false });
 const emit = defineEmits<{ select: [occurrenceId: string]; inspect: [nodeId: string]; open: [scenarioId: string] }>();
 const markerId = `sequence-arrow-${useId().replace(/[^a-z0-9-]/gi, '')}`;
-const participants = computed(() => props.diagram.sequence!.participants);
+const participants = computed(() => props.diagram.sequence!.participants.map(participant => ({ ...participant, lines: labelLines(participant.label, 23) })));
 const participantLabels = computed(() => new Map(participants.value.map(participant => [participant.id, participant.label])));
 const participantSpacing = 240;
 const participantInset = 140;
@@ -38,7 +39,7 @@ const highlightedNodes = computed(() => new Set([
 const rows = computed(() => {
   const first = props.compact ? Math.max(0, currentIndex.value - 1) : 0;
   const definitions = props.compact
-    ? props.scenario.occurrences.slice(first, currentIndex.value + 1).map((occurrence, index) => ({ nodeId: occurrence.nodeId, y: 114 + index * 64, occurrence, index: first + index }))
+    ? props.scenario.occurrences.slice(first, currentIndex.value + 1).map((occurrence, index) => ({ nodeId: occurrence.nodeId, y: 130 + index * 80, occurrence, index: first + index }))
     : layout.value.rows.map(row => ({ ...row, occurrence: undefined, index: -1 }));
   return definitions.map(definition => {
     const { nodeId, y } = definition;
@@ -63,7 +64,7 @@ const rows = computed(() => {
       offScenario: !props.compact && visits.length === 0,
       visitCount: props.compact || visits.length < 2 ? 0 : walked.length,
       accessibleLabel: (props.compact ? `Occurrence ${definition.index + 1}: ${direction}` : `${direction}. ${visits.length ? `${visits.length} recorded occurrence${visits.length === 1 ? '' : 's'}` : 'Off this scenario’s path'}`) + diagramLinkHint(props.links?.get(nodeId)),
-      label: truncate(label, Math.floor(labelWidth / 8)),
+      lines: labelLines(label, Math.floor(labelWidth / 8)),
       labelX: self ? fromX + 32 : (fromX + toX) / 2 - (hasDetail ? 12 : 0),
       path: self ? roundedPath([{ x: fromX, y }, { x: fromX + 20, y }, { x: fromX + 20, y: y + 20 }, { x: fromX, y: y + 20 }], 10)
         : `M ${fromX} ${y} H ${toX}`,
@@ -74,7 +75,7 @@ const width = computed(() => Math.max(
   participantInset * 2 + (participants.value.length - 1) * participantSpacing,
   ...rows.value.filter(row => row.self).map(row => row.labelX + row.labelWidth + 24 + (props.links?.has(row.node.id) ? 24 : 0)),
 ));
-const height = computed(() => props.compact ? 96 + rows.value.length * 64 : layout.value.height);
+const height = computed(() => props.compact ? 96 + rows.value.length * 80 : layout.value.height);
 const canvas = ref<InstanceType<typeof DiagramViewport>>();
 const region = computed(() => canvas.value?.region);
 const scale = computed(() => canvas.value?.scale ?? 1);
@@ -88,7 +89,7 @@ const pinnedIds = computed(() => new Set(stickyContext.value.path.map(heading =>
 const contextPath = computed(() => stickyContext.value.path.map(heading => heading.text).join(' → '));
 const overviewNodes = computed(() => [
   ...participants.value.map(participant => ({ x: participantX.value.get(participant.id)! - 98, y: 18, width: 196, height: 48 })),
-  ...rows.value.map(row => ({ x: 12, y: row.y - 34, width: width.value - 24, height: 58, active: row.current })),
+  ...rows.value.map(row => ({ x: 12, y: row.y - 50, width: width.value - 24, height: 74, active: row.current })),
 ]);
 const overviewEdges = computed(() => [
   ...participants.value.map(participant => `M${participantX.value.get(participant.id)},66 V${height.value - 12}`),
@@ -96,7 +97,7 @@ const overviewEdges = computed(() => [
 ]);
 const focusPoint = computed(() => {
   const row = rows.value.find(row => row.current);
-  return row ? { x: width.value / 2, y: row.y - 5 } : undefined;
+  return row ? { x: width.value / 2, y: row.y - 13 } : undefined;
 });
 defineExpose({ canvas });
 
@@ -123,8 +124,22 @@ function hasHighlightedMessage(nodeIds: string[]) {
   return nodeIds.some(id => highlightedNodes.value.has(id));
 }
 
-function truncate(text: string, limit: number) {
-  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+function labelLines(text: string, limit: number) {
+  const lines: string[] = [];
+  for (const authoredLine of text.split('\n')) {
+    let remaining = authoredLine.trim().replace(/\s+/g, ' ');
+    while (remaining.length > limit) {
+      const space = remaining.lastIndexOf(' ', limit);
+      const wordEnd = remaining.indexOf(' ', space + 1);
+      const wordLength = (wordEnd < 0 ? remaining.length : wordEnd) - space - 1;
+      const end = space > 0 && wordLength <= limit ? space : limit;
+      lines.push(remaining.slice(0, end).trimEnd());
+      remaining = remaining.slice(end).trimStart();
+    }
+    if (remaining) lines.push(remaining);
+  }
+  if (!lines.length) return [''];
+  return lines.length <= 2 ? lines : [lines[0]!, `${lines[1]!.slice(0, limit - 1).trimEnd()}…`];
 }
 
 function measureLabel(element: Element | ComponentPublicInstance | null, key: string) {
@@ -137,7 +152,7 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
 
 <template>
   <DiagramViewport ref="canvas" :width="width" :height="height" :title="diagram.title" :enabled="!compact" :scroll-class="compact ? 'sequence-view compact' : 'sequence-view'"
-    :scene-key="diagram.id" :focus-key="`${scenario.id}/${currentOccurrenceId}`" :focus-point="focusPoint" :focus-inset="focusInset"
+    :state-key="stateKey" :scene-key="diagram.id" :focus-key="`${scenario.id}/${currentOccurrenceId}`" :focus-point="focusPoint" :focus-inset="focusInset" :scenario-title="scenario.title" export-scenario
     :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :style="{ '--sequence-sticky-height': `${headingHeight * scale}px` }" @change="trackScroll">
     <template #sticky>
     <div class="sequence-sticky" :style="{ minWidth: `${width}px` }">
@@ -152,7 +167,9 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
           <title>{{ participant.label }}</title>
           <rect width="196" height="48" rx="8" />
           <svg x="8" y="0" width="180" height="48" overflow="hidden">
-            <text x="90" y="24" text-anchor="middle" dominant-baseline="middle">{{ truncate(participant.label, 23) }}</text>
+            <text text-anchor="middle" dominant-baseline="middle">
+              <tspan v-for="(line, index) in participant.lines" :key="index" x="90" :y="24 + (index - (participant.lines.length - 1) / 2) * 16">{{ line }}</tspan>
+            </text>
           </svg>
         </g>
         <g v-for="heading in stickyContext.pinned" :key="heading.id" :clip-path="`url(#${markerId}-context-${heading.id})`">
@@ -177,7 +194,7 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
         </template>
       </g>
       <rect v-for="row in rows.filter(row => row.current)" :key="`${row.key}-highlight`" class="sequence-row-highlight"
-            x="12" :y="row.y - 34" :width="width - 24" height="58" rx="6" aria-hidden="true" />
+            x="12" :y="row.y - 50" :width="width - 24" height="74" rx="6" aria-hidden="true" />
       <line v-for="participant in participants" :key="participant.id" class="sequence-lifeline" :x1="participantX.get(participant.id)" :x2="participantX.get(participant.id)" y1="66" :y2="height - 12" />
       <template v-if="!compact">
         <g v-for="frame in layout.frames" :key="frame.id" :data-fragment-id="frame.id" :class="['sequence-fragment', frame.kind, { selected: onScenarioPath(frame.nodeIds) }]" role="group" :aria-label="`${frame.kind}${frame.guard ? `: ${frame.guard}` : ''}`">
@@ -197,12 +214,15 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
            @click="select(row)" @keydown.enter="activateDiagramNode($event, links?.get(row.node.id), () => select(row), id => emit('open', id))" @keydown.space.prevent="select(row)"
           @focusin="focusedNodeId = row.node.id" @focusout="focusedNodeId = undefined">
         <title>{{ row.accessibleLabel }}</title>
-        <rect class="sequence-row" x="12" :y="row.y - 34" :width="width - 24" height="58" rx="6" />
+        <rect class="sequence-row" x="12" :y="row.y - 50" :width="width - 24" height="74" rx="6" />
         <path class="sequence-message-arrow" :d="row.path" :marker-end="`url(#${markerId}-${row.visited ? 'visited' : row.offScenario ? 'off-scenario' : 'upcoming'})`" />
-        <svg :x="row.self ? row.labelX : row.labelX - row.labelWidth / 2" :y="row.y - 28" :width="row.labelWidth" height="24" overflow="hidden">
-          <text :ref="element => measureLabel(element, row.key)" :x="row.self ? 0 : row.labelWidth / 2" y="18" :text-anchor="row.self ? 'start' : 'middle'">{{ row.label }}</text>
+        <svg :x="row.self ? row.labelX : row.labelX - row.labelWidth / 2" :y="row.y - 28 - (row.lines.length - 1) * 16" :width="row.labelWidth" :height="24 + (row.lines.length - 1) * 16" overflow="hidden">
+          <text :text-anchor="row.self ? 'start' : 'middle'">
+            <tspan v-for="(line, index) in row.lines" :key="index" :ref="element => index === row.lines.length - 1 && measureLabel(element, row.key)"
+                   :x="row.self ? 0 : row.labelWidth / 2" :y="18 + index * 16">{{ line }}</tspan>
+          </text>
         </svg>
-        <g v-if="row.visitCount > 0" class="sequence-visit-badge" :transform="`translate(${width - 30},${row.y - 16})`">
+        <g v-if="row.visitCount > 0" class="sequence-visit-badge" :transform="`translate(${width - 30},${row.y - 32})`">
           <title>{{ row.visitCount }} visits through the current occurrence</title>
           <circle r="11" /><text text-anchor="middle" dominant-baseline="central">{{ row.visitCount }}</text>
         </g>

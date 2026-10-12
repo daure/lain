@@ -18,7 +18,6 @@ async fn nested_flow_and_state_groups_preserve_recordings_through_publication_an
         .publish(
             "groups",
             PublishRequest {
-                expected_revision: 0,
                 document: serde_json::from_value(expected.clone()).unwrap(),
             },
         )
@@ -44,7 +43,6 @@ async fn invalid_containment_is_rejected_without_replacing_the_committed_recordi
         .publish(
             "groups",
             PublishRequest {
-                expected_revision: 0,
                 document: serde_json::from_value(original.clone()).unwrap(),
             },
         )
@@ -141,7 +139,6 @@ async fn invalid_containment_is_rejected_without_replacing_the_committed_recordi
             .publish(
                 "groups",
                 PublishRequest {
-                    expected_revision: 1,
                     document: serde_json::from_value(invalid).unwrap(),
                 },
             )

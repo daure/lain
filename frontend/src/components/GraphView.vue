@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue';
+import { computed, ref, useId, type ComponentPublicInstance } from 'vue';
 import type { GraphLayout, LayoutNode } from '../layout';
 import DiagramViewport from './DiagramViewport.vue';
 import DrillLink from './DrillLink.vue';
 import { activateDiagramNode, diagramLinkHint, type DiagramLink } from '../diagram-links';
+import { flowNodeShape } from '../flow-shapes';
 
 const props = defineProps<{
   layout: GraphLayout;
   title: string;
+  stateKey?: string;
+  scenarioTitle?: string;
   currentNodeId?: string;
   currentOccurrenceId?: string;
   visitedNodeIds?: string[];
@@ -26,9 +29,12 @@ const arrowStyles = ['default', 'on-scenario', 'off-scenario', 'walked'] as cons
 const nodeVisitCounts = computed(() => countVisits(props.visitedNodeIds));
 const scenarioNodeVisitCounts = computed(() => countVisits(props.scenarioNodeIds ?? props.visitedNodeIds));
 const edgeVisitCounts = computed(() => countVisits(props.visitedEdgeIds));
+const nodeShapes = computed(() => new Map(props.layout.nodes.map(node => [node.id, flowNodeShape(node)])));
+const labelBounds = ref(new Map<string, { right: number; top: number }>());
 const overviewNodes = computed(() => props.layout.nodes.map(node => ({ x: node.x - node.width / 2, y: node.y - node.height / 2,
   width: node.width, height: node.height, active: node.id === props.currentNodeId })));
 const overviewEdges = computed(() => [
+  ...(props.layout.lanes ?? []).map(lane => `M${lane.x - lane.width / 2},${lane.y - lane.height / 2} h${lane.width} v${lane.height} h${-lane.width} Z`),
   ...(props.layout.groups ?? []).map(group => `M${group.x - group.width / 2},${group.y - group.height / 2} h${group.width} v${group.height} h${-group.width} Z`),
   ...props.layout.edges.map(edge => edge.path),
 ]);
@@ -48,13 +54,24 @@ function nodeLabel(id: string, label: string) {
   return (count > 0 ? `${label} · visited ${count} ${count === 1 ? 'time' : 'times'}` : label) + diagramLinkHint(props.links?.get(id));
 }
 
+function nodeLabelY(node: LayoutNode, showDrill: boolean) {
+  const drillSpace = showDrill && props.interactive && props.links?.has(node.id) ? (node.lines.length === 1 ? 8 : 16) : 0;
+  return (nodeShapes.value.get(node.id)?.label.y ?? node.height / 2) - (drillSpace + (node.lines.length - 1) * 20) / 2;
+}
+
 function nodeBadgePosition(node: LayoutNode) {
-  if (node.role === 'decision') {
-    const topInset = 13.5 * Math.hypot(1, node.height / node.width) + 4;
-    return `translate(${node.width / 2},${topInset})`;
-  }
-  const x = node.role === 'start' || node.role === 'end' ? node.width - node.height / 2 : node.role === 'subprocess' ? node.width - 36 : node.width - 13.5;
-  return `translate(${x},13.5)`;
+  const bounds = labelBounds.value.get(node.id);
+  const right = bounds?.right ?? (nodeShapes.value.get(node.id)?.label.x ?? node.width / 2) + Math.max(...node.lines.map(line => line.length)) * 7.5 / 2;
+  const top = bounds?.top ?? nodeLabelY(node, true) - 8;
+  return `translate(${right + 13.5},${top - 2})`;
+}
+
+function measureLabel(element: Element | ComponentPublicInstance | null, id: string) {
+  if (!(element instanceof SVGElement) || typeof (element as SVGGraphicsElement).getBBox !== 'function') return;
+  const bounds = (element as SVGGraphicsElement).getBBox();
+  const right = bounds.x + bounds.width;
+  const previous = labelBounds.value.get(id);
+  if (previous?.right !== right || previous.top !== bounds.y) labelBounds.value.set(id, { right, top: bounds.y });
 }
 
 function edgeMarker(id: string) {
@@ -65,7 +82,7 @@ function edgeMarker(id: string) {
 </script>
 
 <template>
-  <DiagramViewport ref="canvas" :width="layout.width" :height="layout.height" :title="title" :enabled="interactive === true" :focus-point="focusPoint" :focus-key="currentOccurrenceId" scroll-class="graph-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges">
+  <DiagramViewport ref="canvas" :state-key="stateKey" :width="layout.width" :height="layout.height" :title="title" :scenario-title="scenarioTitle" :enabled="interactive === true" :focus-point="focusPoint" :focus-key="currentOccurrenceId" scroll-class="graph-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :export-scenario="scenarioNodeIds !== undefined || scenarioEdgeIds !== undefined">
     <svg :class="['graph', { 'scenario-path': scenarioNodeIds !== undefined || scenarioEdgeIds !== undefined }]" :viewBox="`0 0 ${layout.width} ${layout.height}`" :style="interactive ? { width: `${layout.width}px`, height: `${layout.height}px` } : { minWidth: `${Math.min(layout.width, 1000)}px` }" :role="interactive ? 'group' : 'img'" :aria-label="title">
       <title>{{ title }}</title>
       <defs>
@@ -73,6 +90,16 @@ function edgeMarker(id: string) {
           <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b83a3" />
         </marker>
       </defs>
+      <g v-for="lane in layout.lanes" :key="lane.id" :data-lane-id="lane.id" class="graph-lane"
+         :transform="`translate(${lane.x - lane.width / 2},${lane.y - lane.height / 2})`"
+         role="group" :aria-label="`Lane: ${lane.label}`">
+        <title>{{ lane.label }}</title>
+        <rect class="lane-shape" :width="lane.width" :height="lane.height" />
+        <path class="lane-divider" :d="`M${lane.headingWidth},0 V${lane.height}`" />
+        <text :x="lane.headingWidth / 2" :y="(lane.height - (lane.lines.length - 1) * 20) / 2" text-anchor="middle" dominant-baseline="central">
+          <tspan v-for="(line, index) in lane.lines" :key="index" :x="lane.headingWidth / 2" :dy="index ? 20 : 0">{{ line }}</tspan>
+        </text>
+      </g>
       <g v-for="group in layout.groups" :key="group.id" :data-group-id="group.id"
          :class="['graph-group', group.kind, { current: group.nodeIds.includes(currentNodeId ?? ''), visited: group.nodeIds.some(id => visitedNodeIds?.includes(id)), 'on-scenario': group.nodeIds.some(id => scenarioNodeIds?.includes(id)), 'off-scenario': scenarioNodeIds !== undefined && !group.nodeIds.some(id => scenarioNodeIds?.includes(id)) }]"
          :transform="`translate(${group.x - group.width / 2},${group.y - group.height / 2})`"
@@ -97,11 +124,15 @@ function edgeMarker(id: string) {
          :role="interactive ? 'button' : undefined" :tabindex="interactive ? 0 : undefined"
          :aria-label="nodeLabel(node.id, node.label)" @click="interactive && emit('select', node.id)"
           @keydown.enter="interactive && activateDiagramNode($event, links?.get(node.id), () => emit('select', node.id), id => emit('open', id))" @keydown.space.prevent="interactive && emit('select', node.id)">
-        <polygon v-if="node.role === 'decision'" class="node-shape" :points="`${node.width / 2},0 ${node.width},${node.height / 2} ${node.width / 2},${node.height} 0,${node.height / 2}`" />
+        <template v-if="nodeShapes.get(node.id)">
+          <path v-for="(path, index) in nodeShapes.get(node.id)!.paths" :key="index" class="node-shape" :d="path.d" />
+          <path v-if="nodeShapes.get(node.id)!.border" class="node-shape node-divider" :d="nodeShapes.get(node.id)!.border" style="fill: none" aria-hidden="true" />
+        </template>
+        <polygon v-else-if="node.role === 'decision'" class="node-shape" :points="`${node.width / 2},0 ${node.width},${node.height / 2} ${node.width / 2},${node.height} 0,${node.height / 2}`" />
         <rect v-else class="node-shape" :width="node.width" :height="node.height" :rx="node.role === 'start' || node.role === 'end' ? node.height / 2 : 8" />
         <path v-if="node.role === 'subprocess'" class="node-shape subprocess-divider" :d="`M20,0 V${node.height} M${node.width - 20},0 V${node.height}`" style="fill: none" aria-hidden="true" />
-        <text :x="node.width / 2" :y="(node.height - (interactive && links?.has(node.id) ? (node.lines.length === 1 ? 8 : 16) : 0) - (node.lines.length - 1) * 20) / 2" text-anchor="middle" dominant-baseline="middle">
-          <tspan v-for="(line, index) in node.lines" :key="index" :x="node.width / 2" :dy="index ? 20 : 0">{{ line }}</tspan>
+        <text :ref="element => measureLabel(element, node.id)" :x="nodeShapes.get(node.id)?.label.x ?? node.width / 2" :y="nodeLabelY(node, true)" :data-export-y="nodeLabelY(node, false)" text-anchor="middle" dominant-baseline="middle">
+          <tspan v-for="(line, index) in node.lines" :key="index" :x="nodeShapes.get(node.id)?.label.x ?? node.width / 2" :dy="index ? 20 : 0">{{ line }}</tspan>
         </text>
         <g v-if="nodeBadgeCount(node.id) > 0" class="node-visit-badge" :transform="nodeBadgePosition(node)" aria-hidden="true">
           <circle r="9.5" />

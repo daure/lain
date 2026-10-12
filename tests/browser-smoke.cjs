@@ -10,7 +10,7 @@ const binary = path.resolve(__dirname, '../target/release/lain');
 const runFile = promisify(execFile);
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 let stage = 'initialize';
-let artifacts, home, daemon, browser, page, token;
+let artifacts, home, daemon, browser, page;
 const children = new Set();
 const errors = [];
 
@@ -68,7 +68,7 @@ async function stopDaemon() {
 
 async function api(port, route, method = 'GET', body) {
   const response = await fetch(`http://127.0.0.1:${port}${route}`, {
-    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    method, headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000),
   });
   assert.equal(response.status, 200, `${method} ${route}: ${response.status}`);
@@ -83,6 +83,11 @@ async function text(locator, expected) {
 async function values(locator, expected) {
   await locator.first().waitFor({ state: 'visible' });
   assert.deepEqual(await locator.allTextContents(), expected);
+}
+
+async function selectStep(position) {
+  await page.keyboard.press('g'); await page.keyboard.press('g');
+  for (let step = 0; step < position; step++) await page.keyboard.press('l');
 }
 
 async function noOverflow(target) {
@@ -133,9 +138,9 @@ async function dataInspector() {
     assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
     assert.equal(await pane.getByRole('tab', { name: 'Calls', exact: true }).getAttribute('aria-selected'), 'true');
   }
-  await page.getByRole('button', { name: 'Duplicate callback', exact: true }).click();
+  await page.getByRole('button', { name: 'Repeated callback keeps one fulfillment', exact: true }).click();
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
-  await page.getByRole('button', { name: 'Successful callback', exact: true }).click();
+  await page.getByRole('button', { name: 'New payment queues fulfillment', exact: true }).click();
   assert.equal(new URL(page.url()).search, cursor);
   await page.keyboard.press(','); await page.keyboard.press(','); await page.keyboard.press(',');
   for (const tab of ['Changes', 'Before', 'After', 'Calls']) {
@@ -245,13 +250,13 @@ async function stepNavigator() {
   assert.ok(motion.positions.every(position => Math.abs(position.triggerOffset) < 1), 'the trigger moves with its recorded occurrence');
   assert.ok(motion.positions.every(position => position.titleBottom <= position.triggerTop), 'the heading stays above its trigger throughout navigation');
   assert.ok(Math.abs(motion.positions.at(-1).center - motion.center) < 1);
-  await text(page.locator('.path-hint'), '2/4');
+  await text(page.locator('.step-tile.is-current .step-number'), '2/4');
   await page.screenshot({ path: path.join(artifacts, 'step-navigator-middle.png') });
   await page.getByRole('tab', { name: 'Domain', exact: true }).click();
   await next.click();
   assert.equal(await page.getByRole('tab', { name: 'Domain', exact: true }).getAttribute('aria-selected'), 'true');
   await page.keyboard.press('G');
-  await text(page.locator('.path-hint'), '4/4');
+  await text(page.locator('.step-tile.is-current .step-number'), '4/4');
   await fullWidthTabs();
   assert.equal(await next.count(), 0);
   await page.screenshot({ path: path.join(artifacts, 'step-navigator-last.png') });
@@ -262,7 +267,7 @@ async function stepNavigator() {
   await page.keyboard.press('g'); await page.keyboard.press('g');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.keyboard.press('l'); await page.keyboard.press('l'); await page.keyboard.press('h');
-  await text(page.locator('.path-hint'), '2/4');
+  await text(page.locator('.step-tile.is-current .step-number'), '2/4');
   await fullWidthTabs();
   await page.keyboard.press('g'); await page.keyboard.press('g');
   await page.getByRole('tab', { name: 'Details', exact: true }).click();
@@ -438,7 +443,7 @@ async function focusedGraphStep() {
 
 async function followGraphSteps() {
   await page.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
-  await page.locator('.history-link').nth(0).click();
+  await selectStep(0);
   await focusedGraphStep();
   const positions = await page.evaluate(async () => {
     const canvas = document.querySelector('.diagram-panel .viewport-scroll');
@@ -453,11 +458,11 @@ async function followGraphSteps() {
   assert.ok(new Set(positions).size > 1, 'step navigation animates the canvas');
   await focusedGraphStep();
   await page.locator('.diagram-panel .viewport-scroll').evaluate(element => { element.scrollLeft = 0; });
-  await page.locator('.history-link').nth(3).click();
+  await selectStep(3);
   await focusedGraphStep();
   assert.equal(new URL(page.url()).searchParams.get('occurrence'), 'duplicate-verification');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.locator('.history-link').nth(4).click();
+  await selectStep(4);
   await focusedGraphStep();
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.evaluate(() => {
@@ -465,7 +470,7 @@ async function followGraphSteps() {
   });
   await focusedGraphStep();
   assert.equal(new URL(page.url()).searchParams.get('occurrence'), 'duplicate-existing');
-  await page.locator('.history-link').nth(1).click();
+  await selectStep(1);
   await focusedGraphStep();
   assert.equal(Number(await page.locator('.diagram-panel .viewport-enabled').getAttribute('data-scale')), 1);
   const canvas = page.locator('.diagram-panel .viewport-enabled');
@@ -477,7 +482,7 @@ async function followGraphSteps() {
   const fitted = await framing();
   assert.equal(fitted.fitted, 'true');
   await page.keyboard.press('ArrowRight');
-  await text(page.locator('.path-hint'), '3/5');
+  await text(page.locator('.step-tile.is-current .step-number'), '3/5');
   await delay(350);
   assert.deepEqual(await framing(), fitted, 'fit preserves the complete layout during event navigation');
   await canvas.locator('.viewport-scroll').evaluate(element => { element.scrollLeft += 60; element.scrollTop += 40; });
@@ -532,11 +537,11 @@ async function scaledSequenceContext() {
   });
   const fitted = await framing();
   await page.keyboard.press('ArrowRight');
-  await text(page.locator('.path-hint'), '2/4');
+  await text(page.locator('.step-tile.is-current .step-number'), '2/4');
   await delay(350);
   assert.deepEqual(await framing(), fitted, 'fitted sequence framing stays fixed during keyboard navigation');
   await page.keyboard.press('ArrowLeft');
-  await text(page.locator('.path-hint'), '1/4');
+  await text(page.locator('.step-tile.is-current .step-number'), '1/4');
 }
 
 async function main() {
@@ -548,25 +553,27 @@ async function main() {
   daemon = startDaemon(port);
   await ready(port);
   await runFile(binary, ['--home', home, '--port', String(port), 'demo'], { cwd: artifacts, timeout: 10000 });
-  token = (await fs.readFile(path.join(home, 'token'), 'utf8')).trim();
   const summaries = await api(port, '/api/explanations');
-  assert.equal(summaries.length, 1);
-   const stored = await api(port, '/api/explanations/order-lifecycle');
-   assert.equal(summaries[0].diagramCount, stored.document.diagrams.length);
-   assert.equal(summaries[0].scenarioCount, stored.document.scenarios.length);
+  assert.deepEqual(summaries.map(summary => summary.id).sort(), ['incident-recovery', 'order-lifecycle', 'release-promotion']);
+  const stored = await api(port, '/api/explanations/order-lifecycle');
+  const orderSummary = summaries.find(summary => summary.id === 'order-lifecycle');
+  assert.equal(orderSummary.diagramCount, stored.document.diagrams.length);
+  assert.equal(orderSummary.scenarioCount, stored.document.scenarios.length);
+  // Keep the order-only UI fixture so navigation assertions target the order recording.
+  await api(port, '/api/explanations/release-promotion', 'DELETE');
+  await api(port, '/api/explanations/incident-recovery', 'DELETE');
   stage = 'same-home daemon exclusion on another port';
   const second = startDaemon(await freePort());
   const secondResult = await bounded(second.closed, 5000, 'second daemon did not reject shared home');
   assert.notEqual(secondResult.code, 0);
   assert.match(second.output, /already|lock|running/i);
-  stage = 'launch exchange and embedded library';
+   stage = 'embedded library';
   browser = await chromium.launch({ executablePath: process.env.LAIN_BROWSER_EXECUTABLE || undefined, headless: true, ignoreDefaultArgs: ['--hide-scrollbars'] });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   context.setDefaultTimeout(10000);
   page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
-  const launch = await api(port, '/api/launch', 'POST');
-  await page.goto(launch.url);
+   await page.goto(`http://127.0.0.1:${port}/`);
    await page.getByText('Connected', { exact: true }).waitFor();
   const themeToggle = page.getByRole('button', { name: 'Toggle dark mode', exact: true });
   assert.equal(await themeToggle.getAttribute('aria-pressed'), 'false');
@@ -579,22 +586,18 @@ async function main() {
   stage = 'persistent data inspector, slide motion and tab shortcuts';
   await dataInspector();
   await fullWidthTabs();
-  await text(page.locator('.path-hint'), '1/4');
-  assert.equal(await page.locator('.history-link').count(), 4);
-  assert.equal(await page.locator('.history-link.future').count(), 3);
-  assert.equal(await page.locator('.history-link[aria-current="step"]').count(), 1);
+  await text(page.locator('.step-tile.is-current .step-number'), '1/4');
   assert.equal(await page.getByRole('button', { name: 'Previous event' }).isDisabled(), true);
    stage = 'centered step lens, boundary slots, animated navigation and reduced motion';
    await stepNavigator();
     stage = 'sidebar spacing and visibility-aware scenario navigation';
     const sidebar = page.locator('.scenarios-scroll');
-    const steps = page.locator('.steps-scroll');
    const sidebarGeometry = () => page.locator('.scenario-link.selected').evaluate(element => {
      const { left, width } = element.getBoundingClientRect();
      return { left, width };
    });
     await page.emulateMedia({ reducedMotion: 'reduce' });
-     const spaciousHeight = await sidebar.evaluate(element => Math.ceil(element.scrollHeight / .35) + document.querySelector('.app-header').getBoundingClientRect().height + 2);
+     const spaciousHeight = await sidebar.evaluate(element => Math.ceil(element.scrollHeight) + document.querySelector('.app-header').getBoundingClientRect().height + 2);
      await page.setViewportSize({ width: 1440, height: spaciousHeight });
    await page.waitForFunction(() => {
       const region = document.querySelector('.scenarios-scroll');
@@ -609,71 +612,50 @@ async function main() {
    });
    assert.deepEqual(await sidebarGeometry(), spaciousGeometry);
     await sidebar.evaluate(element => { element.scrollTop = 0; });
-   for (const [key, scenario] of [['j', 'Duplicate callback'], ['k', 'Successful callback']]) {
+   for (const [key, scenario] of [['j', 'Repeated callback keeps one fulfillment'], ['k', 'New payment queues fulfillment']]) {
      const position = await sidebar.evaluate(element => element.scrollTop);
      await page.keyboard.press(key);
      await text(page.locator('.scenario-link.selected'), scenario);
      assert.equal(await sidebar.evaluate(element => element.scrollTop), position);
    }
      await page.setViewportSize({ width: 1440, height: 500 });
-    const split = await page.locator('.sidebar').evaluate(element => {
-      const scenarios = element.querySelector('.scenarios-scroll');
-      const steps = element.querySelector('.steps-scroll');
-       return { height: element.clientHeight, scenarios: scenarios.getBoundingClientRect().height, steps: element.querySelector('.walked-path').getBoundingClientRect().height,
-        scenariosOverflow: scenarios.scrollHeight > scenarios.clientHeight, stepsOverflow: steps.scrollHeight > steps.clientHeight };
-    });
-     assert.ok(split.scenarios <= split.height * .35 + .5, 'Scenarios use at most 35% of the sidebar');
-     assert.ok(split.steps >= split.height * .65 - 1, 'Steps use the remaining sidebar height');
-    assert.ok(split.scenariosOverflow && split.stepsOverflow, 'both lists overflow independently');
-    await sidebar.evaluate(element => { element.scrollTop = 120; });
-    const stepsStart = await steps.evaluate(element => element.scrollTop);
-    await sidebar.hover();
-    await page.mouse.wheel(0, 80);
-    await page.waitForFunction(() => document.querySelector('.scenarios-scroll').scrollTop > 120);
-    assert.equal(await steps.evaluate(element => element.scrollTop), stepsStart, 'scrolling scenarios keeps steps stationary');
+     const layout = await page.locator('.sidebar').evaluate(element => {
+       const scenarios = element.querySelector('.scenarios-scroll');
+       return { height: element.clientHeight, scenarios: scenarios.getBoundingClientRect().height,
+         scenariosOverflow: scenarios.scrollHeight > scenarios.clientHeight };
+     });
+     assert.ok(Math.abs(layout.scenarios - layout.height) < 1, 'Scenarios fill the sidebar height');
+     assert.ok(layout.scenariosOverflow, 'Scenarios scroll within the sidebar');
+     await sidebar.evaluate(element => { element.scrollTop = 120; });
+     await sidebar.hover();
+     await page.mouse.wheel(0, 80);
+     await page.waitForFunction(() => document.querySelector('.scenarios-scroll').scrollTop > 120);
      const scenariosStart = await sidebar.evaluate(element => element.scrollTop);
-     const stepsHeadingBounds = await page.locator('.steps-heading').boundingBox();
-     await steps.hover();
-    await page.mouse.wheel(0, 80);
-    await page.waitForFunction(start => document.querySelector('.steps-scroll').scrollTop > start, stepsStart);
-     assert.equal(await sidebar.evaluate(element => element.scrollTop), scenariosStart, 'scrolling steps keeps scenarios stationary');
-     assert.deepEqual(await page.locator('.steps-heading').boundingBox(), stepsHeadingBounds, 'the step counter stays fixed while the list scrolls');
-     for (const [boundary, edge] of [['last', 'start'], ['first', 'end']]) {
-       if (boundary === 'last') await page.keyboard.press('G');
-       else { await page.keyboard.press('g'); await page.keyboard.press('g'); }
-       await steps.evaluate((element, edge) => { element.scrollTop = edge === 'start' ? 0 : element.scrollHeight; }, edge);
-       await page.waitForFunction(() => {
-         const region = document.querySelector('.steps-scroll').getBoundingClientRect();
-         const current = document.querySelector('.history-link.current').getBoundingClientRect();
-         return current.top >= region.top - 1 && current.bottom <= region.bottom + 1;
-       });
-     }
-     await steps.evaluate(element => { element.scrollTop = 0; });
-    await sidebar.evaluate(element => { element.scrollTop = 0; });
+     await page.keyboard.press('l'); await page.keyboard.press('h');
+     assert.equal(await sidebar.evaluate(element => element.scrollTop), scenariosStart, 'step navigation keeps scenarios stationary');
+     await sidebar.evaluate(element => { element.scrollTop = 0; });
    await page.keyboard.press('j');
-   await text(page.locator('.scenario-link.selected'), 'Duplicate callback');
+   await text(page.locator('.scenario-link.selected'), 'Repeated callback keeps one fulfillment');
    await page.waitForFunction(() => {
-      const region = document.querySelector('.steps-scroll');
-      const target = region.querySelector('.history-link.current').getBoundingClientRect();
+       const region = document.querySelector('.scenarios-scroll');
+       const target = region.querySelector('.scenario-link.selected').getBoundingClientRect();
       return target.top >= region.getBoundingClientRect().top && target.bottom <= region.getBoundingClientRect().bottom;
    });
    await page.setViewportSize({ width: 1440, height: 1000 });
    await page.keyboard.press('k');
-   await text(page.locator('.scenario-link.selected'), 'Successful callback');
+   await text(page.locator('.scenario-link.selected'), 'New payment queues fulfillment');
    await page.emulateMedia({ reducedMotion: 'no-preference' });
   stage = 'recorded path, next/previous and captured changes';
   await page.getByRole('button', { name: 'Next event' }).click();
-  assert.equal(await page.locator('.history-link.future').count(), 2);
   await page.getByRole('button', { name: 'Next event' }).click();
-  await text(page.locator('.path-hint'), '3/4');
-  assert.equal(await page.locator('.history-link.future').count(), 1);
+  await text(page.locator('.step-tile.is-current .step-number'), '3/4');
    await showData();
   const paymentStatus = page.locator('.value-row').filter({ hasText: 'Payment status' });
   await values(paymentStatus.locator('pre'), ['"pending"', '"paid"']);
   const failureReason = page.locator('.value-row').filter({ hasText: 'Failure reason' });
   await values(failureReason.locator('pre'), ['Uncaptured', 'null']);
   await page.getByRole('button', { name: 'Previous event' }).click();
-  await text(page.locator('.path-hint'), '2/4');
+  await text(page.locator('.step-tile.is-current .step-number'), '2/4');
   stage = 'diagram, ERD and repeated-node occurrence picker';
    await page.getByRole('tab', { name: 'Domain', exact: true }).click();
     await canvasControls('.domain-panel');
@@ -703,21 +685,14 @@ async function main() {
    await page.getByRole('button', { name: 'Previous event', exact: true }).click();
     assert.equal(await page.locator('.domain-method.called').count(), 0);
     await page.getByRole('tab', { name: 'Details', exact: true }).click();
-  await page.getByRole('button', { name: 'Duplicate callback', exact: true }).click();
-   assert.deepEqual(await page.locator('.history-visit-badge').allTextContents(), ['1', '2']);
+  await page.getByRole('button', { name: 'Repeated callback keeps one fulfillment', exact: true }).click();
     await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
      assert.equal(await page.locator('.diagram-panel .node-visit-badge').count(), 0);
-     await page.locator('.history-link').nth(1).click();
-     await text(page.locator('.path-hint'), '2/5');
+      await selectStep(1);
+     await text(page.locator('.step-tile.is-current .step-number'), '2/5');
       await text(page.locator('.diagram-panel .node-visit-badge text'), '1');
       assert.equal(await page.locator('.diagram-panel .graph-group.current').count(), 2);
       await groupedFrames(stored.document.diagrams[0]);
-     const sidebarBadgeInsets = await page.locator('.history-link.current').evaluate(element => {
-       const row = element.getBoundingClientRect();
-       const badge = element.querySelector('.history-visit-badge').getBoundingClientRect();
-       return { top: badge.top - row.top, right: row.right - badge.right };
-     });
-     assert.equal(sidebarBadgeInsets.top, sidebarBadgeInsets.right);
      await followGraphSteps();
      await canvasControls('.diagram-panel');
      await page.screenshot({ path: path.join(artifacts, 'diagram-canvas.png'), fullPage: true });
@@ -727,7 +702,7 @@ async function main() {
   await page.getByRole('button', { name: 'Go to occurrence', exact: true }).click();
        await text(page.locator('.diagram-panel .node-visit-badge text'), '2');
      await showData();
-   await text(page.locator('.path-hint'), '4/5');
+   await text(page.locator('.step-tile.is-current .step-number'), '4/5');
     await values(page.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
      await page.getByRole('tab', { name: 'Details', exact: true }).click();
    const title = page.locator('.explanation-title');
@@ -740,30 +715,28 @@ async function main() {
    assert.equal(deepRoute.hash, '');
    assert.equal(await page.evaluate(() => history.state), null);
     await page.reload();
-     await text(page.locator('.path-hint'), '4/5');
+     await text(page.locator('.step-tile.is-current .step-number'), '4/5');
     assert.equal(await themeToggle.getAttribute('aria-pressed'), 'true');
     assert.equal(await page.evaluate(() => localStorage.getItem('lain-theme')), 'dark');
     assert.equal(new URL(page.url()).hash, '');
    await page.getByRole('button', { name: 'Previous event', exact: true }).click();
-    await text(page.locator('.path-hint'), '3/5');
+    await text(page.locator('.step-tile.is-current .step-number'), '3/5');
    await page.goBack();
-    await text(page.locator('.path-hint'), '4/5');
+    await text(page.locator('.step-tile.is-current .step-number'), '4/5');
    await page.goForward();
-    await text(page.locator('.path-hint'), '3/5');
+    await text(page.locator('.step-tile.is-current .step-number'), '3/5');
    await page.getByRole('button', { name: 'Next event', exact: true }).click();
-    await text(page.locator('.path-hint'), '4/5');
+    await text(page.locator('.step-tile.is-current .step-number'), '4/5');
    await page.getByRole('button', { name: 'Lain explanation library', exact: true }).click();
    await page.locator('.explanation-card').waitFor();
    assert.equal(new URL(page.url()).search, '');
    await page.goBack();
-    await text(page.locator('.path-hint'), '4/5');
+    await text(page.locator('.step-tile.is-current .step-number'), '4/5');
    const deepContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
    const deepPage = await deepContext.newPage();
    deepPage.on('pageerror', error => errors.push(error.message));
-   const deepLaunch = new URL((await api(port, '/api/launch', 'POST')).url);
-   deepLaunch.search = deepRoute.search;
-   await deepPage.goto(deepLaunch.href);
-    await text(deepPage.locator('.path-hint'), '4/5');
+    await deepPage.goto(deepRoute.href);
+    await text(deepPage.locator('.step-tile.is-current .step-number'), '4/5');
     assert.equal(new URL(deepPage.url()).hash, '');
      await showData(deepPage);
     await values(deepPage.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
@@ -772,12 +745,12 @@ async function main() {
   const occurrence = stored.document.scenarios[1].occurrences[3];
   const oldNarration = occurrence.narration;
   occurrence.narration = `${oldNarration} Smoke revision two.`;
-  await api(port, '/api/explanations/order-lifecycle', 'PUT', { expectedRevision: 1, document: stored.document });
+  await api(port, '/api/explanations/order-lifecycle', 'PUT', { document: stored.document });
    await page.getByRole('alert').filter({ hasText: 'Explanation updated' }).waitFor();
   await page.locator('.narration').filter({ hasText: occurrence.narration }).waitFor();
   await text(page.locator('.narration'), occurrence.narration);
   await text(page.locator('.step-tile[aria-current="step"] .step-trigger code'), occurrence.trigger);
-  await text(page.locator('.path-hint'), '4/5');
+  await text(page.locator('.step-tile.is-current .step-number'), '4/5');
   await page.screenshot({ path: path.join(artifacts, 'desktop.png'), fullPage: true });
   stage = 'mobile page width';
   await page.setViewportSize({ width: 390, height: 844 });
@@ -801,20 +774,20 @@ async function main() {
    await page.screenshot({ path: path.join(artifacts, 'mobile-domain-canvas.png'), fullPage: true });
    stage = 'sequence message selects the exact recorded snapshot';
    await page.setViewportSize({ width: 1440, height: 1000 });
-   await page.getByRole('button', { name: 'Successful payment exchange', exact: true }).click();
+   await page.getByRole('button', { name: 'New payment exchange queues fulfillment', exact: true }).click();
     await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
     await canvasControls('.diagram-panel');
     await page.screenshot({ path: path.join(artifacts, 'sequence-canvas.png'), fullPage: true });
     await scaledSequenceContext();
     await page.locator('.diagram-panel [data-occurrence-id="sequence-captured"]').click();
-    await text(page.locator('.path-hint'), '3/4');
+    await text(page.locator('.step-tile.is-current .step-number'), '3/4');
      assert.equal(new URL(page.url()).searchParams.get('occurrence'), 'sequence-captured');
       await showData();
      await values(paymentStatus.locator('pre'), ['"pending"', '"paid"']);
     stage = 'redelivery records separate transit visits and attempt snapshots';
-    await page.getByRole('button', { name: 'Delivery after redelivery', exact: true }).click();
-    await page.locator('.history-link').nth(2).click();
-     await text(page.locator('.path-hint'), '3/6');
+    await page.getByRole('button', { name: 'Retry delivers the parcel', exact: true }).click();
+     await selectStep(2);
+     await text(page.locator('.step-tile.is-current .step-number'), '3/6');
     const attempts = page.locator('.value-row').filter({ hasText: 'Delivery attempts' }).locator('pre');
     const issue = page.locator('.value-row').filter({ hasText: 'Delivery issue' }).locator('pre');
     await values(attempts, ['0', '1']);
@@ -837,8 +810,8 @@ async function main() {
       await page.locator('.inspector-body').evaluate(element => { element.scrollTop = element.scrollHeight; });
     await page.screenshot({ path: path.join(artifacts, 'redelivery-delivered.png'), fullPage: true });
     stage = 'returned parcel persists beside paid order after work removal';
-     await page.getByRole('navigation', { name: 'Scenarios', exact: true }).getByRole('button', { name: 'Returned to sender', exact: true }).click();
-    await page.locator('.history-link').nth(3).click();
+     await page.getByRole('navigation', { name: 'Scenarios', exact: true }).getByRole('button', { name: 'Declined redelivery returns the parcel', exact: true }).click();
+     await selectStep(3);
     await values(page.locator('.value-row').filter({ hasText: 'Return reason' }).locator('pre'), ['null', '"redelivery declined"']);
     await values(page.locator('.value-row').filter({ hasText: 'Returned at' }).locator('pre'), ['null', '"2026-10-10T10:18:00Z"']);
     await values(page.locator('.value-row').filter({ hasText: 'Delivered at' }).locator('pre'), ['null', 'null']);
@@ -869,7 +842,7 @@ async function main() {
        }
      }
    }
-  await api(port, '/api/explanations/untrusted-smoke', 'PUT', { expectedRevision: 0, document: untrusted });
+  await api(port, '/api/explanations/untrusted-smoke', 'PUT', { document: untrusted });
   await page.getByRole('button', { name: 'Lain explanation library', exact: true }).click();
   await page.locator('.explanation-card').filter({ hasText: 'Untrusted text smoke' }).click();
   await text(page.locator('.narration'), payload);
@@ -886,11 +859,11 @@ async function main() {
    await text(page.locator('.entity-methods p'), payload);
    assert.equal(await page.locator('.domain-method img, .domain-method script, .entity-methods img, .entity-methods script').count(), 0);
    assert.equal(await page.evaluate(() => globalThis.lainXss), undefined);
-  stage = 'SIGTERM exits while authenticated browser WebSocket remains open';
+   stage = 'SIGTERM exits while browser WebSocket remains open';
    await page.getByText('Connected', { exact: true }).waitFor();
   await stopDaemon();
   assert.deepEqual(errors, []);
-  stage = 'restart retains committed database and credential';
+   stage = 'restart retains committed database';
   daemon = startDaemon(port);
   await ready(port);
   const retained = await api(port, '/api/explanations/order-lifecycle');

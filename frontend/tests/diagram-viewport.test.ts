@@ -23,7 +23,8 @@ async function mountViewport(render: () => ReturnType<typeof h>) {
   const scroller = canvas.querySelector<HTMLElement>('.viewport-scroll')!;
   Object.defineProperties(scroller, {
     clientWidth: { value: 1000 }, clientHeight: { value: 600 },
-    scrollWidth: { value: 10000, configurable: true }, scrollHeight: { value: 10000, configurable: true },
+    scrollWidth: { get: () => parseFloat(canvas.querySelector<HTMLElement>('.viewport-stage')!.style.width), configurable: true },
+    scrollHeight: { get: () => parseFloat(canvas.querySelector<HTMLElement>('.viewport-stage')!.style.height), configurable: true },
   });
   window.dispatchEvent(new Event('resize'));
   await settle();
@@ -76,11 +77,29 @@ it.each([980, 1000, 2000])('centers fitting axes and hugs overflowing bounds at 
   try {
     await view.click('Zoom to 100% and focus');
     expect(view.canvas.dataset.scale).toBe('1');
-    expect(view.position()).toEqual([width <= 1000 ? width / 2 : 480, 150]);
+    expect(view.scroller.scrollWidth).toBe(width <= 1000 ? 1000 : width + 40);
+    expect(view.scroller.scrollHeight).toBe(600);
+    expect(view.position()).toEqual([0, 0]);
     view.selected.value = 'b'; await settle();
-    expect(view.position()).toEqual([width / 2, 150]);
+    expect(view.position()).toEqual([width <= 1000 ? 0 : width / 2 + 20 - 500, 0]);
     view.selected.value = 'c'; await settle();
-    expect(view.position()).toEqual([width <= 1000 ? width / 2 : 1520, 150]);
+    expect(view.position()).toEqual([width <= 1000 ? 0 : width + 40 - 1000, 0]);
+  } finally { view.app.unmount(); }
+});
+
+it('keeps a tall chart centered horizontally while limiting vertical panning to its content', async () => {
+  const view = await mountViewport(() => h(DiagramViewport, { width: 800, height: 1400, title: 'Tall chart', focusPoint: { x: 400, y: 700 } }));
+  try {
+    expect(view.scroller.scrollWidth).toBe(1000);
+    expect(view.scroller.scrollHeight).toBe(600);
+    await view.click('Zoom to 100% and focus');
+    expect(view.scroller.scrollWidth).toBe(1000);
+    expect(view.scroller.scrollHeight).toBe(1440);
+    expect(view.position()).toEqual([0, 420]);
+    await view.click('Fit diagram');
+    expect(view.scroller.scrollWidth).toBe(1000);
+    expect(view.scroller.scrollHeight).toBe(600);
+    expect(view.position()).toEqual([0, 0]);
   } finally { view.app.unmount(); }
 });
 
@@ -93,6 +112,8 @@ it.each([800, 2000])('defaults to fit mode and preserves its viewport across eve
     expect(view.canvas.querySelector('[aria-label="Fit diagram"]')!.getAttribute('aria-pressed')).toBe('true');
     expect(view.canvas.querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('false');
     expect(scale).toBe(width === 800 ? '1' : '0.48');
+    expect(view.scroller.scrollWidth).toBe(view.scroller.clientWidth);
+    expect(view.scroller.scrollHeight).toBe(view.scroller.clientHeight);
     const node = view.canvas.querySelector('.graph-node')!;
     node.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
     node.dispatchEvent(new Event('touchstart', { bubbles: true }));
@@ -119,7 +140,7 @@ it('opens each scene fitted to its content after using 1:1 in another scene', as
     scene.value = 'second'; await settle();
     expect(view.canvas.dataset.fitted).toBe('true');
     expect(view.canvas.dataset.scale).toBe('0.48');
-    expect(view.position()).toEqual([480, 72]);
+    expect(view.position()).toEqual([0, 0]);
   } finally { view.app.unmount(); }
 });
 
@@ -135,7 +156,7 @@ it.each(['wheel', 'scroll'])('exits fit on manual %s without snapping and follow
     expect(view.canvas.dataset.fitted).toBe('false');
     expect(view.position()).toEqual(manual);
     view.selected.value = 'b'; await settle();
-    expect(view.position()).toEqual([480, 72]);
+    expect(view.position()).toEqual([0, 0]);
     expect(view.canvas.dataset.scale).toBe('0.48');
   } finally { view.app.unmount(); }
 });
@@ -148,16 +169,16 @@ it('resumes following after zooming or restoring 1:1 from fit', async () => {
     view.selected.value = 'b'; await settle();
     expect(view.canvas.dataset.fitted).toBe('false');
     expect(view.canvas.dataset.scale).toBe('0.6');
-    expect(view.position()).toEqual([600, 90]);
+    expect(view.position()).toEqual([120, 0]);
     await view.click('Fit diagram');
     await view.click('Zoom to 100% and focus');
     expect(view.canvas.dataset.fitted).toBe('false');
     expect(view.canvas.dataset.scale).toBe('1');
     expect(view.canvas.querySelector('[aria-label="Fit diagram"]')!.getAttribute('aria-pressed')).toBe('false');
     expect(view.canvas.querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('true');
-    expect(view.position()).toEqual([1000, 150]);
+    expect(view.position()).toEqual([520, 0]);
     view.selected.value = 'a'; await settle();
-    expect(view.position()).toEqual([480, 150]);
+    expect(view.position()).toEqual([0, 0]);
     await view.click('Zoom in');
     expect(view.canvas.querySelector('[aria-label="Fit diagram"]')!.getAttribute('aria-pressed')).toBe('false');
     expect(view.canvas.querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('false');
@@ -195,9 +216,10 @@ it('centers complete sequence rows horizontally and preserves fitted framing acr
     expect(view.canvas.dataset.fitted).toBe('true');
     await view.click('Zoom to 100% and focus');
     const width = Number(view.canvas.querySelector('.sequence')!.getAttribute('viewBox')!.split(' ')[2]);
-    expect(view.scroller.scrollLeft).toBe(width / 2);
+    const centeredLeft = width <= view.scroller.clientWidth ? 0 : (width - view.scroller.clientWidth) / 2 + 20;
+    expect(view.scroller.scrollLeft).toBe(centeredLeft);
     selected.value = scenario.occurrences[1]!.id; await settle();
-    expect(view.scroller.scrollLeft).toBe(width / 2);
+    expect(view.scroller.scrollLeft).toBe(centeredLeft);
     const beforeFit = view.position();
     await view.click('Fit diagram');
     const fitted = view.position();
@@ -206,7 +228,7 @@ it('centers complete sequence rows horizontally and preserves fitted framing acr
     expect(view.canvas.dataset.fitted).toBe('true');
     await view.click('Zoom to 100% and focus');
     expect(view.canvas.dataset.scale).toBe('1');
-    expect(view.scroller.scrollLeft).toBe(width / 2);
+    expect(view.scroller.scrollLeft).toBe(centeredLeft);
     expect(view.scroller.scrollTop).toBeGreaterThan(beforeFit[1]!);
   } finally { view.app.unmount(); }
 });

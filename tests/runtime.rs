@@ -17,28 +17,22 @@ use lain::runtime::Runtime;
 use tempfile::TempDir;
 
 #[test]
-fn runtime_preserves_credentials_and_saved_config() {
+fn runtime_preserves_saved_config_and_private_permissions() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state");
-    let first = Runtime::load(Some(home.clone()), Some(41001)).unwrap();
+    Runtime::load(Some(home.clone()), Some(41001)).unwrap();
     let config = fs::read(home.join("config.json")).unwrap();
-    let credential = fs::read(home.join("token")).unwrap();
     let overridden = Runtime::load(Some(home.clone()), Some(41002)).unwrap();
     let reopened = Runtime::load(Some(home.clone()), None).unwrap();
 
-    assert_eq!(first.token, overridden.token);
-    assert_eq!(first.token, reopened.token);
     assert_eq!(overridden.port, 41002);
     assert_eq!(reopened.port, 41001);
     assert_eq!(fs::read(home.join("config.json")).unwrap(), config);
-    assert_eq!(fs::read(home.join("token")).unwrap(), credential);
     assert_eq!(fs::metadata(&home).unwrap().mode() & 0o7777, 0o700);
-    for filename in ["token", "config.json"] {
-        assert_eq!(
-            fs::metadata(home.join(filename)).unwrap().mode() & 0o7777,
-            0o600
-        );
-    }
+    assert_eq!(
+        fs::metadata(home.join("config.json")).unwrap().mode() & 0o7777,
+        0o600
+    );
 }
 
 #[test]
@@ -60,23 +54,21 @@ fn runtime_rejects_symlink_homes_and_ancestors() {
 }
 
 #[test]
-fn runtime_rejects_symlink_credentials_and_config_without_changing_targets() {
-    for filename in ["token", "config.json"] {
-        let temporary = TempDir::new().unwrap();
-        let home = temporary.path().join("state");
-        Runtime::load(Some(home.clone()), None).unwrap();
-        let target = temporary.path().join("unrelated");
-        fs::write(&target, "preserve me").unwrap();
-        fs::remove_file(home.join(filename)).unwrap();
-        symlink(&target, home.join(filename)).unwrap();
-        assert!(Runtime::load(Some(home), None).is_err());
-        assert_eq!(fs::read_to_string(target).unwrap(), "preserve me");
-    }
+fn runtime_rejects_symlink_config_without_changing_targets() {
+    let temporary = TempDir::new().unwrap();
+    let home = temporary.path().join("state");
+    Runtime::load(Some(home.clone()), None).unwrap();
+    let target = temporary.path().join("unrelated");
+    fs::write(&target, "preserve me").unwrap();
+    fs::remove_file(home.join("config.json")).unwrap();
+    symlink(&target, home.join("config.json")).unwrap();
+    assert!(Runtime::load(Some(home), None).is_err());
+    assert_eq!(fs::read_to_string(target).unwrap(), "preserve me");
 }
 
 #[test]
 fn runtime_rejects_unsafe_permissions_without_repairing_them() {
-    for filename in ["", "token", "config.json"] {
+    for filename in ["", "config.json"] {
         let temporary = TempDir::new().unwrap();
         let home = temporary.path().join("state");
         Runtime::load(Some(home.clone()), None).unwrap();
@@ -90,13 +82,11 @@ fn runtime_rejects_unsafe_permissions_without_repairing_them() {
 }
 
 #[test]
-fn runtime_rejects_invalid_config_and_credentials() {
+fn runtime_rejects_invalid_config() {
     for (filename, contents) in [
         ("config.json", "{\"port\":0}"),
         ("config.json", "{\"port\":38475,\"unknown\":true}"),
         ("config.json", "not json"),
-        ("token", "short"),
-        ("token", "secret with spaces that must be rejected"),
     ] {
         let temporary = TempDir::new().unwrap();
         let home = temporary.path().join("state");
@@ -111,11 +101,15 @@ fn runtime_rejects_invalid_config_and_credentials() {
 }
 
 #[test]
-fn runtime_rejects_hard_linked_credentials() {
+fn runtime_rejects_hard_linked_config() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state");
     Runtime::load(Some(home.clone()), None).unwrap();
-    fs::hard_link(home.join("token"), temporary.path().join("linked-token")).unwrap();
+    fs::hard_link(
+        home.join("config.json"),
+        temporary.path().join("linked-config"),
+    )
+    .unwrap();
     assert!(
         Runtime::load(Some(home), None)
             .err()
@@ -180,11 +174,11 @@ fn setup_preserves_unrelated_units_without_invoking_systemctl() {
 }
 
 #[test]
-fn dry_run_prints_escaped_unit_and_placeholder_without_installing_or_leaking_token() {
+fn dry_run_prints_escaped_unit_and_client_settings_without_installing() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state with spaces % $ \" quote");
     let config_home = temporary.path().join("config");
-    let runtime = Runtime::load(Some(home.clone()), Some(41003)).unwrap();
+    Runtime::load(Some(home.clone()), Some(41003)).unwrap();
     let config = fs::read(home.join("config.json")).unwrap();
     let executable = temporary.path().join("lain $binary % with spaces");
     fs::copy(env!("CARGO_BIN_EXE_lain"), &executable).unwrap();
@@ -207,12 +201,9 @@ fn dry_run_prints_escaped_unit_and_placeholder_without_installing_or_leaking_tok
     assert!(stdout.contains("ExecStart=:\""));
     assert!(stdout.contains("lain $binary %% with spaces\" --home"));
     assert!(stdout.contains("state with spaces %% $ \\\" quote\" --port 41004 serve"));
-    assert!(stdout.contains("Bearer {env:LAIN_TOKEN}"));
     assert!(stdout.contains("http://127.0.0.1:41004/mcp"));
-    assert!(!stdout.contains(&runtime.token));
-    let label = "OpenCode V2 client settings (merge manually; never paste the credential):\n";
-    let (unit, instructions) = stdout.split_once(label).unwrap();
-    assert!(!unit.contains("LAIN_TOKEN"));
+    let label = "OpenCode V2 client settings (merge manually):\n";
+    let (_, instructions) = stdout.split_once(label).unwrap();
     let settings: serde_json::Value = serde_json::Deserializer::from_str(instructions)
         .into_iter()
         .next()
@@ -226,8 +217,7 @@ fn dry_run_prints_escaped_unit_and_placeholder_without_installing_or_leaking_tok
                 "type": "remote",
                 "url": "http://127.0.0.1:41004/mcp",
                 "oauth": false,
-                "protocol": "legacy",
-                "headers": {"Authorization": "Bearer {env:LAIN_TOKEN}"}
+                "protocol": "legacy"
             }}}
         })
     );
@@ -251,22 +241,17 @@ fn service_paths_reject_control_characters() {
 }
 
 #[test]
-fn status_authenticates_the_selected_home() {
+fn status_checks_the_local_daemon_on_the_selected_port() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state");
-    let runtime = Runtime::load(Some(home.clone()), None).unwrap();
-    let server = FakeDaemon::new(runtime.token.clone());
+    Runtime::load(Some(home.clone()), None).unwrap();
+    let server = FakeDaemon::new();
     let matching = cli_status(&home, server.port);
     assert!(
         matching.status.success(),
         "{}",
         String::from_utf8_lossy(&matching.stderr)
     );
-    let unrelated = temporary.path().join("unrelated");
-    Runtime::load(Some(unrelated.clone()), None).unwrap();
-    let mismatched = cli_status(&unrelated, server.port);
-    assert!(!mismatched.status.success());
-    assert!(String::from_utf8_lossy(&mismatched.stderr).contains("same --home and --port"));
     assert!(
         server
             .requests
@@ -278,13 +263,12 @@ fn status_authenticates_the_selected_home() {
 }
 
 #[test]
-fn successful_setup_atomically_saves_port_and_preserves_credentials() {
+fn successful_setup_atomically_saves_the_selected_port() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state");
-    let runtime = Runtime::load(Some(home.clone()), Some(41001)).unwrap();
+    Runtime::load(Some(home.clone()), Some(41001)).unwrap();
     let original_inode = fs::metadata(home.join("config.json")).unwrap().ino();
-    let credential = fs::read(home.join("token")).unwrap();
-    let server = FakeDaemon::new(runtime.token.clone());
+    let server = FakeDaemon::new();
     let output = cli_setup(temporary.path(), &home, server.port, true);
     assert!(
         output.status.success(),
@@ -293,7 +277,6 @@ fn successful_setup_atomically_saves_port_and_preserves_credentials() {
     );
     let saved = Runtime::load(Some(home.clone()), None).unwrap();
     assert_eq!(saved.port, server.port);
-    assert_eq!(fs::read(home.join("token")).unwrap(), credential);
     let metadata = fs::metadata(home.join("config.json")).unwrap();
     assert_eq!(metadata.mode() & 0o7777, 0o600);
     assert_ne!(metadata.ino(), original_inode);
@@ -322,31 +305,15 @@ fn successful_setup_atomically_saves_port_and_preserves_credentials() {
 fn setup_requires_an_active_unit_before_saving_port() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state");
-    let runtime = Runtime::load(Some(home.clone()), Some(41001)).unwrap();
+    Runtime::load(Some(home.clone()), Some(41001)).unwrap();
     let config = fs::read(home.join("config.json")).unwrap();
-    let credential = fs::read(home.join("token")).unwrap();
-    let server = FakeDaemon::new(runtime.token.clone());
+    let server = FakeDaemon::new();
     let output = cli_setup(temporary.path(), &home, server.port, false);
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("is-active --quiet lain.service failed")
     );
     assert_eq!(fs::read(home.join("config.json")).unwrap(), config);
-    assert_eq!(fs::read(home.join("token")).unwrap(), credential);
-}
-
-#[test]
-fn setup_rejects_another_homes_daemon_and_preserves_saved_port() {
-    let temporary = TempDir::new().unwrap();
-    let home = temporary.path().join("state");
-    Runtime::load(Some(home.clone()), Some(41001)).unwrap();
-    let config = fs::read(home.join("config.json")).unwrap();
-    let server = FakeDaemon::new("different-home-token".to_owned());
-    let output = cli_setup(temporary.path(), &home, server.port, true);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("another home's service"));
-    assert_eq!(fs::read(home.join("config.json")).unwrap(), config);
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("Lain ready"));
 }
 
 #[test]
@@ -523,7 +490,7 @@ struct FakeDaemon {
 }
 
 impl FakeDaemon {
-    fn new(token: String) -> Self {
+    fn new() -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         listener.set_nonblocking(true).unwrap();
@@ -553,18 +520,12 @@ impl FakeDaemon {
                     request.push(byte[0]);
                 }
                 let request = String::from_utf8(request).unwrap();
-                let authenticated = request.lines().any(|line| {
-                    line.split_once(':').is_some_and(|(name, value)| {
-                        name.eq_ignore_ascii_case("authorization")
-                            && value.trim() == format!("Bearer {token}")
-                    })
-                });
                 let (status, body) = if request.starts_with("GET /api/health ") {
                     ("200 OK", "{\"status\":\"ok\"}")
-                } else if request.starts_with("GET /api/explanations ") && authenticated {
+                } else if request.starts_with("GET /api/explanations ") {
                     ("200 OK", "[]")
                 } else {
-                    ("401 Unauthorized", "{\"error\":\"unauthorized\"}")
+                    ("404 Not Found", "{\"error\":\"not found\"}")
                 };
                 captured.lock().unwrap().push(request);
                 write!(stream, "HTTP/1.0 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();

@@ -1,13 +1,16 @@
 import dagre from '@dagrejs/dagre';
-import { roundedPath, type Point } from './edge-path';
-import type { Diagram, DiagramGroup, FlowNodeRole } from './model';
+import { graphTerminalRun, roundedPath, type Point } from './edge-path';
+import type { Diagram, DiagramGroup, DiagramLane, FlowNodeRole } from './model';
+import { swimlaneLayout } from './swimlane-layout';
+import { flowNodeExtraHeight, flowNodeShape, flowShapeConnection } from './flow-shapes';
 
 export type LayoutNode = { id: string; label: string; lines: string[]; role?: FlowNodeRole; x: number; y: number; width: number; height: number };
 export type LayoutEdge = { id: string; label: string; lines: string[]; path: string; x: number; y: number; source: string; target: string };
 export type LayoutGroup = { id: string; label: string; lines: string[]; nodeIds: string[]; x: number; y: number; width: number; height: number; headerHeight: number; kind: 'flow' | 'state' | 'domain' };
-export type GraphLayout = { width: number; height: number; nodes: LayoutNode[]; edges: LayoutEdge[]; groups?: LayoutGroup[] };
+export type LayoutLane = DiagramLane & { lines: string[]; x: number; y: number; width: number; height: number; headingWidth: number; implicit?: boolean };
+export type GraphLayout = { width: number; height: number; nodes: LayoutNode[]; edges: LayoutEdge[]; groups?: LayoutGroup[]; lanes?: LayoutLane[] };
 type GroupEdge = Pick<LayoutEdge, 'label' | 'lines' | 'x' | 'y' | 'source' | 'target'> & { points: Point[]; labelLineHeight?: number };
-type RoutedEdge = Omit<LayoutEdge, 'path'> & { points: Point[] };
+export type RoutedEdge = Omit<LayoutEdge, 'path'> & { points: Point[] };
 type Bounds = { left: number; top: number; right: number; bottom: number };
 const groupPadding = 24;
 
@@ -32,7 +35,7 @@ function edgeLabelLines(label: string): string[] {
   return lines.length <= 2 ? lines : [lines[0]!, `${lines[1]!.slice(0, 19).trimEnd()}…`];
 }
 
-function nodeConnection(node: LayoutNode, toward: Point, fallback: Point): Point {
+export function nodeConnection(node: LayoutNode, toward: Point, fallback: Point): Point {
   const dx = toward.x - node.x;
   const dy = toward.y - node.y;
   if ((!dx && !dy) || !node.role || node.role === 'action' || node.role === 'subprocess') return fallback;
@@ -42,6 +45,8 @@ function nodeConnection(node: LayoutNode, toward: Point, fallback: Point): Point
     const scale = 1 / (Math.abs(dx) / halfWidth + Math.abs(dy) / halfHeight);
     return { x: node.x + dx * scale, y: node.y + dy * scale };
   }
+  const shape = flowNodeShape(node);
+  if (shape) return flowShapeConnection(shape, node, toward, fallback);
   const capOffset = halfWidth - halfHeight;
   if (dy && Math.abs(dx / dy * halfHeight) <= capOffset) {
     const scale = halfHeight / Math.abs(dy);
@@ -54,15 +59,30 @@ function nodeConnection(node: LayoutNode, toward: Point, fallback: Point): Point
   return { x: node.x + dx * scale, y: node.y + dy * scale };
 }
 
-function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role'>[], edges: { id: string; label: string; source: string; target: string }[], groups: DiagramGroup[], kind: 'flow' | 'state'): GraphLayout {
+function selfLoopPoints(node: LayoutNode, labelY: number, labelHeight: number): Point[] {
+  const bottom = node.y + node.height / 2;
+  const loopY = labelY - labelHeight / 2 - 12;
+  const left = { x: node.x - node.width / 4, y: bottom };
+  const right = { x: node.x + node.width / 4, y: bottom };
+  const start = nodeConnection(node, left, left);
+  const end = nodeConnection(node, right, right);
+  return [
+    start,
+    { x: start.x, y: loopY },
+    { x: end.x, y: loopY },
+    end,
+  ];
+}
+
+function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role'>[], edges: { id: string; label: string; source: string; target: string }[], groups: DiagramGroup[], kind: 'flow' | 'state', lanes: DiagramLane[] = []): GraphLayout {
   const graph = new dagre.graphlib.Graph({ multigraph: true, compound: true });
   const headings = groups.map(group => ({ ...group, lines: wrapLabel(group.label) }));
   const headingSpace = Math.max(0, ...headings.map(group => group.lines.length * 20 + 40));
-  graph.setGraph({ rankdir: 'LR', marginx: 32, marginy: 32, ranksep: 100, nodesep: Math.max(35, headingSpace), edgesep: Math.max(28, headingSpace) });
+  graph.setGraph({ rankdir: 'LR', marginx: 32, marginy: 32, ranksep: 100 + graphTerminalRun * 2, nodesep: Math.max(35, headingSpace), edgesep: Math.max(28, headingSpace) });
   graph.setDefaultEdgeLabel(() => ({}));
   for (const node of nodes) {
-    const diamondWidth = Math.max(176, Math.max(...node.lines.map(line => line.length)) * 7.5 + node.lines.length * 40 + 48);
-    const height = node.role === 'decision' ? diamondWidth / 2 : Math.max(72, node.lines.length * 20 + 32);
+    const diamondWidth = Math.max(176, Math.max(...node.lines.map(line => line.length)) * 7.5 + node.lines.length * 40 + 80);
+    const height = node.role === 'decision' ? diamondWidth / 2 : Math.max(72, node.lines.length * 20 + 32) + flowNodeExtraHeight(node.role);
     const width = node.role === 'decision' ? diamondWidth : node.role === 'start' || node.role === 'end' ? Math.max(240, height + 160) : 240;
     graph.setNode(node.id, { width, height });
   }
@@ -80,9 +100,12 @@ function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role'>[], ed
   const nodeById = new Map(placedNodes.map(node => [node.id, node]));
   const placedEdges: RoutedEdge[] = wrappedEdges.map(edge => {
     const placed = graph.edge({ v: edge.source, w: edge.target, name: edge.id });
-    const points: Point[] = [...placed.points];
-    points[0] = nodeConnection(nodeById.get(edge.source)!, points[1]!, points[0]!);
-    points[points.length - 1] = nodeConnection(nodeById.get(edge.target)!, points.at(-2)!, points.at(-1)!);
+    const points: Point[] = edge.source === edge.target
+      ? selfLoopPoints(nodeById.get(edge.source)!, placed.y!, edge.lines.length * 16) : [...placed.points];
+    if (edge.source !== edge.target) {
+      points[0] = nodeConnection(nodeById.get(edge.source)!, points[1]!, points[0]!);
+      points[points.length - 1] = nodeConnection(nodeById.get(edge.target)!, points.at(-2)!, points.at(-1)!);
+    }
     return { ...edge, x: placed.x ?? 0, y: placed.y ?? 0, points };
   });
   let placedGroups = groupFrames(headings, placedNodes, placedEdges, kind);
@@ -101,6 +124,7 @@ function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role'>[], ed
   });
   separateBranchLanes(groups, placedGroups, placedEdges);
   placedGroups = groupFrames(headings, placedNodes, placedEdges, kind);
+  if (lanes.length) return swimlaneLayout(placedNodes, placedEdges, placedGroups, groups, lanes);
   let width = graph.graph().width ?? 600;
   let height = graph.graph().height ?? 400;
   if (placedGroups.length) {
@@ -116,7 +140,7 @@ function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role'>[], ed
     width, height,
     nodes: placedNodes,
     groups: placedGroups,
-    edges: placedEdges.map(({ points, ...edge }) => ({ ...edge, path: roundedPath(points, Number.POSITIVE_INFINITY) })),
+    edges: placedEdges.map(({ points, ...edge }) => ({ ...edge, path: roundedPath(points, Number.POSITIVE_INFINITY, graphTerminalRun) })),
   };
 }
 
@@ -197,7 +221,7 @@ export function groupFrames(groups: (DiagramGroup & { lines: string[] })[], node
 }
 
 export function normalizeGroupGaps(definitions: Pick<DiagramGroup, 'id' | 'parentGroupId'>[],
-  frames: () => Pick<LayoutGroup, 'id' | 'x' | 'y' | 'width' | 'height'>[], adjustGap: (top: number, bottom: number, gap: number) => void) {
+  frames: () => Pick<LayoutGroup, 'id' | 'x' | 'y' | 'width' | 'height'>[], adjustGap: (top: number, bottom: number, gap: number, groupId: string) => void) {
   function align(parentId?: string) {
     const children = definitions.filter(group => group.parentGroupId === parentId);
     for (const child of children) align(child.id);
@@ -207,7 +231,7 @@ export function normalizeGroupGaps(definitions: Pick<DiagramGroup, 'id' | 'paren
       const current = boxBounds(frame(id));
       const above = ordered.slice(0, index).map(id => boxBounds(frame(id)))
         .filter(bounds => bounds.right > current.left && bounds.left < current.right);
-      if (above.length) adjustGap(Math.max(...above.map(bounds => bounds.bottom)), current.top, parentId ? 56 : 42);
+      if (above.length) adjustGap(Math.max(...above.map(bounds => bounds.bottom)), current.top, parentId ? 56 : 42, id);
     }
   }
   align();
@@ -219,7 +243,7 @@ export function diagramLayout(diagram: Diagram): GraphLayout {
     const role = diagram.kind === 'flow' ? node.role : undefined;
     return { id: node.id, label: node.label, role,
       lines: wrapLabel(node.label, role === 'subprocess' ? 25 : role && role !== 'action' ? 20 : 29) };
-  }), diagram.edges.map(edge => ({ id: edge.id, label: edge.label, source: edge.sourceNodeId, target: edge.targetNodeId })), groups, diagram.kind === 'state' ? 'state' : 'flow');
+  }), diagram.edges.map(edge => ({ id: edge.id, label: edge.label, source: edge.sourceNodeId, target: edge.targetNodeId })), groups, diagram.kind === 'state' ? 'state' : 'flow', diagram.kind === 'flow' ? diagram.lanes : undefined);
 }
 
 function visibleGroups(diagram: Diagram): DiagramGroup[] {

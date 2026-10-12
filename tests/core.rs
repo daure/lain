@@ -1,5 +1,5 @@
 use lain::{
-    model::{DeleteRequest, Explanation, PublishRequest},
+    model::{Explanation, PublishRequest},
     service::{AppService, ServiceError},
 };
 use serde_json::json;
@@ -60,11 +60,8 @@ fn document() -> Explanation {
     })).unwrap()
 }
 
-fn request(expected_revision: u64, document: Explanation) -> PublishRequest {
-    PublishRequest {
-        expected_revision,
-        document,
-    }
+fn request(document: Explanation) -> PublishRequest {
+    PublishRequest { document }
 }
 
 fn sequence_document() -> Explanation {
@@ -106,7 +103,7 @@ async fn sequences_preserve_messages_self_calls_and_recorded_revisits() {
     }
     let expected = serde_json::to_value(&authored).unwrap();
     service
-        .publish("sequence", request(0, authored.clone()))
+        .publish("sequence", request(authored.clone()))
         .await
         .unwrap();
     assert_eq!(
@@ -192,7 +189,7 @@ async fn sequence_payloads_require_bounded_participants_and_exact_node_message_m
         });
     }
     service
-        .publish("participant-limit", request(0, authored.clone()))
+        .publish("participant-limit", request(authored.clone()))
         .await
         .unwrap();
     authored.diagrams[0]
@@ -247,68 +244,19 @@ async fn sequence_payloads_require_bounded_participants_and_exact_node_message_m
 async fn deletion_purges_body_and_preserves_revision_history_across_restart_and_recreation() {
     use sqlx::Connection;
     let (directory, service) = service().await;
-    service
-        .publish("demo", request(0, document()))
-        .await
-        .unwrap();
+    service.publish("demo", request(document())).await.unwrap();
     let mut events = service.subscribe();
-    for revision in [0, i64::MAX as u64, u64::MAX] {
-        assert!(matches!(
-            service
-                .delete(
-                    "demo",
-                    DeleteRequest {
-                        expected_revision: revision
-                    }
-                )
-                .await,
-            Err(ServiceError::Invalid(_))
-        ));
-    }
     assert!(matches!(
-        service
-            .delete(
-                "bad/id",
-                DeleteRequest {
-                    expected_revision: 1
-                }
-            )
-            .await,
+        service.delete("bad/id").await,
         Err(ServiceError::Invalid(_))
     ));
     assert!(matches!(
-        service
-            .delete(
-                "missing",
-                DeleteRequest {
-                    expected_revision: 1
-                }
-            )
-            .await,
+        service.delete("missing").await,
         Err(ServiceError::NotFound)
-    ));
-    assert!(matches!(
-        service
-            .delete(
-                "demo",
-                DeleteRequest {
-                    expected_revision: 2
-                }
-            )
-            .await,
-        Err(ServiceError::Conflict)
     ));
     assert_eq!(service.get("demo").await.unwrap().revision, 1);
     assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
-    let deleted = service
-        .delete(
-            "demo",
-            DeleteRequest {
-                expected_revision: 1,
-            },
-        )
-        .await
-        .unwrap();
+    let deleted = service.delete("demo").await.unwrap();
     assert_eq!(
         serde_json::to_value(&deleted).unwrap(),
         json!({"id": "demo", "revision": 2, "deleted": true})
@@ -323,19 +271,8 @@ async fn deletion_purges_body_and_preserves_revision_history_across_restart_and_
     ));
     assert!(service.list().await.unwrap().is_empty());
     assert!(matches!(
-        service
-            .delete(
-                "demo",
-                DeleteRequest {
-                    expected_revision: 1
-                }
-            )
-            .await,
+        service.delete("demo").await,
         Err(ServiceError::NotFound)
-    ));
-    assert!(matches!(
-        service.publish("demo", request(2, document())).await,
-        Err(ServiceError::Conflict)
     ));
     let path = directory.path().join("lain.sqlite");
     let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&path);
@@ -359,90 +296,150 @@ async fn deletion_purges_body_and_preserves_revision_history_across_restart_and_
         Err(ServiceError::NotFound)
     ));
     let mut events = service.subscribe();
-    let recreated = service
-        .publish("demo", request(0, document()))
-        .await
-        .unwrap();
+    let recreated = service.publish("demo", request(document())).await.unwrap();
     assert_eq!(recreated.revision, 3);
     assert_eq!(
         serde_json::to_value(events.try_recv().unwrap()).unwrap(),
         json!({"id": "demo", "revision": 3})
     );
-    for revision in [1, 2] {
-        assert!(matches!(
-            service.publish("demo", request(revision, document())).await,
-            Err(ServiceError::Conflict)
-        ));
-        assert!(matches!(
-            service
-                .delete(
-                    "demo",
-                    DeleteRequest {
-                        expected_revision: revision
-                    }
-                )
-                .await,
-            Err(ServiceError::Conflict)
-        ));
-    }
-    assert_eq!(service.get("demo").await.unwrap().revision, 3);
+    assert_eq!(service.delete("demo").await.unwrap().revision, 4);
+    assert_eq!(events.try_recv().unwrap().revision, 4);
+    assert!(matches!(
+        service.get("demo").await,
+        Err(ServiceError::NotFound)
+    ));
+    assert_eq!(
+        service
+            .publish("demo", request(document()))
+            .await
+            .unwrap()
+            .revision,
+        5
+    );
+    assert_eq!(events.try_recv().unwrap().revision, 5);
+    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+    sqlx::query("UPDATE explanations SET revision = 9223372036854775807 WHERE id = 'demo'")
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    let exhausted = serde_json::to_value(service.get("demo").await.unwrap()).unwrap();
+    let mut replacement = document();
+    replacement.title = "Publication at the revision limit".into();
+    assert!(matches!(
+        service.publish("demo", request(replacement)).await,
+        Err(ServiceError::Invalid(message)) if message == "explanation update limit reached"
+    ));
+    assert!(matches!(
+        service.delete("demo").await,
+        Err(ServiceError::Invalid(message)) if message == "explanation update limit reached"
+    ));
+    assert_eq!(
+        serde_json::to_value(service.get("demo").await.unwrap()).unwrap(),
+        exhausted
+    );
     assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
     sqlx::query("UPDATE explanations SET revision = 9223372036854775806 WHERE id = 'demo'")
         .execute(&mut connection)
         .await
         .unwrap();
     assert_eq!(
-        service
-            .delete(
-                "demo",
-                DeleteRequest {
-                    expected_revision: i64::MAX as u64 - 1
-                }
-            )
-            .await
-            .unwrap()
-            .revision,
+        service.delete("demo").await.unwrap().revision,
         i64::MAX as u64
     );
+    let tombstone: (i64, String, i64, i64) = sqlx::query_as(
+        "SELECT revision, document_json, updated_at_ms, deleted FROM explanations WHERE id = 'demo'",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    let mut events = service.subscribe();
     assert!(matches!(
-        service.publish("demo", request(0, document())).await,
-        Err(ServiceError::Invalid(_))
+        service.publish("demo", request(document())).await,
+        Err(ServiceError::Invalid(message)) if message == "explanation update limit reached"
     ));
+    assert!(matches!(
+        service.delete("demo").await,
+        Err(ServiceError::NotFound)
+    ));
+    let unchanged: (i64, String, i64, i64) = sqlx::query_as(
+        "SELECT revision, document_json, updated_at_ms, deleted FROM explanations WHERE id = 'demo'",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    assert_eq!(unchanged, tombstone);
+    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
 }
 
 #[tokio::test]
-async fn concurrent_deletion_and_publication_allow_one_winner_per_live_revision() {
+async fn concurrent_undo_republishes_once_and_broadcasts_only_the_committed_revision() {
+    let (_directory, service) = service().await;
+    service.publish("demo", request(document())).await.unwrap();
+    let deleted = service.delete_with_revision("demo", Some(1)).await.unwrap();
+    let mut events = service.subscribe();
+    let (first, second) = tokio::join!(
+        service.publish_with_revision("demo", request(document()), Some(deleted.revision)),
+        service.publish_with_revision("demo", request(document()), Some(deleted.revision))
+    );
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    let failure = if first.is_err() { first } else { second };
+    assert!(matches!(failure, Err(ServiceError::Conflict)));
+    let restored = service.get("demo").await.unwrap();
+    assert_eq!(restored.revision, 3);
+    assert_eq!(
+        serde_json::to_value(restored.document).unwrap(),
+        serde_json::to_value(document()).unwrap()
+    );
+    let event = events.try_recv().unwrap();
+    assert_eq!(event.id, "demo");
+    assert_eq!(event.revision, 3);
+    assert!(!event.deleted);
+    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+    assert!(matches!(
+        service.delete_with_revision("demo", Some(1)).await,
+        Err(ServiceError::Conflict)
+    ));
+    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[tokio::test]
+async fn concurrent_publication_and_deletion_follow_commit_order() {
     let (directory, first) = service().await;
     let second = AppService::open(&directory.path().join("lain.sqlite"))
         .await
         .unwrap();
-    first.publish("demo", request(0, document())).await.unwrap();
+    first.publish("demo", request(document())).await.unwrap();
     let mut events = first.subscribe();
     let mut other_events = second.subscribe();
     let (deleted, published) = tokio::join!(
-        first.delete(
-            "demo",
-            DeleteRequest {
-                expected_revision: 1
-            }
-        ),
-        second.publish("demo", request(1, document()))
+        first.delete("demo"),
+        second.publish("demo", request(document()))
     );
-    match (deleted, published) {
-        (Ok(event), Err(ServiceError::Conflict)) => {
-            assert_eq!(event.revision, 2);
-            assert!(matches!(
-                first.get("demo").await,
-                Err(ServiceError::NotFound)
-            ));
-        }
-        (Err(ServiceError::Conflict), Ok(stored)) => assert_eq!(stored.revision, 2),
-        results => panic!("expected one revision winner: {results:?}"),
+    let stored = published.unwrap();
+    let deleted = deleted.unwrap();
+    assert!(deleted.deleted);
+    let mut revisions = [deleted.revision, stored.revision];
+    revisions.sort();
+    assert_eq!(revisions, [2, 3]);
+    if deleted.revision > stored.revision {
+        assert!(matches!(
+            first.get("demo").await,
+            Err(ServiceError::NotFound)
+        ));
+    } else {
+        assert_eq!(
+            serde_json::to_value(first.get("demo").await.unwrap()).unwrap(),
+            serde_json::to_value(&stored).unwrap()
+        );
     }
-    assert_eq!(
-        usize::from(events.try_recv().is_ok()) + usize::from(other_events.try_recv().is_ok()),
-        1
-    );
+    let event = events.try_recv().unwrap();
+    assert_eq!(event.revision, deleted.revision);
+    assert!(event.deleted);
+    let event = other_events.try_recv().unwrap();
+    assert_eq!(event.revision, stored.revision);
+    assert!(!event.deleted);
+    assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+    assert!(matches!(other_events.try_recv(), Err(TryRecvError::Empty)));
 }
 
 async fn service() -> (TempDir, AppService) {
@@ -454,7 +451,7 @@ async fn service() -> (TempDir, AppService) {
 }
 
 async fn assert_invalid(service: &AppService, document: Explanation, message: &str) {
-    match service.publish("invalid", request(0, document)).await {
+    match service.publish("invalid", request(document)).await {
         Err(ServiceError::Invalid(error)) => assert!(
             error.contains(message),
             "{error:?} should contain {message:?}"
@@ -470,11 +467,26 @@ async fn assert_invalid(service: &AppService, document: Explanation, message: &s
 #[tokio::test]
 async fn flow_roles_round_trip_and_require_a_flow_diagram() {
     let (_directory, service) = service().await;
-    for role in ["action", "decision", "start", "end", "subprocess"] {
+    for role in [
+        "action",
+        "decision",
+        "start",
+        "end",
+        "subprocess",
+        "database",
+        "preparation",
+        "inputOutput",
+        "outputInput",
+        "priorityAction",
+        "manualOperation",
+        "document",
+        "multiDocument",
+        "delay",
+    ] {
         let mut value = serde_json::to_value(document()).unwrap();
         value["diagrams"][0]["nodes"][0]["role"] = json!(role);
         let authored: Explanation = serde_json::from_value(value.clone()).unwrap();
-        service.publish(role, request(0, authored)).await.unwrap();
+        service.publish(role, request(authored)).await.unwrap();
         assert_eq!(
             serde_json::to_value(service.get(role).await.unwrap().document).unwrap(),
             value
@@ -487,13 +499,26 @@ async fn flow_roles_round_trip_and_require_a_flow_diagram() {
         if value["diagrams"][0]["kind"] == "flow" {
             value["diagrams"][0]["kind"] = json!("state");
         }
-        value["diagrams"][0]["nodes"][0]["role"] = json!("decision");
-        assert_invalid(
-            &service,
-            serde_json::from_value(value).unwrap(),
-            "role requires kind flow",
-        )
-        .await;
+        for role in [
+            "decision",
+            "database",
+            "preparation",
+            "inputOutput",
+            "outputInput",
+            "priorityAction",
+            "manualOperation",
+            "document",
+            "multiDocument",
+            "delay",
+        ] {
+            value["diagrams"][0]["nodes"][0]["role"] = json!(role);
+            assert_invalid(
+                &service,
+                serde_json::from_value(value.clone()).unwrap(),
+                "role requires kind flow",
+            )
+            .await;
+        }
     }
     let mut invalid = serde_json::to_value(document()).unwrap();
     invalid["diagrams"][0]["nodes"][0]["role"] = json!("triangle");
@@ -512,7 +537,7 @@ async fn detail_links_resolve_diagrams_and_require_subprocess_roles_on_flows() {
     service
         .publish(
             "subprocess",
-            request(0, serde_json::from_value(value.clone()).unwrap()),
+            request(serde_json::from_value(value.clone()).unwrap()),
         )
         .await
         .unwrap();
@@ -578,7 +603,7 @@ async fn process_documents_load_and_publish_as_flow_with_recorded_data_intact() 
     let published = service
         .publish(
             "compatible",
-            request(7, serde_json::from_value(compatible).unwrap()),
+            request(serde_json::from_value(compatible).unwrap()),
         )
         .await
         .unwrap();
@@ -602,7 +627,7 @@ async fn publication_notifies_after_commit_and_reopens_exact_recorded_states() {
     let expected = serde_json::to_value(&original).unwrap();
     let mut events = service.subscribe();
     let stored = service
-        .publish("order-demo", request(0, original))
+        .publish("order-demo", request(original))
         .await
         .unwrap();
     assert_eq!(stored.id, "order-demo");
@@ -636,7 +661,7 @@ async fn publication_notifies_after_commit_and_reopens_exact_recorded_states() {
     replacement.title = "Second recorded revision".into();
     assert_eq!(
         reopened
-            .publish("order-demo", request(1, replacement))
+            .publish("order-demo", request(replacement))
             .await
             .unwrap()
             .revision,
@@ -649,48 +674,47 @@ async fn publication_notifies_after_commit_and_reopens_exact_recorded_states() {
 }
 
 #[tokio::test]
-async fn independent_sqlite_connections_allow_one_winner_per_revision() {
+async fn concurrent_publications_commit_distinct_revisions_and_the_latest_complete_document() {
     let (directory, first) = service().await;
     let second = AppService::open(&directory.path().join("lain.sqlite"))
         .await
         .unwrap();
     let mut events = first.subscribe();
     let mut other_events = second.subscribe();
-    let (left, right) = tokio::join!(
-        first.publish("demo", request(0, document())),
-        second.publish("demo", request(0, document()))
-    );
-    assert_eq!(usize::from(left.is_ok()) + usize::from(right.is_ok()), 1);
-    assert!(
-        matches!(left, Err(ServiceError::Conflict)) || matches!(right, Err(ServiceError::Conflict))
-    );
-    let create_events =
-        usize::from(events.try_recv().is_ok()) + usize::from(other_events.try_recv().is_ok());
-    assert_eq!(create_events, 1);
-    let mut left_document = document();
-    left_document.title = "Left winner".into();
-    let mut right_document = document();
-    right_document.title = "Right winner".into();
-    let (left, right) = tokio::join!(
-        first.publish("demo", request(1, left_document)),
-        second.publish("demo", request(1, right_document))
-    );
-    assert_eq!(usize::from(left.is_ok()) + usize::from(right.is_ok()), 1);
-    let winner = match (left, right) {
-        (Ok(stored), Err(ServiceError::Conflict)) | (Err(ServiceError::Conflict), Ok(stored)) => {
-            stored
-        }
-        results => panic!("expected one committed winner and one conflict: {results:?}"),
-    };
-    assert_eq!(winner.revision, 2);
-    assert_eq!(
-        serde_json::to_value(first.get("demo").await.unwrap()).unwrap(),
-        serde_json::to_value(winner).unwrap()
-    );
-    assert_eq!(
-        usize::from(events.try_recv().is_ok()) + usize::from(other_events.try_recv().is_ok()),
-        1
-    );
+    for expected_revisions in [[1, 2], [3, 4]] {
+        let mut left_document = document();
+        left_document.title = "Left publication".into();
+        left_document.description = "Left recorded state".into();
+        let mut right_document = document();
+        right_document.title = "Right publication".into();
+        right_document.scenarios[0].occurrences[0].narration = "Right recorded state".into();
+        let (left, right) = tokio::join!(
+            first.publish("demo", request(left_document)),
+            second.publish("demo", request(right_document))
+        );
+        let left = left.unwrap();
+        let right = right.unwrap();
+        let mut revisions = [left.revision, right.revision];
+        revisions.sort_unstable();
+        assert_eq!(revisions, expected_revisions);
+        let latest = if left.revision > right.revision {
+            left
+        } else {
+            right
+        };
+        assert_eq!(
+            serde_json::to_value(first.get("demo").await.unwrap()).unwrap(),
+            serde_json::to_value(latest).unwrap()
+        );
+        let mut revisions = [
+            events.try_recv().unwrap().revision,
+            other_events.try_recv().unwrap().revision,
+        ];
+        revisions.sort_unstable();
+        assert_eq!(revisions, expected_revisions);
+        assert!(matches!(events.try_recv(), Err(TryRecvError::Empty)));
+        assert!(matches!(other_events.try_recv(), Err(TryRecvError::Empty)));
+    }
 }
 
 #[tokio::test]
@@ -704,10 +728,7 @@ async fn cancelled_mutations_finish_persistence_and_notify_after_sqlite_unblocks
 
     for delete in [false, true] {
         let (directory, service) = service().await;
-        service
-            .publish("demo", request(0, document()))
-            .await
-            .unwrap();
+        service.publish("demo", request(document())).await.unwrap();
         let mut events = service.subscribe();
         let options = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(directory.path().join("lain.sqlite"));
@@ -720,18 +741,10 @@ async fn cancelled_mutations_finish_persistence_and_notify_after_sqlite_unblocks
         let expected = serde_json::to_value(&replacement).unwrap();
         let mut publication = Box::pin(async {
             if delete {
-                service
-                    .delete(
-                        "demo",
-                        DeleteRequest {
-                            expected_revision: 1,
-                        },
-                    )
-                    .await
-                    .map(|_| ())
+                service.delete("demo").await.map(|_| ())
             } else {
                 service
-                    .publish("demo", request(1, replacement))
+                    .publish("demo", request(replacement))
                     .await
                     .map(|_| ())
             }
@@ -784,7 +797,7 @@ async fn entities_allow_200_attributes_and_reject_excess_definitions_before_stor
         values.insert(format!("attribute-{number}"), json!(number));
     }
     let stored = service
-        .publish("attribute-limit", request(0, authored.clone()))
+        .publish("attribute-limit", request(authored.clone()))
         .await
         .unwrap();
     assert_eq!(stored.document.domain.entities[0].attributes.len(), 200);
@@ -806,32 +819,18 @@ async fn entities_allow_200_attributes_and_reject_excess_definitions_before_stor
 #[tokio::test]
 async fn failed_publications_leave_revision_and_notifications_unchanged() {
     let (_directory, service) = service().await;
-    service
-        .publish("demo", request(0, document()))
-        .await
-        .unwrap();
+    service.publish("demo", request(document())).await.unwrap();
     let mut events = service.subscribe();
     let mut invalid = document();
     invalid.diagrams[0].nodes[0]
         .entity_ids
         .push("missing".into());
     assert!(matches!(
-        service.publish("demo", request(1, invalid)).await,
+        service.publish("demo", request(invalid)).await,
         Err(ServiceError::Invalid(_))
     ));
-    for revision in [0, 2, u64::MAX] {
-        let result = service.publish("demo", request(revision, document())).await;
-        assert!(matches!(
-            result,
-            Err(ServiceError::Conflict | ServiceError::Invalid(_))
-        ));
-    }
     assert!(matches!(
-        service.publish("missing", request(1, document())).await,
-        Err(ServiceError::Conflict)
-    ));
-    assert!(matches!(
-        service.publish("../escape", request(0, document())).await,
+        service.publish("../escape", request(document())).await,
         Err(ServiceError::Invalid(_))
     ));
     assert!(matches!(
@@ -903,7 +902,7 @@ async fn authored_branch_revisits_and_self_loops_preserve_occurrence_identity() 
         authored.scenarios[0].occurrences.push(occurrence);
     }
     let stored = service
-        .publish("visits", request(0, authored.clone()))
+        .publish("visits", request(authored.clone()))
         .await
         .unwrap();
     let visits = &stored.document.scenarios[0].occurrences;
@@ -953,7 +952,7 @@ async fn snapshot_links_enforce_duplicate_endpoint_and_both_cardinality_rules() 
     assert_invalid(&service, authored.clone(), "target cardinality one").await;
     authored.domain.relationships[0].target_cardinality = lain::model::Cardinality::ZeroOrMore;
     service
-        .publish("many-targets", request(0, authored))
+        .publish("many-targets", request(authored))
         .await
         .unwrap();
     let mut authored = document();
@@ -965,7 +964,7 @@ async fn snapshot_links_enforce_duplicate_endpoint_and_both_cardinality_rules() 
     link.source_instance_id = "o2".into();
     snapshot.links.push(link);
     service
-        .publish("many-sources", request(0, authored.clone()))
+        .publish("many-sources", request(authored.clone()))
         .await
         .unwrap();
     authored.domain.relationships[0].source_cardinality = lain::model::Cardinality::ZeroOrOne;
@@ -989,29 +988,41 @@ async fn required_endpoints_enforce_minimum_links_in_both_snapshots() {
             service
                 .publish(
                     &format!("required-{cardinality:?}-{source}"),
-                    request(0, authored.clone()),
+                    request(authored.clone()),
                 )
                 .await
                 .unwrap();
             for before in [false, true] {
-                let mut invalid = authored.clone();
-                let occurrence = &mut invalid.scenarios[0].occurrences[0];
-                if before {
-                    occurrence.before = occurrence.after.clone();
-                    occurrence.before.links.clear();
-                } else {
-                    occurrence.after.links.clear();
-                }
-                assert_invalid(
-                    &service,
-                    invalid,
-                    if source {
-                        "requires at least one source link"
+                for missing_instance in [false, true] {
+                    let mut invalid = authored.clone();
+                    let occurrence = &mut invalid.scenarios[0].occurrences[0];
+                    let (phase, snapshot) = if before {
+                        occurrence.before = occurrence.after.clone();
+                        ("before", &mut occurrence.before)
                     } else {
-                        "requires at least one target link"
-                    },
-                )
-                .await;
+                        ("after", &mut occurrence.after)
+                    };
+                    snapshot.links.clear();
+                    let (endpoint, instance_id, related_entity) = if source {
+                        ("source", "c1", "order")
+                    } else {
+                        ("target", "o1", "customer")
+                    };
+                    if missing_instance {
+                        snapshot
+                            .instances
+                            .retain(|instance| instance.entity_id != related_entity);
+                    }
+                    let (required, optional) = match cardinality {
+                        Cardinality::ExactlyOne => ("exactlyOne", "zeroOrOne"),
+                        Cardinality::OneOrMore => ("oneOrMore", "zeroOrMore"),
+                        _ => unreachable!(),
+                    };
+                    let expected = format!(
+                        "scenario \"happy\", occurrence \"visit-1\", {phase} snapshot: relationship \"placed-by\": instance {instance_id:?} requires at least one {endpoint} link ({endpoint}Cardinality={required}); include a related instance of entity {related_entity:?} and its link in this same snapshot, or use {endpoint}Cardinality={optional} only if the domain permits no {endpoint}"
+                    );
+                    assert_invalid(&service, invalid, &expected).await;
+                }
             }
         }
     }
@@ -1036,7 +1047,7 @@ async fn instance_entity_identity_survives_absence_but_is_scoped_to_scenario() {
     separate.occurrences = vec![later];
     authored.scenarios.push(separate);
     service
-        .publish("separate", request(0, authored))
+        .publish("separate", request(authored))
         .await
         .unwrap();
     let mut authored = document();
@@ -1101,7 +1112,7 @@ async fn nested_captured_values_enforce_depth_text_and_document_size_limits() {
         .values
         .insert("details".into(), nested.clone());
     service
-        .publish("depth-limit", request(0, authored.clone()))
+        .publish("depth-limit", request(authored.clone()))
         .await
         .unwrap();
     authored.scenarios[0].occurrences[0].after.instances[0]
@@ -1111,7 +1122,7 @@ async fn nested_captured_values_enforce_depth_text_and_document_size_limits() {
     let mut authored = document();
     authored.title = "x".repeat(32 * 1024);
     service
-        .publish("text-limit", request(0, authored.clone()))
+        .publish("text-limit", request(authored.clone()))
         .await
         .unwrap();
     authored.title.push('x');
@@ -1169,7 +1180,7 @@ async fn captured_numbers_require_safe_bounds_and_preserve_exact_large_strings()
         .insert("details".into(), captured.clone());
     let mut events = service.subscribe();
     let stored = service
-        .publish("numbers", request(0, authored.clone()))
+        .publish("numbers", request(authored.clone()))
         .await
         .unwrap();
     assert_eq!(events.try_recv().unwrap().revision, 1);
@@ -1200,7 +1211,7 @@ async fn captured_numbers_require_safe_bounds_and_preserve_exact_large_strings()
         invalid.scenarios[0].occurrences[0].after.instances[0]
             .values
             .insert("details".into(), json!({"nested": [number]}));
-        match service.publish("numbers", request(1, invalid)).await {
+        match service.publish("numbers", request(invalid)).await {
             Err(ServiceError::Invalid(error)) => {
                 assert!(
                     error.contains("[-9007199254740991, 9007199254740991]"),
@@ -1316,7 +1327,7 @@ async fn concurrent_database_initialization_preserves_schema_and_data() {
             services.push(opened.unwrap().unwrap());
         }
         services[0]
-            .publish("shared", request(0, document()))
+            .publish("shared", request(document()))
             .await
             .unwrap();
         for service in services {
@@ -1338,10 +1349,7 @@ async fn concurrent_database_initialization_preserves_schema_and_data() {
 async fn sqlite_uses_versioned_wal_and_rejects_unknown_schema_versions() {
     use sqlx::Connection;
     let (directory, service) = service().await;
-    service
-        .publish("demo", request(0, document()))
-        .await
-        .unwrap();
+    service.publish("demo", request(document())).await.unwrap();
     let path = directory.path().join("lain.sqlite");
     let options = sqlx::sqlite::SqliteConnectOptions::new().filename(&path);
     let mut connection = sqlx::SqliteConnection::connect_with(&options)
@@ -1372,10 +1380,7 @@ async fn sqlite_uses_versioned_wal_and_rejects_unknown_schema_versions() {
 async fn database_files_are_private_and_symlink_targets_are_untouched() {
     use std::os::unix::fs::{PermissionsExt, symlink};
     let (directory, service) = service().await;
-    service
-        .publish("demo", request(0, document()))
-        .await
-        .unwrap();
+    service.publish("demo", request(document())).await.unwrap();
     for name in ["lain.sqlite", "lain.sqlite-wal", "lain.sqlite-shm"] {
         let mode = std::fs::metadata(directory.path().join(name))
             .unwrap()

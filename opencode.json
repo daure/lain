@@ -6,10 +6,7 @@
         "type": "remote",
         "url": "http://127.0.0.1:38475/mcp",
         "oauth": false,
-        "protocol": "legacy",
-        "headers": {
-          "Authorization": "Bearer {file:.lain-dev/token}"
-        }
+        "protocol": "legacy"
       }
     }
   }

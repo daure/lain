@@ -9,13 +9,19 @@ use crate::model::{Diagram, DiagramKind, Domain, Entity, Node, validate_id};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagramGroup {
     /// Stable container ID, distinct from node IDs within this diagram.
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     /// Plain-text heading for a flow subgraph or state composite container.
     pub label: String,
     /// Direct member nodes. A node belongs to at most one group; ancestors include it through nesting.
+    #[schemars(
+        length(max = 200),
+        inner(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))
+    )]
     pub node_ids: Vec<String>,
     /// Optional parent container in this diagram. Nesting is acyclic and at most eight levels deep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "crate::model::NullableId")]
     pub parent_group_id: Option<String>,
 }
 
@@ -23,13 +29,19 @@ pub struct DiagramGroup {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DomainGroup {
     /// Stable container ID, distinct from entity IDs in the shared domain.
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     /// Plain-text heading for a domain area, external system, API DTOs, or technology boundary.
     pub label: String,
     /// Direct member entities. Each entity has at most one direct membership.
+    #[schemars(
+        length(max = 200),
+        inner(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))
+    )]
     pub entity_ids: Vec<String>,
     /// Optional parent in domain.groups. Nesting is acyclic and at most eight levels deep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "crate::model::NullableId")]
     pub parent_group_id: Option<String>,
 }
 

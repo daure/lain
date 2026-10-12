@@ -30,13 +30,7 @@ async fn occurrence_calls_preserve_order_receivers_and_repeated_visits_after_reo
     scenario.occurrences[3].method_calls = vec![call];
     let expected = serde_json::to_value(&authored).unwrap();
     service
-        .publish(
-            "calls",
-            PublishRequest {
-                expected_revision: 0,
-                document: authored,
-            },
-        )
+        .publish("calls", PublishRequest { document: authored })
         .await
         .unwrap();
     drop(service);
@@ -61,13 +55,7 @@ async fn invalid_call_references_cannot_replace_a_committed_document() {
     let authored = document();
     let original = serde_json::to_value(&authored).unwrap();
     service
-        .publish(
-            "calls",
-            PublishRequest {
-                expected_revision: 0,
-                document: authored,
-            },
-        )
+        .publish("calls", PublishRequest { document: authored })
         .await
         .unwrap();
     for (call, error) in [
@@ -98,7 +86,6 @@ async fn invalid_call_references_cannot_replace_a_committed_document() {
             .publish(
                 "calls",
                 PublishRequest {
-                    expected_revision: 1,
                     document: serde_json::from_value(invalid).unwrap(),
                 },
             )

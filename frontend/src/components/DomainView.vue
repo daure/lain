@@ -5,7 +5,7 @@ import { domainActivity } from '../domain-activity';
 import type { Cardinality, Diagram, Explanation, Occurrence, Scenario } from '../model';
 import DiagramViewport from './DiagramViewport.vue';
 
-const props = defineProps<{ domain: Explanation['domain']; diagram: Diagram; scenario: Scenario; selectedEntityId: string; occurrence?: Occurrence }>();
+const props = defineProps<{ domain: Explanation['domain']; diagram: Diagram; scenario: Scenario; selectedEntityId: string; occurrence?: Occurrence; stateKey?: string }>();
 const emit = defineEmits<{ select: [id: string]; inspect: [entityId: string, attributeId: string] }>();
 const canvas = ref<InstanceType<typeof DiagramViewport>>();
 const svg = ref<SVGSVGElement>();
@@ -14,11 +14,31 @@ let numberTimer: ReturnType<typeof setTimeout> | undefined;
 const layout = computed(() => domainLayout(props.domain));
 const relevance = computed(() => scenarioDomain(props.diagram, props.scenario));
 const activity = computed(() => domainActivity(props.domain, props.occurrence));
+const occurrencePosition = computed(() => props.scenario.occurrences.findIndex(item => item.id === props.occurrence?.id));
+const countTransition = ref('count-forward');
+const animateCounts = ref(false);
+watch(() => [props.scenario.id, props.occurrence, occurrencePosition.value] as const,
+  ([scenarioId, , position], [previousScenarioId, , previousPosition]) => {
+    animateCounts.value = scenarioId === previousScenarioId && position >= 0 && previousPosition >= 0 && position !== previousPosition
+      && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    countTransition.value = position < previousPosition ? 'count-backward' : 'count-forward';
+  });
 const instanceCounts = computed(() => {
-  const instances = new Map([...props.occurrence?.before.instances ?? [], ...props.occurrence?.after.instances ?? []].map(instance => [instance.id, instance]));
-  const counts = new Map<string, number>();
-  for (const instance of instances.values()) counts.set(instance.entityId, (counts.get(instance.entityId) ?? 0) + 1);
-  return counts;
+  const position = occurrencePosition.value;
+  const atStart = position === 0;
+  const atEnd = position >= 0 && position === props.scenario.occurrences.length - 1;
+  const snapshots = [position > 0 ? props.scenario.occurrences[position - 1]?.after : props.occurrence?.before,
+    props.occurrence?.after, position >= 0 ? props.scenario.occurrences[position + 1]?.after ?? props.occurrence?.after : props.occurrence?.after];
+  const counts = snapshots.map(snapshot => {
+    const values = new Map<string, number>();
+    for (const instance of snapshot?.instances ?? []) values.set(instance.entityId, (values.get(instance.entityId) ?? 0) + 1);
+    return values;
+  });
+  return new Map(props.domain.entities.map(entity => {
+    const [previous, current, next] = counts.map(values => values.get(entity.id) ?? 0);
+    return [entity.id, { previous, current, next, atStart, atEnd,
+      description: `Object counts · ${atStart ? 'Scenario start (Before)' : 'Previous'}: ${previous} · Current (After): ${current} · ${atEnd ? 'Scenario end (After)' : 'Next'}: ${next}` }];
+  }));
 });
 const endpointNotation: Record<Cardinality, { maximumPath: string; minimum: 'zero' | 'one'; label: string }> = {
   zeroOrOne: { maximumPath: 'M8,-8 V8', minimum: 'zero', label: 'zero or one (0..1)' },
@@ -41,6 +61,13 @@ const focusPoint = computed(() => {
     y: (Math.min(...entities.map(entity => entity.y - entity.height / 2)) + Math.max(...entities.map(entity => entity.y + entity.height / 2))) / 2 };
 });
 defineExpose({ canvas, handleNumberShortcut, cancelNumberShortcut, focusEntity });
+
+function countOutline(entityId: string) {
+  const counts = instanceCounts.value.get(entityId)!;
+  const left = counts.atStart ? 11 : 5;
+  const right = counts.atEnd ? 11 : 5;
+  return `M${left},0 H${106 - right} A${right},${right} 0 0 1 106,${right} V${22 - right} A${right},${right} 0 0 1 ${106 - right},22 H${left} A${left},${left} 0 0 1 0,${22 - left} V${left} A${left},${left} 0 0 1 ${left},0 Z`;
+}
 
 function entityDescription(id: string, label: string, shortcutNumber: number) {
   const current = activity.value.entities.get(id);
@@ -112,7 +139,7 @@ onUnmounted(cancelNumberShortcut);
 </script>
 
 <template>
-  <DiagramViewport ref="canvas" :width="layout.width" :height="layout.height" title="Shared domain entity relationship diagram" :focus-point="focusPoint" :focus-key="`${scenario.id}/${occurrence?.id ?? ''}`" scroll-class="domain-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges">
+  <DiagramViewport ref="canvas" :state-key="stateKey" :width="layout.width" :height="layout.height" title="Shared domain entity relationship diagram" :scenario-title="scenario.title" :focus-point="focusPoint" :focus-key="`${scenario.id}/${occurrence?.id ?? ''}`" scroll-class="domain-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" export-scenario>
     <svg ref="svg" class="domain-erd" :viewBox="`0 0 ${layout.width} ${layout.height}`" :style="{ width: `${layout.width}px`, height: `${layout.height}px` }" role="group" aria-label="Domain entity definitions and relationships">
       <title>Shared domain · {{ scenario.title }}</title>
       <g v-for="group in layout.groups" :key="group.id" :data-group-id="group.id"
@@ -152,12 +179,19 @@ onUnmounted(cancelNumberShortcut);
         <text class="domain-shortcut-number" x="16" y="25" aria-hidden="true"><tspan v-for="(digit, index) in String(entity.shortcutNumber)" :key="index" :class="{ matched: matchesNumberPrefix(entity.shortcutNumber) && index < numberPrefix.length }">{{ digit }}</tspan></text>
         <line class="domain-shortcut-divider" :x1="entity.titleX - 12" :x2="entity.titleX - 12" y1="13" y2="31" />
         <text class="domain-entity-name" :x="entity.titleX" y="25">
-          <tspan v-for="(line, index) in entity.titleLines" :key="index" :x="entity.titleX" :dy="index ? 20 : 0">{{ line }}</tspan>
+          <tspan v-for="(line, index) in entity.titleLines" :key="index" :x="entity.titleX" :dy="index ? 20 : 0">{{ line }}{{ index < entity.titleLines.length - 1 ? ' ' : '' }}</tspan>
         </text>
-        <g v-if="occurrence" class="domain-instance-count" :transform="`translate(${entity.width - 54},12)`" :aria-label="`${instanceCounts.get(entity.id) ?? 0} recorded instances`">
-          <title>{{ instanceCounts.get(entity.id) ?? 0 }} instances captured before or after this occurrence</title>
-          <rect width="38" height="22" rx="5" />
-          <text x="19" y="11" text-anchor="middle" dominant-baseline="central">{{ instanceCounts.get(entity.id) ?? 0 }}</text>
+        <g v-if="occurrence" class="domain-instance-count" :transform="`translate(${entity.width - 122},12)`" :aria-label="instanceCounts.get(entity.id)!.description">
+          <title>{{ instanceCounts.get(entity.id)!.description }}</title>
+          <path class="domain-count-surface" :d="countOutline(entity.id)" aria-hidden="true" />
+          <svg class="domain-count-values" width="106" height="22" aria-hidden="true">
+            <g v-for="(value, slot) in [instanceCounts.get(entity.id)!.previous, instanceCounts.get(entity.id)!.current, instanceCounts.get(entity.id)!.next]" :key="slot" class="domain-count-slot">
+              <Transition :name="countTransition" :css="animateCounts">
+                <text :key="value" :class="['domain-count-value', { 'domain-count-current': slot === 1 }]" :x="17 + slot * 36" y="11" text-anchor="middle" dominant-baseline="central">{{ value }}</text>
+              </Transition>
+              <text v-if="slot < 2" :x="35 + slot * 36" y="11" text-anchor="middle" dominant-baseline="central"> · </text>
+            </g>
+          </svg>
         </g>
         <text v-else class="domain-type-label" :x="entity.width - 16" y="25" text-anchor="end">TYPE</text>
         <g v-for="row in entity.rows" :key="row.id" :class="['domain-property', propertyState(entity.id, row.id)]" :data-attribute-id="row.id" :transform="`translate(0,${row.y})`" role="button" tabindex="0" :aria-label="`Inspect ${entity.label} ${row.label}`"
@@ -201,7 +235,7 @@ onUnmounted(cancelNumberShortcut);
 .domain-connector,.domain-cardinality{fill:none;stroke:currentColor;stroke-width:var(--diagram-edge-width);stroke-linejoin:round;stroke-linecap:round}
 .domain-cardinality-zero{fill:var(--surface)}
 .domain-relationship-label{fill:currentColor;font-size:12px;paint-order:stroke;stroke:var(--surface);stroke-width:6px;stroke-linejoin:round}
-.domain-relationship.unrelated{color:var(--offpath-text,#8a96a8);opacity:.48}
+.domain-relationship.unrelated{color:var(--offpath-text,#8a96a8);opacity:.56}
 .domain-relationship.unrelated .domain-connector{stroke-dasharray:var(--offpath-dash)}
 .domain-entity{cursor:pointer;outline:none}
 .domain-entity-surface{fill:var(--surface)}
@@ -213,8 +247,13 @@ onUnmounted(cancelNumberShortcut);
 .domain-shortcut-divider{stroke:var(--graph-line,#c6d2e1);stroke-width:1}
 .domain-shortcut-status{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .domain-type-label{fill:var(--muted);font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.6px}
-.domain-instance-count rect{fill:var(--surface);stroke:var(--line);stroke-width:1}.domain-instance-count text{fill:var(--muted);font-family:ui-monospace,monospace;font-size:11px}
-.domain-entity.step-active .domain-instance-count text{fill:var(--blue)}
+.domain-count-surface{fill:var(--surface);stroke:var(--line);stroke-width:1}.domain-instance-count text{fill:var(--muted);font-family:ui-monospace,monospace;font-size:11px}
+.domain-count-current{font-weight:700}
+.domain-count-values{overflow:hidden;pointer-events:none}
+.count-forward-enter-active,.count-forward-leave-active,.count-backward-enter-active,.count-backward-leave-active{transition:transform 220ms cubic-bezier(.22,.68,0,1),opacity 220ms ease}
+.count-forward-enter-from,.count-backward-leave-to{transform:translateY(22px);opacity:0}
+.count-forward-leave-to,.count-backward-enter-from{transform:translateY(-22px);opacity:0}
+@media(prefers-reduced-motion:reduce){.domain-count-value{transition:none!important;transform:none!important;opacity:1!important}.count-forward-leave-active,.count-backward-leave-active{visibility:hidden}}
 .domain-property line,.domain-methods line{stroke:var(--line);stroke-width:1}
 .domain-property-hit-area{fill:transparent}
 .domain-property-label{fill:var(--text);font-family:ui-monospace,monospace;font-size:13px}
@@ -228,7 +267,7 @@ onUnmounted(cancelNumberShortcut);
 .domain-property.removed .domain-activity-surface{fill:var(--danger-surface,#fff0f1)}
 .domain-property.removed .domain-property-label{fill:var(--danger,#ad3549)}
 .domain-entity.step-active .domain-entity-outline{stroke:var(--blue);stroke-width:2}
-.domain-entity.unrelated{opacity:.8}
+.domain-entity.unrelated{opacity:.85}
 .domain-entity.unrelated .domain-entity-surface{fill:var(--offpath-surface,#f3f5f8)}
 .domain-entity.unrelated .domain-entity-name,.domain-entity.unrelated .domain-shortcut-number,.domain-entity.unrelated .domain-property-label,.domain-entity.unrelated .domain-property-id,.domain-entity.unrelated .domain-type-label,.domain-entity.unrelated .domain-method-signature{fill:var(--offpath-text,#8a96a8)}
 .domain-entity.unrelated .domain-entity-outline{stroke:var(--offpath-line,#d4dce6);stroke-dasharray:var(--offpath-dash)}

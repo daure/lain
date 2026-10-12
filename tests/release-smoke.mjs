@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -70,10 +70,9 @@ try {
   await start();
   await cli('status');
   await cli('demo');
-  const token = (await readFile(path.join(home, 'token'), 'utf8')).trim();
   const api = async route => {
     const response = await fetch(`${base}${route}`, {
-      headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(5000),
     });
     assert.equal(response.status, 200);
     return response.json();
@@ -90,14 +89,13 @@ try {
     assert.equal(response.status, 200, asset);
     assert.ok((await response.arrayBuffer()).byteLength > 0, asset);
   }
-  const launch = new URL((await cli('open', '--print-url')).stdout.trim());
-  assert.equal(launch.origin, base);
-  assert.ok(launch.hash.length > 1);
+  const viewer = new URL((await cli('open', '--print-url')).stdout.trim());
+  assert.equal(viewer.href, `${base}/`);
   await stop();
   await start();
   await cli('status');
   assert.deepEqual(await api('/api/explanations/order-lifecycle'), saved);
-  console.log('Release smoke passed: installation, setup preview, embedded assets, authenticated commands, persistence.');
+  console.log('Release smoke passed: installation, setup preview, embedded assets, local commands, persistence.');
 } finally {
   try { await stop(); } finally { await rm(root, { recursive: true, force: true }); }
 }

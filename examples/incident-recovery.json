@@ -1,0 +1,204 @@
+{
+  "schemaVersion": 1,
+  "title": "Incident response and prevention",
+  "description": "A customer reports failed invoice downloads. Support assesses the incident, Engineering restores service, and the customer confirms recovery. Compare a first-attempt repair with a retry. Responsibility lanes show handoffs; phase groups separate initial assessment and restoration from later verification, closure, and queued prevention work.",
+  "domain": {
+    "entities": [{
+      "id": "incident", "label": "Incident",
+      "attributes": [
+        { "id": "service", "label": "Service" },
+        { "id": "impact", "label": "Reported impact" },
+        { "id": "status", "label": "Status" },
+        { "id": "restorationAttempts", "label": "Restoration attempts" },
+        { "id": "diagnosis", "label": "Diagnosis" },
+        { "id": "customerConfirmed", "label": "Customer confirmed" },
+        { "id": "followUpStatus", "label": "Prevention task status" }
+      ]
+    }],
+    "relationships": []
+  },
+  "diagrams": [{
+    "id": "incident-recovery-flow", "title": "Incident recovery", "kind": "flow",
+    "lanes": [
+      { "id": "customer", "label": "Customer", "nodeIds": ["report", "confirm"] },
+      { "id": "support", "label": "Support", "nodeIds": ["triage", "reproduce", "verify", "close"] },
+      { "id": "engineering", "label": "Engineering", "nodeIds": ["diagnose", "repair", "health", "follow-up"] }
+    ],
+    "groups": [
+      { "id": "initial-assessment", "label": "Initial assessment", "nodeIds": ["triage", "reproduce"] },
+      { "id": "service-restoration", "label": "Service restoration", "nodeIds": ["diagnose", "repair", "health"] }
+    ],
+    "nodes": [
+      { "id": "report", "label": "Report download failure", "entityIds": ["incident"], "role": "start" },
+      { "id": "triage", "label": "Triage report", "entityIds": ["incident"], "role": "action" },
+      { "id": "reproduce", "label": "Reproduce failure", "entityIds": ["incident"], "role": "action" },
+      { "id": "diagnose", "label": "Diagnose fault", "entityIds": ["incident"], "role": "action" },
+      { "id": "repair", "label": "Repair service", "entityIds": ["incident"], "role": "subprocess" },
+      { "id": "health", "label": "Check service health", "entityIds": ["incident"], "role": "decision" },
+      { "id": "verify", "label": "Verify download", "entityIds": ["incident"], "role": "manualOperation" },
+      { "id": "confirm", "label": "Confirm recovery", "entityIds": ["incident"], "role": "action" },
+      { "id": "close", "label": "Close incident", "entityIds": ["incident"], "role": "action" },
+      { "id": "follow-up", "label": "Log prevention task", "entityIds": ["incident"], "role": "end" }
+    ],
+    "edges": [
+      { "id": "report-triage", "sourceNodeId": "report", "targetNodeId": "triage", "label": "" },
+      { "id": "triage-reproduce", "sourceNodeId": "triage", "targetNodeId": "reproduce", "label": "" },
+      { "id": "reproduce-diagnose", "sourceNodeId": "reproduce", "targetNodeId": "diagnose", "label": "" },
+      { "id": "diagnose-repair", "sourceNodeId": "diagnose", "targetNodeId": "repair", "label": "" },
+      { "id": "repair-health", "sourceNodeId": "repair", "targetNodeId": "health", "label": "" },
+      { "id": "health-verify", "sourceNodeId": "health", "targetNodeId": "verify", "label": "Healthy" },
+      { "id": "verify-confirm", "sourceNodeId": "verify", "targetNodeId": "confirm", "label": "" },
+      { "id": "confirm-close", "sourceNodeId": "confirm", "targetNodeId": "close", "label": "" },
+      { "id": "close-follow-up", "sourceNodeId": "close", "targetNodeId": "follow-up", "label": "" },
+      { "id": "health-repair", "sourceNodeId": "health", "targetNodeId": "repair", "label": "Still degraded" }
+    ]
+  }],
+  "scenarios": [
+    {
+      "id": "incident-success", "title": "First repair restores invoice downloads",
+      "description": "Synthetic recording. Assume fictional incident inc-81 affects Invoice downloads because of a stale cache key. A customer wants downloads restored; Support reproduces the failure and Engineering repairs it on the first attempt. The customer confirms recovery, Support closes the incident, and Engineering queues prevention work. Snapshots capture every Incident field, with no relationships.",
+      "diagramId": "incident-recovery-flow",
+      "occurrences": [
+        {
+          "id": "success-report", "nodeId": "report", "incomingEdgeId": null, "trigger": "Customer report received",
+          "narration": "The customer reports failed invoice downloads, creating incident inc-81.",
+          "before": { "instances": [], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "reported", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-triage", "nodeId": "triage", "incomingEdgeId": "report-triage", "trigger": "Report routed to Support",
+          "narration": "Support triages the reported download failure so it can investigate the affected service.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "reported", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "triaged", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-reproduce", "nodeId": "reproduce", "incomingEdgeId": "triage-reproduce", "trigger": "Triage completed",
+          "narration": "Support reproduces the failure, giving Engineering a confirmed symptom to diagnose.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "triaged", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "reproduced", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-diagnose", "nodeId": "diagnose", "incomingEdgeId": "reproduce-diagnose", "trigger": "Failure reproduced",
+          "narration": "Engineering identifies the assumed stale cache key, making a targeted repair possible.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "reproduced", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "diagnosed", "restorationAttempts": 0, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-repair", "nodeId": "repair", "incomingEdgeId": "diagnose-repair", "trigger": "Fault diagnosed",
+          "narration": "Engineering refreshes the cache key and records restoration attempt 1. Service health still needs testing.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "diagnosed", "restorationAttempts": 0, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "testing", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-health", "nodeId": "health", "incomingEdgeId": "repair-health", "trigger": "Repair applied",
+          "narration": "The health check passes, so Engineering records restored service and hands verification to Support.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "testing", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "restored", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-verify", "nodeId": "verify", "incomingEdgeId": "health-verify", "trigger": "Service healthy",
+          "narration": "Support manually downloads an invoice, verifying the customer-facing path before requesting confirmation.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "restored", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "verified", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-confirm", "nodeId": "confirm", "incomingEdgeId": "verify-confirm", "trigger": "Support verified download",
+          "narration": "The customer confirms downloads work, giving Support evidence to close the incident.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "verified", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "verified", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-close", "nodeId": "close", "incomingEdgeId": "confirm-close", "trigger": "Customer confirmed recovery",
+          "narration": "Support closes the confirmed incident, ending the immediate response.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "verified", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "closed", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "success-follow-up", "nodeId": "follow-up", "incomingEdgeId": "close-follow-up", "trigger": "Incident closed",
+          "narration": "Engineering queues a prevention task for cache-key handling. The incident stays closed; the preventive work is pending.",
+          "before": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "closed", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-81", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "closed", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": "queued" } }], "links": [] }
+        }
+      ]
+    },
+    {
+      "id": "incident-retry", "title": "Second repair restores invoice downloads",
+      "description": "Synthetic recording. Assume fictional incident inc-82 affects Invoice downloads because of a stale cache key. The first repair reaches only part of the cache, so Engineering repeats restoration. The second health check passes; Support and the customer verify recovery, then Support closes the incident. Engineering queues prevention work. Snapshots capture every Incident field, with no relationships.",
+      "diagramId": "incident-recovery-flow",
+      "occurrences": [
+        {
+          "id": "retry-report", "nodeId": "report", "incomingEdgeId": null, "trigger": "Customer report received",
+          "narration": "The customer reports failed invoice downloads, creating incident inc-82.",
+          "before": { "instances": [], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "reported", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-triage", "nodeId": "triage", "incomingEdgeId": "report-triage", "trigger": "Report routed to Support",
+          "narration": "Support triages the download failure so it can investigate the affected service.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "reported", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "triaged", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-reproduce", "nodeId": "reproduce", "incomingEdgeId": "triage-reproduce", "trigger": "Triage completed",
+          "narration": "Support reproduces the failure, giving Engineering a confirmed symptom to diagnose.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "triaged", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "reproduced", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-diagnose", "nodeId": "diagnose", "incomingEdgeId": "reproduce-diagnose", "trigger": "Failure reproduced",
+          "narration": "Engineering identifies the assumed stale cache key, making a targeted repair possible.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "reproduced", "restorationAttempts": 0, "diagnosis": null, "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "diagnosed", "restorationAttempts": 0, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-repair-1", "nodeId": "repair", "incomingEdgeId": "diagnose-repair", "trigger": "Fault diagnosed",
+          "narration": "Engineering refreshes part of the cache and records attempt 1. The repair still needs a health check.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "diagnosed", "restorationAttempts": 0, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "testing", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-health-1", "nodeId": "health", "incomingEdgeId": "repair-health", "trigger": "First repair applied",
+          "narration": "The health check finds downloads still degraded because part of the cache retains the stale key. Engineering must repair again.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "testing", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "degraded", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-repair-2", "nodeId": "repair", "incomingEdgeId": "health-repair", "trigger": "Service still degraded",
+          "narration": "Engineering refreshes the remaining cache and records attempt 2 on the same incident. Health testing resumes.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "degraded", "restorationAttempts": 1, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "testing", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-health-2", "nodeId": "health", "incomingEdgeId": "repair-health", "trigger": "Second repair applied",
+          "narration": "The second health check passes, so Engineering records restored service and hands verification to Support.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "testing", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "restored", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-verify", "nodeId": "verify", "incomingEdgeId": "health-verify", "trigger": "Service healthy",
+          "narration": "Support manually downloads an invoice, verifying the customer-facing path before requesting confirmation.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "restored", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "verified", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-confirm", "nodeId": "confirm", "incomingEdgeId": "verify-confirm", "trigger": "Support verified download",
+          "narration": "The customer confirms downloads work, giving Support evidence to close the incident.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "verified", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": false, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "verified", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-close", "nodeId": "close", "incomingEdgeId": "confirm-close", "trigger": "Customer confirmed recovery",
+          "narration": "Support closes the confirmed incident, ending the immediate response after two repair attempts.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "verified", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "closed", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": null } }], "links": [] }
+        },
+        {
+          "id": "retry-follow-up", "nodeId": "follow-up", "incomingEdgeId": "close-follow-up", "trigger": "Incident closed",
+          "narration": "Engineering queues a prevention task covering cache-key refresh scope. The incident stays closed; the preventive work is pending.",
+          "before": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "closed", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": null } }], "links": [] },
+          "after": { "instances": [{ "id": "inc-82", "entityId": "incident", "values": { "service": "Invoice downloads", "impact": "Downloads fail", "status": "closed", "restorationAttempts": 2, "diagnosis": "stale cache key", "customerConfirmed": true, "followUpStatus": "queued" } }], "links": [] }
+        }
+      ]
+    }
+  ]
+}

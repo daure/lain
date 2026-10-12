@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "title": "Release approval and deployment",
+  "description": "A developer submits a release, the build pipeline checks it, and a reviewer approves deployment. Compare a passing candidate with a failed check and revision. Responsibility lanes expose the handoffs and the return to the developer.",
+  "domain": {
+    "entities": [{
+      "id": "release", "label": "Release",
+      "attributes": [
+        { "id": "version", "label": "Version" },
+        { "id": "status", "label": "Status" },
+        { "id": "checksPassed", "label": "Checks passed" },
+        { "id": "approved", "label": "Approved" },
+        { "id": "attempt", "label": "Build attempt" }
+      ]
+    }],
+    "relationships": []
+  },
+  "diagrams": [{
+    "id": "release-promotion-flow", "title": "Release promotion", "kind": "flow",
+    "lanes": [
+      { "id": "developer", "label": "Developer", "nodeIds": ["submit", "fix", "announce"] },
+      { "id": "build-pipeline", "label": "Build pipeline", "nodeIds": ["build", "check", "deploy"] },
+      { "id": "release-reviewer", "label": "Release reviewer", "nodeIds": ["approve"] }
+    ],
+    "nodes": [
+      { "id": "submit", "label": "Submit release candidate", "entityIds": ["release"], "role": "start" },
+      { "id": "build", "label": "Build candidate", "entityIds": ["release"], "role": "preparation" },
+      { "id": "check", "label": "Check candidate", "entityIds": ["release"], "role": "decision" },
+      { "id": "fix", "label": "Revise candidate", "entityIds": ["release"], "role": "manualOperation" },
+      { "id": "approve", "label": "Approve release", "entityIds": ["release"], "role": "manualOperation" },
+      { "id": "deploy", "label": "Deploy release", "entityIds": ["release"], "role": "subprocess" },
+      { "id": "announce", "label": "Announce release", "entityIds": ["release"], "role": "end" }
+    ],
+    "edges": [
+      { "id": "submit-build", "sourceNodeId": "submit", "targetNodeId": "build", "label": "" },
+      { "id": "build-check", "sourceNodeId": "build", "targetNodeId": "check", "label": "" },
+      { "id": "check-fix", "sourceNodeId": "check", "targetNodeId": "fix", "label": "Failed" },
+      { "id": "fix-build", "sourceNodeId": "fix", "targetNodeId": "build", "label": "Revised candidate" },
+      { "id": "check-approve", "sourceNodeId": "check", "targetNodeId": "approve", "label": "Passed" },
+      { "id": "approve-deploy", "sourceNodeId": "approve", "targetNodeId": "deploy", "label": "Approved" },
+      { "id": "deploy-announce", "sourceNodeId": "deploy", "targetNodeId": "announce", "label": "" }
+    ]
+  }],
+  "scenarios": [
+    {
+      "id": "release-success", "title": "Passing candidate approved and deployed",
+      "description": "Synthetic recording. Assume fictional release rel-42, version 1.4.0, passes its first build checks and receives reviewer approval. The developer wants to ship it; the pipeline deploys the approved candidate and the developer announces it. Snapshots capture every Release field, with no relationships.",
+      "diagramId": "release-promotion-flow",
+      "occurrences": [
+        {
+          "id": "success-submit", "nodeId": "submit", "incomingEdgeId": null, "trigger": "Candidate submitted",
+          "narration": "The developer submits version 1.4.0, creating rel-42 in the build queue.",
+          "before": { "instances": [], "links": [] },
+          "after": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "queued", "checksPassed": null, "approved": false, "attempt": 0 } }], "links": [] }
+        },
+        {
+          "id": "success-build", "nodeId": "build", "incomingEdgeId": "submit-build", "trigger": "Build queue accepted",
+          "narration": "The pipeline builds the queued candidate, recording attempt 1.",
+          "before": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "queued", "checksPassed": null, "approved": false, "attempt": 0 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "built", "checksPassed": null, "approved": false, "attempt": 1 } }], "links": [] }
+        },
+        {
+          "id": "success-check", "nodeId": "check", "incomingEdgeId": "build-check", "trigger": "Build completed",
+          "narration": "The candidate passes the assumed checks, so the pipeline sends it for review.",
+          "before": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "built", "checksPassed": null, "approved": false, "attempt": 1 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "checked", "checksPassed": true, "approved": false, "attempt": 1 } }], "links": [] }
+        },
+        {
+          "id": "success-approve", "nodeId": "approve", "incomingEdgeId": "check-approve", "trigger": "Checks passed",
+          "narration": "The reviewer approves the passing candidate, allowing deployment.",
+          "before": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "checked", "checksPassed": true, "approved": false, "attempt": 1 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "approved", "checksPassed": true, "approved": true, "attempt": 1 } }], "links": [] }
+        },
+        {
+          "id": "success-deploy", "nodeId": "deploy", "incomingEdgeId": "approve-deploy", "trigger": "Reviewer approved",
+          "narration": "The pipeline deploys the approved candidate, making version 1.4.0 available.",
+          "before": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "approved", "checksPassed": true, "approved": true, "attempt": 1 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "deployed", "checksPassed": true, "approved": true, "attempt": 1 } }], "links": [] }
+        },
+        {
+          "id": "success-announce", "nodeId": "announce", "incomingEdgeId": "deploy-announce", "trigger": "Deployment completed",
+          "narration": "The developer announces the deployed version, completing the recorded release.",
+          "before": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "deployed", "checksPassed": true, "approved": true, "attempt": 1 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-42", "entityId": "release", "values": { "version": "1.4.0", "status": "announced", "checksPassed": true, "approved": true, "attempt": 1 } }], "links": [] }
+        }
+      ]
+    },
+    {
+      "id": "release-retry", "title": "Revised candidate approved and deployed",
+      "description": "Synthetic recording. Assume fictional release rel-43, version 1.4.1, fails its first checks because a test fixture needs correction. The developer revises the same release; the second build passes and receives approval. Deployment and announcement complete the goal. Snapshots capture every Release field, with no relationships.",
+      "diagramId": "release-promotion-flow",
+      "occurrences": [
+        {
+          "id": "retry-submit", "nodeId": "submit", "incomingEdgeId": null, "trigger": "Candidate submitted",
+          "narration": "The developer submits version 1.4.1, creating rel-43 in the build queue.",
+          "before": { "instances": [], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "queued", "checksPassed": null, "approved": false, "attempt": 0 } }], "links": [] }
+        },
+        {
+          "id": "retry-build-1", "nodeId": "build", "incomingEdgeId": "submit-build", "trigger": "Build queue accepted",
+          "narration": "The pipeline builds the initial candidate, recording attempt 1.",
+          "before": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "queued", "checksPassed": null, "approved": false, "attempt": 0 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "built", "checksPassed": null, "approved": false, "attempt": 1 } }], "links": [] }
+        },
+        {
+          "id": "retry-check-1", "nodeId": "check", "incomingEdgeId": "build-check", "trigger": "Build completed",
+          "narration": "The assumed test fixture failure blocks approval and returns responsibility to the developer.",
+          "before": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "built", "checksPassed": null, "approved": false, "attempt": 1 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "checked", "checksPassed": false, "approved": false, "attempt": 1 } }], "links": [] }
+        },
+        {
+          "id": "retry-fix", "nodeId": "fix", "incomingEdgeId": "check-fix", "trigger": "Checks failed",
+          "narration": "The developer corrects the fixture and queues the revised candidate. Its check result resets to null because the revision has not been checked.",
+          "before": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "checked", "checksPassed": false, "approved": false, "attempt": 1 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "queued", "checksPassed": null, "approved": false, "attempt": 1 } }], "links": [] }
+        },
+        {
+          "id": "retry-build-2", "nodeId": "build", "incomingEdgeId": "fix-build", "trigger": "Revised candidate submitted",
+          "narration": "The pipeline builds the revised candidate as attempt 2, retaining rel-43's identity.",
+          "before": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "queued", "checksPassed": null, "approved": false, "attempt": 1 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "built", "checksPassed": null, "approved": false, "attempt": 2 } }], "links": [] }
+        },
+        {
+          "id": "retry-check-2", "nodeId": "check", "incomingEdgeId": "build-check", "trigger": "Revised build completed",
+          "narration": "The revised candidate passes the checks, so the pipeline hands it to the reviewer.",
+          "before": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "built", "checksPassed": null, "approved": false, "attempt": 2 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "checked", "checksPassed": true, "approved": false, "attempt": 2 } }], "links": [] }
+        },
+        {
+          "id": "retry-approve", "nodeId": "approve", "incomingEdgeId": "check-approve", "trigger": "Checks passed",
+          "narration": "The reviewer approves the passing revision, allowing deployment.",
+          "before": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "checked", "checksPassed": true, "approved": false, "attempt": 2 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "approved", "checksPassed": true, "approved": true, "attempt": 2 } }], "links": [] }
+        },
+        {
+          "id": "retry-deploy", "nodeId": "deploy", "incomingEdgeId": "approve-deploy", "trigger": "Reviewer approved",
+          "narration": "The pipeline deploys the approved revision, making version 1.4.1 available.",
+          "before": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "approved", "checksPassed": true, "approved": true, "attempt": 2 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "deployed", "checksPassed": true, "approved": true, "attempt": 2 } }], "links": [] }
+        },
+        {
+          "id": "retry-announce", "nodeId": "announce", "incomingEdgeId": "deploy-announce", "trigger": "Deployment completed",
+          "narration": "The developer announces the deployed revision, completing the recorded release after one retry.",
+          "before": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "deployed", "checksPassed": true, "approved": true, "attempt": 2 } }], "links": [] },
+          "after": { "instances": [{ "id": "rel-43", "entityId": "release", "values": { "version": "1.4.1", "status": "announced", "checksPassed": true, "approved": true, "attempt": 2 } }], "links": [] }
+        }
+      ]
+    }
+  ]
+}

@@ -66,7 +66,8 @@ jobs:
       - name: Check development launcher
         run: |
           mkdir -p /tmp/opencode
-          node --test tests/dev-start.test.mjs
+          cargo install --locked --version 2.8.0 watchexec-cli
+          node --test tests/dev*.test.mjs
       - name: Check release installer
         run: PYTHONDONTWRITEBYTECODE=1 python3 -W error -m unittest discover -s scripts/tests
       - name: Install cargo-dist

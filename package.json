@@ -3,6 +3,6 @@
   "private": true,
   "engines": { "node": ">=24" },
   "scripts": {
-    "start": "node scripts/dev.mjs"
+    "start": "node scripts/watch-dev.mjs"
   }
 }

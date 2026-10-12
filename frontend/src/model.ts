@@ -10,8 +10,11 @@ export type Relationship = {
   sourceCardinality: Cardinality;
   targetCardinality: Cardinality;
 };
-export type FlowNodeRole = 'action' | 'decision' | 'start' | 'end' | 'subprocess';
+export type FlowNodeRole = 'action' | 'decision' | 'start' | 'end' | 'subprocess'
+  | 'database' | 'preparation' | 'inputOutput' | 'outputInput' | 'priorityAction'
+  | 'manualOperation' | 'document' | 'multiDocument' | 'delay';
 export type DiagramGroup = { id: string; label: string; nodeIds: string[]; parentGroupId?: string };
+export type DiagramLane = { id: string; label: string; nodeIds: string[] };
 export type DomainGroup = { id: string; label: string; entityIds: string[]; parentGroupId?: string };
 export type Diagram = {
   id: string;
@@ -20,6 +23,7 @@ export type Diagram = {
   nodes: { id: string; label: string; entityIds: string[]; role?: FlowNodeRole; detailDiagramId?: string; subprocessDiagramId?: string }[];
   edges: { id: string; sourceNodeId: string; targetNodeId: string; label: string }[];
   groups?: DiagramGroup[];
+  lanes?: DiagramLane[];
   sequence?: {
     participants: { id: string; label: string }[];
     messages: { nodeId: string; fromParticipantId: string; toParticipantId: string }[];

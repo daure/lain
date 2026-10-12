@@ -31,7 +31,7 @@ export function scenarioDomain(diagram: Diagram, scenario: Scenario) {
 }
 
 function entityTable(entity: Explanation['domain']['entities'][number], titleX: number) {
-  const titleLines = wrapLabel(entity.label, Math.floor((320 - titleX - 60) / 8.4));
+  const titleLines = wrapLabel(entity.label, Math.floor((320 - titleX - 130) / 8.4));
   const headerHeight = Math.max(44, titleLines.length * 20 + 20);
   let y = headerHeight;
   const rows = entity.attributes.map((attribute, index) => {
@@ -46,9 +46,9 @@ function entityTable(entity: Explanation['domain']['entities'][number], titleX: 
   if (!rows.length) y += 32;
   const methodsY = y;
   if (entity.methods?.length) y += 24;
-  const methods = (entity.methods ?? []).map((method, index, methods) => {
+  const methods = (entity.methods ?? []).map(method => {
     const signatureLines = wrapLabel(method.signature, 36);
-    const height = signatureLines.length * 18 + (index === methods.length - 1 ? 17 : 6);
+    const height = signatureLines.length * 18 + 17;
     const row = { ...method, signatureLines, y, height };
     y += height;
     return row;

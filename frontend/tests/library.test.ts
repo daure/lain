@@ -23,7 +23,7 @@ const flush = async () => { for (let turn = 0; turn < 12; turn++) await Promise.
 let browser: JSDOM;
 
 beforeEach(() => {
-  browser = new JSDOM('', { url: 'http://127.0.0.1:38475/#launch=one-use-code' });
+  browser = new JSDOM('', { url: 'http://127.0.0.1:38475/' });
   vi.stubGlobal('location', browser.window.location);
   vi.stubGlobal('history', browser.window.history);
   vi.stubGlobal('WebSocket', Socket);
@@ -31,28 +31,22 @@ beforeEach(() => {
 });
 afterEach(() => { browser.window.close(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-describe('authenticated live library', () => {
-  it('removes the launch fragment, exchanges a cookie, and subscribes before fetching', async () => {
+describe('live library', () => {
+  it('subscribes before fetching the library', async () => {
     const calls: string[] = [];
-    const fetch = vi.fn(async (path: string, options: RequestInit) => {
+    const fetch = vi.fn(async (path: string) => {
       calls.push(path);
-      expect(options.credentials).toBe('same-origin');
-      if (path === '/api/session') {
-        expect(browser.window.location.hash).toBe('');
-        expect(options.body).toBe(JSON.stringify({ code: 'one-use-code' }));
-        return new Response(null, { status: 204 });
-      }
       expect(Socket.instances[0]!.onopen).not.toBeNull();
       return Response.json([summary(1)]);
     });
     vi.stubGlobal('fetch', fetch);
     const library = useLibrary();
     await library.start();
-    expect(calls).toEqual(['/api/session']);
+    expect(calls).toEqual([]);
     expect(Socket.instances[0]!.url.href).toBe('ws://127.0.0.1:38475/ws');
     Socket.instances[0]!.open();
     await flush();
-    expect(calls).toEqual(['/api/session', '/api/explanations']);
+    expect(calls).toEqual(['/api/explanations']);
     expect(library.summaries.value[0]!.revision).toBe(1);
     expect(library.connection.value).toBe('connected');
     library.stop();
@@ -62,7 +56,6 @@ describe('authenticated live library', () => {
     vi.useFakeTimers();
     let revision = 1;
     vi.stubGlobal('fetch', vi.fn(async (path: string) => {
-      if (path === '/api/session') return Response.json({});
       return Response.json(path === '/api/explanations' ? [summary(revision)] : stored(revision));
     }));
     const library = useLibrary();
@@ -84,7 +77,6 @@ describe('authenticated live library', () => {
   it('retains an update that arrives while the initial document fetch is in flight', async () => {
     let finish: (response: Response) => void = () => {};
     vi.stubGlobal('fetch', vi.fn(async (path: string) => {
-      if (path === '/api/session') return Response.json({});
       if (path === '/api/explanations') return Response.json([summary(1)]);
       return new Promise<Response>(resolve => { finish = resolve; });
     }));
@@ -106,7 +98,6 @@ describe('authenticated live library', () => {
     let revision = 1;
     let reads = 0;
     vi.stubGlobal('fetch', vi.fn(async (path: string) => {
-      if (path === '/api/session') return Response.json({});
       if (path === '/api/explanations') return Response.json([summary(revision)]);
       if (++reads === 2) return new Promise<Response>(resolve => { finish = resolve; });
       return Response.json(stored(revision));
@@ -131,7 +122,6 @@ describe('authenticated live library', () => {
     let revision = 1;
     let unavailable = true;
     vi.stubGlobal('fetch', vi.fn(async (path: string) => {
-      if (path === '/api/session') return Response.json({});
       if (path === '/api/explanations') return Response.json([summary(revision)]);
       if (revision === 2 && unavailable) return failure === 'failed'
         ? Response.json({ error: 'Update unavailable' }, { status: 500 }) : Response.json(stored(1));
@@ -151,14 +141,26 @@ describe('authenticated live library', () => {
     library.stop();
   });
 
-  it('shows authentication errors without leaving a launch credential in the URL', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'Launch code expired' }, { status: 401 })));
+  it('preserves a recreated explanation when an older deletion response arrives', async () => {
+    let revision = 1;
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => {
+      if (options?.method === 'DELETE') return new Promise<Response>(resolve => { finish = resolve; });
+      return Response.json(path === '/api/explanations' ? [summary(revision)] : stored(revision));
+    }));
     const library = useLibrary();
-    await library.start();
-    expect(browser.window.location.hash).toBe('');
-    expect(library.error.value).toContain('Run “lain open”');
-    expect(library.loading.value).toBe(false);
-    expect(Socket.instances.length).toBe(0);
+    await library.start(); Socket.instances[0]!.open(); await flush();
+    const removal = library.remove(library.summaries.value[0]!);
+    revision = 3;
+    Socket.instances[0]!.message({ id: 'order-lifecycle', revision });
+    await flush();
+    await library.select('order-lifecycle');
+    finish(Response.json({ id: 'order-lifecycle', revision: 2, deleted: true }));
+    await removal; await flush();
+    expect(library.active.value?.revision).toBe(3);
+    expect(library.summaries.value.map(item => item.revision)).toEqual([3]);
+    expect(library.deletion.value).toBeNull();
     library.stop();
   });
+
 });

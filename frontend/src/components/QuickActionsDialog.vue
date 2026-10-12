@@ -41,7 +41,7 @@ function onKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <Dialog :visible="visible" modal header="Quick actions" class="quick-actions-dialog" :draggable="false" :style="{ width: 'min(580px, 94vw)' }" @update:visible="emit('update:visible', $event)" @show="nextTick(focusSearch)" @after-hide="emit('after-hide')">
+  <Dialog :visible="visible" modal dismissable-mask header="Quick actions" class="quick-actions-dialog" :draggable="false" :style="{ width: 'min(580px, 94vw)' }" @update:visible="emit('update:visible', $event)" @show="nextTick(focusSearch)" @after-hide="emit('after-hide')">
     <div class="quick-search"><i class="pi pi-search" aria-hidden="true" /><input ref="search" v-model="query" autofocus aria-label="Search quick actions" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="quick-action-list" :aria-activedescendant="activeId ? `quick-action-${activeId}` : undefined" placeholder="Search actions or shortcuts…" @keydown="onKeydown" /></div>
     <div id="quick-action-list" class="quick-action-list" role="listbox" aria-label="Quick actions">
       <div v-for="group in groups" :key="group.title" role="group" :aria-label="group.title">

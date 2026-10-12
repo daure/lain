@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -14,21 +13,33 @@ const runtimeArgs = ['--home', home, '--port', '38475'];
 const groups = new Map();
 const lifetime = new AbortController();
 let stopping = false;
+let startupReady = false;
+let rebuilding = false;
+let pendingRebuild = false;
+let daemon;
 let stop;
 const stopped = new Promise(resolveStop => { stop = resolveStop; });
 
 function fail(message, exitCode = 1) {
   if (stopping) return;
   stopping = true;
+  lifetime.abort();
   stop({ message, exitCode });
 }
 
 process.on('SIGINT', () => fail('Development stack stopped.', 130));
 process.on('SIGTERM', () => fail('Development stack stopped.', 143));
+process.on('SIGUSR2', () => {
+  if (stopping) return;
+  pendingRebuild = true;
+  void rebuild().catch(error => fail(error.message));
+});
 
 function start(command, args, persistent = false) {
   if (stopping) throw new Error('Development stack is stopping');
-  const child = spawn(command, args, { cwd: project, detached: true, stdio: 'inherit' });
+  const child = spawn(command, args, {
+    cwd: project, detached: true, stdio: 'inherit', env: { ...process.env, LAIN_DEV_HOME: home },
+  });
   if (child.pid) groups.set(child.pid, null);
   const done = new Promise(resolveDone => {
     child.once('error', error => resolveDone({ error }));
@@ -37,10 +48,13 @@ function start(command, args, persistent = false) {
       resolveDone({ code, signal });
     });
   });
+  const owned = { child, done, expectedExit: false };
   if (persistent) {
-    done.then(result => fail(`${command} stopped: ${describe(result)}`));
+    done.then(result => {
+      if (!owned.expectedExit) fail(`${command} stopped: ${describe(result)}`);
+    });
   }
-  return { child, done };
+  return owned;
 }
 
 function describe(result) {
@@ -56,6 +70,7 @@ async function run(command, args) {
 }
 
 function signalGroup(pid, signal) {
+  if (!groups.has(pid)) return false;
   try {
     process.kill(-pid, signal);
     return true;
@@ -103,6 +118,32 @@ async function cleanup() {
   groups.clear();
 }
 
+async function waitGroupGone(pid, timeout) {
+  const deadline = Date.now() + timeout;
+  while (groups.has(pid)) {
+    if (stopping) throw new Error('Development stack is stopping');
+    if (!signalGroup(pid, 0)) {
+      retireGroup(pid);
+      return;
+    }
+    if (Date.now() >= deadline) return;
+    await sleep(50, undefined, { signal: lifetime.signal });
+  }
+}
+
+async function stopBackend(owned) {
+  owned.expectedExit = true;
+  const pid = owned.child.pid;
+  if (!signalGroup(pid, 'SIGTERM')) retireGroup(pid);
+  await waitGroupGone(pid, 3_000);
+  if (groups.has(pid)) {
+    signalGroup(pid, 'SIGKILL');
+    await waitGroupGone(pid, 3_000);
+  }
+  if (groups.has(pid)) throw new Error('Previous backend process group did not stop; refusing replacement');
+  await owned.done;
+}
+
 async function requireFreePort(port) {
   const server = createServer();
   await new Promise((resolveFree, reject) => {
@@ -136,16 +177,12 @@ async function waitReady(label, probe) {
 }
 
 async function waitBackend() {
-  return waitReady('Authenticated Rust backend', async () => {
-    const token = (await readFile(resolve(home, 'token'), 'utf8')).trim();
-    if (!token) throw new Error('runtime credential is empty');
-    const response = await request(`${backend}/api/explanations`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) throw new Error(`credential check returned HTTP ${response.status}`);
+  return waitReady('Rust backend', async () => {
+    const response = await request(`${backend}/api/explanations`);
+    if (!response.ok) throw new Error(`backend returned HTTP ${response.status}`);
     const explanations = await response.json();
     if (!Array.isArray(explanations)) throw new Error('expected an explanation list');
-    return { token, explanations };
+    return explanations;
   });
 }
 
@@ -158,28 +195,8 @@ async function waitViewer() {
   });
 }
 
-async function launchUrl(token) {
-  const response = await request(`${backend}/api/launch`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) throw new Error(`Browser launch failed: HTTP ${response.status}`);
-  const body = await response.json();
-  let url;
-  try {
-    url = new URL(body.url);
-  } catch {
-    throw new Error('Backend returned an invalid launch URL');
-  }
-  if (url.origin !== backend || url.username || url.password || url.pathname !== '/'
-      || url.search || !/^#launch=[a-zA-Z0-9_-]+$/.test(url.hash)) {
-    throw new Error('Backend launch URL is not the configured loopback viewer');
-  }
-  url.port = '5173';
-  return url.href;
-}
-
 async function openBrowser(url) {
-  console.log(`Open within 60 seconds: ${url}`);
+  console.log(`Open: ${url}`);
   if (process.env.LAIN_DEV_OPEN === '0') return;
   const opener = start('xdg-open', [url]);
   const result = await Promise.race([
@@ -191,7 +208,7 @@ async function openBrowser(url) {
     signalGroup(opener.child.pid, 'SIGKILL');
   }
   if (result.timedOut || result.error || result.code !== 0) {
-    console.error(`Browser did not open. Open this URL manually within 60 seconds: ${url}`);
+    console.error(`Browser did not open. Open this URL manually: ${url}`);
   }
 }
 
@@ -204,13 +221,45 @@ async function develop() {
   await run('cargo', ['build', '--locked']);
   await requireFreePort(38475);
   await requireFreePort(5173);
-  start(binary, [...runtimeArgs, 'serve'], true);
-  const { token, explanations } = await waitBackend();
+  daemon = start(binary, [...runtimeArgs, 'serve'], true);
+  const explanations = await waitBackend();
   start('npm', ['--prefix', 'frontend', 'run', 'dev'], true);
   await waitViewer();
   if (explanations.length === 0) await run(binary, [...runtimeArgs, 'demo']);
-  await openBrowser(await launchUrl(token));
+  await openBrowser(viewer);
   console.log(`Development ready. State: ${home}. Ctrl+C stops both servers.`);
+  startupReady = true;
+  await rebuild();
+}
+
+async function rebuild() {
+  if (!startupReady || rebuilding || stopping) return;
+  rebuilding = true;
+  try {
+    while (pendingRebuild && !stopping) {
+      pendingRebuild = false;
+      console.log('Rebuilding backend; current backend remains running.');
+      try {
+        await run('npm', ['--prefix', 'frontend', 'run', 'build']);
+        await run('cargo', ['build', '--locked']);
+      } catch (error) {
+        if (stopping) return;
+        console.error(`Backend rebuild failed; current backend remains running: ${error.message}`);
+        continue;
+      }
+      if (stopping) return;
+      if (pendingRebuild) continue;
+      await stopBackend(daemon);
+      await requireFreePort(38475);
+      daemon = start(binary, [...runtimeArgs, 'serve'], true);
+      await waitBackend();
+      if (stopping) return;
+      console.log('Backend reloaded. Browser reconnects automatically.');
+      console.log('Reconnect MCP if its client needs a new connection.');
+    }
+  } finally {
+    rebuilding = false;
+  }
 }
 
 develop().catch(error => fail(error.message));

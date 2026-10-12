@@ -59,8 +59,8 @@ it('keeps the inspector and its bounded tab selection across views, scenarios, r
     await click(view); expect(inspector()).toBe(pane); expect(selectedDataTab().textContent).toBe('After');
     expect(toggle().getAttribute('aria-expanded')).toBe('true');
   }
-  await click('Duplicate callback');
-  document.querySelectorAll<HTMLButtonElement>('.history-link')[3]!.click(); await settle();
+  await click('Repeated callback keeps one fulfillment');
+  await press('l'); await press('l'); await press('l');
   expect(pane.querySelector('.inspector-occurrence code')!.textContent).toBe('duplicate-verification');
   expect(pane.querySelector('[data-attribute-id="lookupCount"] pre')!.textContent).toBe('2');
   expect(pane.closest('[inert]')).toBeNull();
@@ -69,7 +69,7 @@ it('keeps the inspector and its bounded tab selection across views, scenarios, r
   expect(pane.closest('[inert]')).not.toBeNull();
   expect(document.activeElement).toBe(toggle());
   await press('.'); expect(selectedDataTab().textContent).toBe('After');
-  await click('Parcel delivered'); await click('Domain');
+  await click('First delivery closes fulfillment'); await click('Domain');
   expect(toggle().getAttribute('aria-expanded')).toBe('false');
   await press('n'); await press('n', { repeat: true });
   expect(toggle().getAttribute('aria-expanded')).toBe('true');
@@ -99,7 +99,7 @@ it('counts multiple instances and expandable nested collections while rendering 
   const group = () => inspector().querySelector('.inspector-entity')!;
   expect(group().querySelector('h3 .data-count')!.textContent).toBe('3');
   await click('Domain');
-  expect(document.querySelector('.domain-entity[data-entity-id="order"] .domain-instance-count text')!.textContent).toBe('3');
+  expect(document.querySelector('.domain-entity[data-entity-id="order"] .domain-count-values')!.textContent).toBe('2 · 2 · 1');
   const array = group().querySelector<HTMLDetailsElement>('[data-instance-id="a"] .after details')!;
   expect(array.querySelector('summary')!.textContent).toBe('Array2');
   array.open = true; array.dispatchEvent(new Event('toggle')); await settle();
@@ -188,7 +188,7 @@ it('guards data shortcuts in editing controls and overlays and exposes them thro
 });
 
 it('focuses a selected ERD field in the inspector without moving the occurrence or main view', async () => {
-  await mount(); await click('Parcel delivered'); await click('Domain'); await press('n');
+  await mount(); await click('First delivery closes fulfillment'); await click('Domain'); await press('n');
   const cursor = location.search;
   const field = document.querySelector<SVGGElement>('.domain-entity[data-entity-id="fulfillment"] [data-attribute-id="warehouse"]')!;
   field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await settle();

@@ -45,7 +45,8 @@ export function useBrowserNavigation(library: ReturnType<typeof useLibrary>, nav
       if (request !== generation) return;
       if (!success) { applying = false; return; }
     }
-    const document = library.active.value!.document;
+    const document = library.active.value?.document;
+    if (!document) { applying = false; return; }
     const scenario = document.scenarios.find(item => item.id === ids[1]) ?? document.scenarios[0]!;
     navigation.selectScenario(scenario.id);
     navigation.selectOccurrence(scenario.occurrences.find(item => item.id === ids[2])?.id ?? scenario.occurrences[0]!.id);

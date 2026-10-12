@@ -117,36 +117,23 @@ impl Store {
     pub(crate) async fn publish(
         &self,
         id: &str,
-        expected_revision: u64,
         document: Explanation,
+        expected_revision: Option<u64>,
     ) -> Result<StoredExplanation, ServiceError> {
-        let expected = i64::try_from(expected_revision).map_err(|_| {
-            ServiceError::Invalid("expectedRevision exceeds SQLite integer range".into())
-        })?;
         let timestamp = timestamp()?;
         let json = serde_json::to_string(&document).map_err(storage)?;
         let mut transaction = self.pool.begin().await.map_err(storage)?;
-        let result = if expected == 0 {
-            sqlx::query_scalar::<_, i64>("INSERT INTO explanations (id, revision, document_json, updated_at_ms) VALUES (?, 1, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = explanations.revision + 1, document_json = excluded.document_json, updated_at_ms = excluded.updated_at_ms, deleted = 0 WHERE explanations.deleted = 1 AND explanations.revision < 9223372036854775807 RETURNING revision")
-                .bind(id).bind(&json).bind(timestamp).fetch_optional(&mut *transaction).await
+        let revision = if let Some(expected) = expected_revision {
+            let expected = i64::try_from(expected).map_err(|_| ServiceError::Conflict)?;
+            sqlx::query_scalar::<_, i64>("UPDATE explanations SET revision = revision + 1, document_json = ?, updated_at_ms = ?, deleted = 0 WHERE id = ? AND revision = ? AND revision < 9223372036854775807 RETURNING revision")
+                .bind(&json).bind(timestamp).bind(id).bind(expected)
+                .fetch_optional(&mut *transaction).await.map_err(storage)?
+                .ok_or(ServiceError::Conflict)?
         } else {
-            sqlx::query_scalar::<_, i64>("UPDATE explanations SET revision = revision + 1, document_json = ?, updated_at_ms = ? WHERE id = ? AND revision = ? AND deleted = 0 AND revision < 9223372036854775807 RETURNING revision")
-                .bind(&json).bind(timestamp).bind(id).bind(expected).fetch_optional(&mut *transaction).await
-        }.map_err(storage)?;
-        let revision = match result {
-            Some(revision) => revision,
-            None => {
-                if expected == 0 {
-                    let exhausted: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM explanations WHERE id = ? AND deleted = 1 AND revision = 9223372036854775807)")
-                        .bind(id).fetch_one(&mut *transaction).await.map_err(storage)?;
-                    if exhausted {
-                        return Err(ServiceError::Invalid(
-                            "revision exceeds SQLite integer range".into(),
-                        ));
-                    }
-                }
-                return Err(ServiceError::Conflict);
-            }
+            sqlx::query_scalar::<_, i64>("INSERT INTO explanations (id, revision, document_json, updated_at_ms) VALUES (?, 1, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = explanations.revision + 1, document_json = excluded.document_json, updated_at_ms = excluded.updated_at_ms, deleted = 0 WHERE explanations.revision < 9223372036854775807 RETURNING revision")
+            .bind(id).bind(&json).bind(timestamp).fetch_optional(&mut *transaction).await
+            .map_err(storage)?
+            .ok_or_else(|| ServiceError::Invalid("explanation update limit reached".into()))?
         };
         transaction.commit().await.map_err(storage)?;
         Ok(StoredExplanation {
@@ -160,14 +147,21 @@ impl Store {
     pub(crate) async fn delete(
         &self,
         id: &str,
-        expected_revision: u64,
+        expected_revision: Option<u64>,
     ) -> Result<ChangeEvent, ServiceError> {
+        let expected = expected_revision
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| ServiceError::Conflict)?;
         let timestamp = timestamp()?;
         let mut transaction = self.pool.begin().await.map_err(storage)?;
-        let revision: Option<i64> = sqlx::query_scalar("UPDATE explanations SET deleted = 1, document_json = 'null', revision = revision + 1, updated_at_ms = ? WHERE id = ? AND revision = ? AND deleted = 0 AND revision < 9223372036854775807 RETURNING revision")
-            .bind(timestamp).bind(id).bind(expected_revision as i64)
+        let revision: Option<i64> = sqlx::query_scalar("UPDATE explanations SET deleted = 1, document_json = 'null', revision = revision + 1, updated_at_ms = ? WHERE id = ? AND deleted = 0 AND (? IS NULL OR revision = ?) AND revision < 9223372036854775807 RETURNING revision")
+            .bind(timestamp).bind(id).bind(expected).bind(expected)
             .fetch_optional(&mut *transaction).await.map_err(storage)?;
         let Some(revision) = revision else {
+            if expected.is_some() {
+                return Err(ServiceError::Conflict);
+            }
             let live: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM explanations WHERE id = ? AND deleted = 0)",
             )
@@ -176,7 +170,7 @@ impl Store {
             .await
             .map_err(storage)?;
             return Err(if live {
-                ServiceError::Conflict
+                ServiceError::Invalid("explanation update limit reached".into())
             } else {
                 ServiceError::NotFound
             });

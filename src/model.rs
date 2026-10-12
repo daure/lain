@@ -6,6 +6,7 @@ use serde_json::Value;
 
 pub use crate::cardinality::Cardinality;
 pub use crate::groups::{DiagramGroup, DomainGroup};
+pub use crate::lanes::DiagramLane;
 pub use crate::method_calls::MethodCall;
 pub use crate::sequence::{SequenceOperand, SequenceStep};
 
@@ -13,41 +14,52 @@ pub const MAX_DOCUMENT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 32 * 1024;
 const MAX_DEPTH: usize = 32;
 
+/// Plain-text fields and captured JSON strings or keys are limited to 32 KiB of UTF-8 bytes.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Explanation {
+    #[schemars(range(min = 1, max = 1))]
     pub schema_version: u32,
     pub title: String,
     pub description: String,
     pub domain: Domain,
+    #[schemars(length(min = 1, max = 50))]
     pub diagrams: Vec<Diagram>,
+    #[schemars(length(min = 1, max = 100))]
     pub scenarios: Vec<Scenario>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Domain {
+    #[schemars(length(max = 200))]
     pub entities: Vec<Entity>,
+    #[schemars(length(max = 500))]
     pub relationships: Vec<Relationship>,
     /// Shared ERD containers for domain areas, external systems, API DTOs, or technology boundaries.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 100))]
     pub groups: Vec<DomainGroup>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Entity {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub label: String,
+    #[schemars(length(max = 200))]
     pub attributes: Vec<Attribute>,
     /// Descriptive domain operations, rendered separately from captured attributes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 200))]
     pub methods: Vec<EntityMethod>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EntityMethod {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     /// Nonblank signature text, including parameters and return type when known; never executed.
     pub signature: String,
@@ -58,6 +70,7 @@ pub struct EntityMethod {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Attribute {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub label: String,
 }
@@ -65,9 +78,12 @@ pub struct Attribute {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Relationship {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub label: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub source_entity_id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub target_entity_id: String,
     /// Sources per target: zeroOrOne (0..1), exactlyOne (1..1), zeroOrMore (0..*), or oneOrMore (1..*).
     pub source_cardinality: Cardinality,
@@ -78,15 +94,23 @@ pub struct Relationship {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Diagram {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub title: String,
     /// Flow nodes describe actions; state nodes describe conditions and their edges describe triggering events.
     pub kind: DiagramKind,
+    #[schemars(length(max = 200))]
     pub nodes: Vec<Node>,
+    #[schemars(length(max = 500))]
     pub edges: Vec<Edge>,
     /// Flow subgraphs or state composite containers. Membership is descriptive; traversals use nodes and edges.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 100))]
     pub groups: Vec<DiagramGroup>,
+    /// Ordered flow swimlanes. Nodes without membership render in an implicit Unassigned band.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 50))]
+    pub lanes: Vec<DiagramLane>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<Sequence>,
 }
@@ -103,17 +127,20 @@ pub enum DiagramKind {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Sequence {
+    #[schemars(length(min = 1, max = 50))]
     pub participants: Vec<SequenceParticipant>,
+    #[schemars(length(min = 1, max = 200))]
     pub messages: Vec<SequenceMessage>,
     /// Ordered shared interaction with message references and alt/opt/loop fragments.
     #[serde(default)]
-    #[schemars(!default)]
+    #[schemars(!default, length(min = 1, max = 500))]
     pub body: Vec<SequenceStep>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SequenceParticipant {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub label: String,
 }
@@ -121,18 +148,23 @@ pub struct SequenceParticipant {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SequenceMessage {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub node_id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub from_participant_id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub to_participant_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Node {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub label: String,
+    #[schemars(inner(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])")))]
     pub entity_ids: Vec<String>,
-    /// Optional flow-only role. Subprocesses use double-bordered boxes; omitted roles use action boxes.
+    /// Optional flow-only descriptive role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<FlowNodeRole>,
     /// Detail flow or sequence diagram in this explanation. Flow sources require role subprocess;
@@ -142,6 +174,7 @@ pub struct Node {
         alias = "subprocessDiagramId",
         skip_serializing_if = "Option::is_none"
     )]
+    #[schemars(with = "NullableId")]
     pub detail_diagram_id: Option<String>,
 }
 
@@ -153,13 +186,25 @@ pub enum FlowNodeRole {
     Start,
     End,
     Subprocess,
+    Database,
+    Preparation,
+    InputOutput,
+    OutputInput,
+    PriorityAction,
+    ManualOperation,
+    Document,
+    MultiDocument,
+    Delay,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Edge {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub source_node_id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub target_node_id: String,
     pub label: String,
 }
@@ -167,23 +212,30 @@ pub struct Edge {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scenario {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub title: String,
     /// Agent-authored plain-text overview of the setup, goal, and recorded outcome or stopping point.
     /// Remains the same at every step. Label assumptions and synthetic examples explicitly.
+    /// Optional for compatibility; author a description for every new scenario.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub diagram_id: String,
+    #[schemars(length(min = 1, max = 2000))]
     pub occurrences: Vec<Occurrence>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Occurrence {
+    /// Stable visit ID, distinct within this scenario even when a node is revisited.
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub node_id: String,
     #[serde(deserialize_with = "required_nullable")]
-    #[schemars(with = "NullableString")]
+    #[schemars(with = "NullableId")]
     pub incoming_edge_id: Option<String>,
     #[serde(deserialize_with = "required_nullable")]
     #[schemars(with = "NullableString")]
@@ -199,7 +251,16 @@ pub struct Occurrence {
     pub after: Snapshot,
     /// Recorded calls in authored order, attached to this visit rather than the shared node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 500))]
     pub method_calls: Vec<MethodCall>,
+}
+
+#[derive(JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+pub(crate) enum NullableId {
+    Text(#[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))] String),
+    Null(()),
 }
 
 #[derive(JsonSchema)]
@@ -216,9 +277,12 @@ fn required_nullable<'de, D: Deserializer<'de>>(
     Option::<String>::deserialize(deserializer)
 }
 
+/// Complete captured state, not a patch. Each before/after snapshot independently satisfies
+/// relationship bounds; required instances and links belong in that snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Snapshot {
+    #[schemars(length(max = 500))]
     pub instances: Vec<Instance>,
     pub links: Vec<Link>,
 }
@@ -226,22 +290,30 @@ pub struct Snapshot {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Instance {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub entity_id: String,
+    /// Captured values keyed by attribute ID. Omission is uncaptured; null is captured.
+    /// Encode integers outside ±9007199254740991 and precision-sensitive decimals as strings.
     pub values: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Link {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub relationship_id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub source_instance_id: String,
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub target_instance_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoredExplanation {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub revision: u64,
     pub updated_at_ms: u64,
@@ -251,19 +323,13 @@ pub struct StoredExplanation {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublishRequest {
-    pub expected_revision: u64,
     pub document: Explanation,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeleteRequest {
-    pub expected_revision: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExplanationSummary {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub title: String,
     pub description: String,
@@ -276,6 +342,7 @@ pub struct ExplanationSummary {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChangeEvent {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub revision: u64,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -387,6 +454,7 @@ impl Explanation {
             let nodes = index(&diagram.nodes, |node| &node.id, "node")?;
             index(&diagram.edges, |edge| &edge.id, "edge")?;
             diagram.validate_groups(&nodes)?;
+            diagram.validate_lanes(&nodes)?;
             diagram.validate_sequence(&nodes)?;
             for node in &diagram.nodes {
                 if node.role.is_some() && diagram.kind != DiagramKind::Flow {
@@ -485,11 +553,12 @@ impl Explanation {
                 }
                 (Some(_), None) => return Err("later occurrences require an incomingEdgeId".into()),
             }
-            for snapshot in [&occurrence.before, &occurrence.after] {
+            for (phase, snapshot) in [("before", &occurrence.before), ("after", &occurrence.after)]
+            {
                 validate_snapshot(snapshot, entity_attributes, relationships, &mut identities)
                     .map_err(|error| {
                         format!(
-                            "scenario {:?}, occurrence {:?}: {error}",
+                            "scenario {:?}, occurrence {:?}, {phase} snapshot: {error}",
                             scenario.id, occurrence.id
                         )
                     })?;
@@ -626,8 +695,20 @@ fn validate_snapshot<'a>(
                 && !sources.contains(&(&relationship.id, &instance.id))
             {
                 return Err(format!(
-                    "relationship {:?}: instance {:?} requires at least one target link",
-                    relationship.id, instance.id
+                    "relationship {:?}: instance {:?} requires at least one target link (targetCardinality={}); include a related instance of entity {:?} and its link in this same snapshot, or use targetCardinality={} only if the domain permits no target",
+                    relationship.id,
+                    instance.id,
+                    if relationship.target_cardinality.is_single() {
+                        "exactlyOne"
+                    } else {
+                        "oneOrMore"
+                    },
+                    relationship.target_entity_id,
+                    if relationship.target_cardinality.is_single() {
+                        "zeroOrOne"
+                    } else {
+                        "zeroOrMore"
+                    }
                 ));
             }
             if relationship.source_cardinality.is_required()
@@ -635,8 +716,20 @@ fn validate_snapshot<'a>(
                 && !targets.contains(&(&relationship.id, &instance.id))
             {
                 return Err(format!(
-                    "relationship {:?}: instance {:?} requires at least one source link",
-                    relationship.id, instance.id
+                    "relationship {:?}: instance {:?} requires at least one source link (sourceCardinality={}); include a related instance of entity {:?} and its link in this same snapshot, or use sourceCardinality={} only if the domain permits no source",
+                    relationship.id,
+                    instance.id,
+                    if relationship.source_cardinality.is_single() {
+                        "exactlyOne"
+                    } else {
+                        "oneOrMore"
+                    },
+                    relationship.source_entity_id,
+                    if relationship.source_cardinality.is_single() {
+                        "zeroOrOne"
+                    } else {
+                        "zeroOrMore"
+                    }
                 ));
             }
         }

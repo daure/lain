@@ -10,22 +10,29 @@ use crate::model::{Scenario, Sequence, validate_id};
 pub enum SequenceStep {
     Message {
         #[serde(rename = "nodeId")]
+        #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
         node_id: String,
     },
     Alt {
+        #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
         id: String,
+        #[schemars(length(min = 2, max = 20))]
         operands: Vec<SequenceOperand>,
     },
     Opt {
+        #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
         id: String,
         /// Descriptive condition, rendered as text and never evaluated.
         guard: String,
+        #[schemars(length(min = 1, max = 500))]
         body: Vec<SequenceStep>,
     },
     Loop {
+        #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
         id: String,
         /// Descriptive condition for zero or more recorded iterations.
         guard: String,
+        #[schemars(length(min = 1, max = 500))]
         body: Vec<SequenceStep>,
     },
 }
@@ -33,9 +40,11 @@ pub enum SequenceStep {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SequenceOperand {
+    #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     /// Descriptive branch condition; a traversal chooses one operand per alt visit.
     pub guard: String,
+    #[schemars(length(min = 1, max = 500))]
     pub body: Vec<SequenceStep>,
 }
 
