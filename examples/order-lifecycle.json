@@ -72,21 +72,25 @@
         { "id": "delivery-outcome", "label": "Delivery outcome", "nodeIds": ["delivered", "returned"], "parentGroupId": "carrier-handling" }
       ],
       "nodes": [
+        { "id": "shipment-initial", "label": "Shipment lifecycle begins", "entityIds": [], "stateRole": "initial" },
         { "id": "packed", "label": "Parcel packed", "entityIds": ["fulfillment", "shipment"] },
         { "id": "transit", "label": "In transit", "entityIds": ["shipment", "fulfillment"] },
         { "id": "delivered", "label": "Parcel delivered", "entityIds": ["shipment", "fulfillment"] },
         { "id": "closed", "label": "Fulfillment work closed", "entityIds": ["order", "fulfillment", "shipment"] },
         { "id": "delivery-failed", "label": "Delivery attempt failed", "entityIds": ["shipment", "fulfillment"] },
-        { "id": "returned", "label": "Returned to sender", "entityIds": ["shipment", "fulfillment"] }
+        { "id": "returned", "label": "Returned to sender", "entityIds": ["shipment", "fulfillment"] },
+        { "id": "shipment-final", "label": "Shipment lifecycle complete", "entityIds": [], "stateRole": "final" }
       ],
       "edges": [
-        { "id": "packed-transit", "sourceNodeId": "packed", "targetNodeId": "transit", "label": "Carrier pickup" },
-        { "id": "transit-delivered", "sourceNodeId": "transit", "targetNodeId": "delivered", "label": "Delivery confirmed" },
-        { "id": "delivered-closed", "sourceNodeId": "delivered", "targetNodeId": "closed", "label": "Acknowledge completed work" },
-        { "id": "transit-delivery-failed", "sourceNodeId": "transit", "targetNodeId": "delivery-failed", "label": "Recipient unavailable" },
-        { "id": "delivery-failed-transit", "sourceNodeId": "delivery-failed", "targetNodeId": "transit", "label": "Redelivery scheduled" },
-        { "id": "delivery-failed-returned", "sourceNodeId": "delivery-failed", "targetNodeId": "returned", "label": "Recipient declines redelivery" },
-        { "id": "returned-closed", "sourceNodeId": "returned", "targetNodeId": "closed", "label": "Acknowledge returned parcel" }
+        { "id": "initial-packed", "sourceNodeId": "shipment-initial", "targetNodeId": "packed", "label": "", "transition": { "effect": "Pack parcel" } },
+        { "id": "packed-transit", "sourceNodeId": "packed", "targetNodeId": "transit", "label": "", "transition": { "event": "Carrier pickup", "guard": "Parcel packed", "effect": "Assign tracking" } },
+        { "id": "transit-delivered", "sourceNodeId": "transit", "targetNodeId": "delivered", "label": "", "transition": { "event": "Delivery confirmed", "guard": "Recipient available", "effect": "Record delivery" } },
+        { "id": "delivered-closed", "sourceNodeId": "delivered", "targetNodeId": "closed", "label": "", "transition": { "event": "Work acknowledged", "guard": "Delivery complete", "effect": "Remove queue item" } },
+        { "id": "transit-delivery-failed", "sourceNodeId": "transit", "targetNodeId": "delivery-failed", "label": "", "transition": { "event": "Delivery attempted", "guard": "Recipient unavailable", "effect": "Record failed attempt" } },
+        { "id": "delivery-failed-transit", "sourceNodeId": "delivery-failed", "targetNodeId": "transit", "label": "", "transition": { "event": "Redelivery scheduled", "guard": "Recipient agrees", "effect": "Dispatch again" } },
+        { "id": "delivery-failed-returned", "sourceNodeId": "delivery-failed", "targetNodeId": "returned", "label": "", "transition": { "event": "Parcel returned", "guard": "Redelivery declined", "effect": "Record return" } },
+        { "id": "returned-closed", "sourceNodeId": "returned", "targetNodeId": "closed", "label": "", "transition": { "event": "Work acknowledged", "guard": "Parcel returned", "effect": "Remove queue item" } },
+        { "id": "closed-final", "sourceNodeId": "closed", "targetNodeId": "shipment-final", "label": "" }
       ]
     },
     {
@@ -120,9 +124,9 @@
           { "nodeId": "callback", "fromParticipantId": "gateway", "toParticipantId": "payment-service" },
           { "nodeId": "check", "fromParticipantId": "payment-service", "toParticipantId": "receipt-store" },
           { "nodeId": "capture", "fromParticipantId": "payment-service", "toParticipantId": "payment-service" },
-          { "nodeId": "fulfill", "fromParticipantId": "payment-service", "toParticipantId": "fulfillment-queue" },
-          { "nodeId": "existing", "fromParticipantId": "receipt-store", "toParticipantId": "payment-service" },
-          { "nodeId": "ignore", "fromParticipantId": "payment-service", "toParticipantId": "gateway" },
+          { "nodeId": "fulfill", "fromParticipantId": "payment-service", "toParticipantId": "fulfillment-queue", "kind": "async" },
+          { "nodeId": "existing", "fromParticipantId": "receipt-store", "toParticipantId": "payment-service", "kind": "reply" },
+          { "nodeId": "ignore", "fromParticipantId": "payment-service", "toParticipantId": "gateway", "kind": "reply" },
           { "nodeId": "decline", "fromParticipantId": "payment-service", "toParticipantId": "payment-service" }
         ],
         "body": [
@@ -170,6 +174,31 @@
           { "nodeId": "mark-order-paid", "fromParticipantId": "service", "toParticipantId": "order" }
         ],
         "body": [{ "kind": "message", "nodeId": "capture-payment" }, { "kind": "message", "nodeId": "mark-order-paid" }]
+      }
+    },
+    {
+      "id": "dispatch-request-sequence", "title": "Dispatch request exchange", "kind": "sequence",
+      "nodes": [
+        { "id": "request", "label": "Request dispatch for paid order", "entityIds": ["order"] },
+        { "id": "enqueue", "label": "Queue dispatch work", "entityIds": ["order", "fulfillment"] },
+        { "id": "confirm", "label": "Confirm dispatch request accepted", "entityIds": ["fulfillment"] }
+      ],
+      "edges": [
+        { "id": "request-enqueue", "sourceNodeId": "request", "targetNodeId": "enqueue", "label": "Order is paid" },
+        { "id": "enqueue-confirm", "sourceNodeId": "enqueue", "targetNodeId": "confirm", "label": "Work queued" }
+      ],
+      "sequence": {
+        "participants": [
+          { "id": "operator", "label": "Warehouse operator", "kind": "human" },
+          { "id": "dispatch-service", "label": "Dispatch service" },
+          { "id": "fulfillment-queue", "label": "Fulfillment queue" }
+        ],
+        "messages": [
+          { "nodeId": "request", "fromParticipantId": "operator", "toParticipantId": "dispatch-service" },
+          { "nodeId": "enqueue", "fromParticipantId": "dispatch-service", "toParticipantId": "fulfillment-queue", "kind": "async" },
+          { "nodeId": "confirm", "fromParticipantId": "dispatch-service", "toParticipantId": "operator", "kind": "reply" }
+        ],
+        "body": [{ "kind": "message", "nodeId": "request" }, { "kind": "message", "nodeId": "enqueue" }, { "kind": "message", "nodeId": "confirm" }]
       }
     },
     {
@@ -937,6 +966,40 @@
             { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
             { "id": "pay-72", "entityId": "payment", "values": { "status": "captured", "amount": 89.9, "failureReason": null } }
           ], "links": [{ "relationshipId": "order-payments", "sourceInstanceId": "ord-1042", "targetInstanceId": "pay-72" }] }
+        }
+      ]
+    },
+    {
+      "id": "dispatch-request-accepted", "title": "Operator queues paid order dispatch", "diagramId": "dispatch-request-sequence",
+      "description": "In this synthetic example, a warehouse operator requests dispatch of paid order ORD-1042. The dispatch service queues fulfillment work and returns acceptance without waiting for packing or delivery. Only the order and queued work are captured; the recording stops before a worker consumes the asynchronous message.",
+      "occurrences": [
+        {
+          "id": "dispatch-requested", "nodeId": "request", "incomingEdgeId": null, "trigger": "POST /orders/ORD-1042/dispatch",
+          "narration": "The warehouse operator asks the dispatch service to dispatch ORD-1042 and waits for its response. The solid filled arrow denotes a synchronous call. The order is already paid and remains unchanged.",
+          "before": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] },
+          "after": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] }
+        },
+        {
+          "id": "dispatch-enqueued", "nodeId": "enqueue", "incomingEdgeId": "request-enqueue", "trigger": "DispatchRequested published",
+          "narration": "The service sends a dispatch request to the fulfillment queue. The solid open arrow denotes an asynchronous send: the service does not wait for a warehouse worker to finish. The captured queue contains one work item linked to the paid order.",
+          "changeSummary": "Work item ful-dispatch-demo is created and linked to ORD-1042. Its status is queued.",
+          "before": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-dispatch-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-dispatch-demo" }] }
+        },
+        {
+          "id": "dispatch-accepted", "nodeId": "confirm", "incomingEdgeId": "enqueue-confirm", "trigger": "HTTP 202 Accepted",
+          "narration": "The dispatch service replies to the operator with HTTP 202. The dashed open arrow denotes the reply, not scenario relevance. Acceptance confirms queued work, not completed dispatch; the captured work remains queued.",
+          "before": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-dispatch-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-dispatch-demo" }] },
+          "after": { "instances": [
+            { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
+            { "id": "ful-dispatch-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }
+          ], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-dispatch-demo" }] }
         }
       ]
     },

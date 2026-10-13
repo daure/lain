@@ -154,6 +154,7 @@ export function useLibrary() {
           id: stored.id, revision: stored.revision, updatedAtMs: stored.updatedAtMs,
           title: stored.document.title, description: stored.document.description,
           diagramCount: stored.document.diagrams.length, scenarioCount: stored.document.scenarios.length,
+          linkCount: stored.document.links?.length ?? 0,
         }].sort((a, b) => a.id.localeCompare(b.id));
       }
     } finally {

@@ -39,7 +39,13 @@ Authorized payment marks order paid and Captured payment marks the order paid re
 
 **Payment capture exchange** (`payment-capture-sequence`), under **Captured payment marks the order paid**, records Capture the authorized payment followed by Mark the order paid. Order payment application service wraps into two header lines. Authorized customer payment awaiting settlement and capture wraps and ends with an ellipsis; hover to read its complete label.
 
+**Dispatch request exchange** (`dispatch-request-sequence`), under **Operator queues paid order dispatch**, shows all three message kinds. The warehouse operator's synchronous request has a solid filled arrow; queuing dispatch work has a solid open arrow; HTTP 202 acceptance returns on a dashed open arrow. Participant boxes prepend person and monitor icons for `human` and `system`. Dashed lifelines remain consistent. The snapshots capture paid order ORD-1042 and creation of queued work; acceptance does not mean packing or delivery has finished.
+
 Payment handling groups Receipt verification and Payment resolution inside Callback processing. Shipment lifecycle uses Carrier handling as a composite-state container, with Delivery in progress and Delivery outcome nested inside it. Redelivery revisits In transit within Delivery in progress; delivery and return paths cross into Delivery outcome before leaving Carrier handling for Fulfillment work closed.
+
+**Shipment lifecycle** (`shipment-state`) shows an initial filled circle before Parcel packed and a final ring with a filled center after Fulfillment work closed. Select any shipment scenario, then Diagram. Hover either marker for its lifecycle-boundary label. The recordings begin at Parcel packed and stop at Fulfillment work closed; the declared boundaries remain visible without synthetic marker visits or snapshots.
+
+Its transitions show separate event, bracketed guard, and slash-prefixed effect components. Carrier pickup `[Parcel packed] / Assign tracking` describes dispatch. Delivery attempted `[Recipient unavailable] / Record failed attempt` describes the failure branch, while Redelivery scheduled `[Recipient agrees] / Dispatch again` explains the revisit. All fields are descriptive; guards do not run against snapshots. Hover a caption for its complete text. Chart exports retain markers and structured captions.
 
 Agents declare containers through `diagrams[].groups` in `publish_explanation`:
 
@@ -65,6 +71,8 @@ The same fields describe flow groups/subgraphs. `nodeIds` lists direct members; 
 Shipment snapshots include carrier, destination city, delivery attempts, delivery issue, return reason, and return timestamp. Select a scenario under Shipment lifecycle or Payment callback sequence to compare the recorded alternatives.
 
 The shared payment sequence defines a receipt-verification loop, an optional handled-receipt response, and an `alt` frame for success, duplicate, and decline. All three scenarios use that layout and select different recorded paths through it.
+
+Payment callback messages use calls for receipt lookup and payment operations, asynchronous sends for fulfillment, and replies for handled receipts and duplicate acknowledgements. Select the successful scenario to see off-scenario replies retain their dashes while dimmed; off-scenario calls and fragment borders stay solid. Omitted participant and message kinds in Payment capture exchange use system icons and call arrows.
 
 Snapshots contain complete captured state for each occurrence. An omitted attribute is uncaptured; `null` is captured; an omitted instance is absent. The shipment traversal captures order, fulfillment, and shipment state. Payment and receipt instances are outside that traversal’s captured state.
 

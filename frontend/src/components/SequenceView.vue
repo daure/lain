@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<{
 }>(), { compact: false });
 const emit = defineEmits<{ select: [occurrenceId: string]; inspect: [nodeId: string]; open: [scenarioId: string] }>();
 const markerId = `sequence-arrow-${useId().replace(/[^a-z0-9-]/gi, '')}`;
-const participants = computed(() => props.diagram.sequence!.participants.map(participant => ({ ...participant, lines: labelLines(participant.label, 23) })));
+const participants = computed(() => props.diagram.sequence!.participants.map(participant => ({ ...participant, kind: participant.kind ?? 'system', lines: labelLines(participant.label, 19) })));
 const participantLabels = computed(() => new Map(participants.value.map(participant => [participant.id, participant.label])));
 const participantSpacing = 240;
 const participantInset = 140;
@@ -49,15 +49,17 @@ const rows = computed(() => {
     const occurrence = definition.occurrence ?? visits.find(visit => visit.occurrence.id === props.currentOccurrenceId)?.occurrence ?? walked.at(-1)?.occurrence ?? visits[0]?.occurrence;
     const node = nodes.value.get(nodeId)!;
     const message = messages.value.get(nodeId)!;
+    const kind = message.kind ?? 'call';
     const fromX = participantX.value.get(message.fromParticipantId)!;
     const toX = participantX.value.get(message.toParticipantId)!;
     const self = fromX === toX;
     const hasDetail = props.links?.has(nodeId) ?? false;
     const labelWidth = (self ? participantSpacing - 36 : Math.abs(toX - fromX) - 24) - (hasDetail ? 24 : 0);
     const label = props.compact ? `${definition.index + 1}. ${node.label}` : node.label;
-    const direction = `${node.label}, from ${participantLabels.value.get(message.fromParticipantId)!} to ${participantLabels.value.get(message.toParticipantId)!}`;
+    const direction = `${node.label}, ${kind}, from ${participantLabels.value.get(message.fromParticipantId)!} to ${participantLabels.value.get(message.toParticipantId)!}`;
     return {
-      occurrence, node, self, y, labelWidth, current,
+      occurrence, node, self, y, labelWidth, current, kind,
+      arrowhead: kind === 'call' ? 'filled' : 'open',
       key: props.compact ? occurrence!.id : nodeId,
       visited: props.compact ? definition.index <= currentIndex.value : walked.length > 0,
       upcoming: !props.compact && visits.length > 0 && walked.length === 0,
@@ -163,12 +165,19 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
           </clipPath>
         </defs>
         <rect class="sequence-heading-surface" width="100%" height="80" />
-        <g v-for="participant in participants" :key="participant.id" class="sequence-participant" :data-participant-id="participant.id" :transform="`translate(${participantX.get(participant.id)! - 98},18)`">
-          <title>{{ participant.label }}</title>
+        <g v-for="participant in participants" :key="participant.id" class="sequence-participant" :data-participant-id="participant.id" :data-participant-kind="participant.kind" :transform="`translate(${participantX.get(participant.id)! - 98},18)`" role="img" :aria-label="`${participant.label}, ${participant.kind}`">
+          <title>{{ participant.label }} ({{ participant.kind }})</title>
           <rect width="196" height="48" rx="8" />
-          <svg x="8" y="0" width="180" height="48" overflow="hidden">
+          <svg class="sequence-participant-icon" x="12" y="14" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+            <template v-if="participant.kind === 'human'">
+              <circle cx="12" cy="7" r="4" />
+              <path d="M 4 21 V 19 A 8 8 0 0 1 20 19 V 21" />
+            </template>
+            <path v-else d="M 3 3 H 21 V 17 H 3 Z M 12 17 V 21 M 8 21 H 16" />
+          </svg>
+          <svg x="40" y="0" width="148" height="48" overflow="hidden">
             <text text-anchor="middle" dominant-baseline="middle">
-              <tspan v-for="(line, index) in participant.lines" :key="index" x="90" :y="24 + (index - (participant.lines.length - 1) / 2) * 16">{{ line }}</tspan>
+              <tspan v-for="(line, index) in participant.lines" :key="index" x="74" :y="24 + (index - (participant.lines.length - 1) / 2) * 16">{{ line }}</tspan>
             </text>
           </svg>
         </g>
@@ -183,9 +192,11 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
     <svg class="sequence" :viewBox="`0 0 ${width} ${height}`" :style="{ width: `${width}px`, height: `${height}px` }" preserveAspectRatio="xMinYMin meet" role="group" :aria-label="compact ? scenario.title : diagram.title">
       <title>{{ compact ? `${diagram.title} · ${scenario.title}` : diagram.title }}</title>
       <defs>
-        <marker v-for="state in ['visited', 'upcoming', 'off-scenario']" :id="`${markerId}-${state}`" :key="state" :class="['sequence-arrow', state]" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-          <path d="M 0 0 L 10 5 L 0 10 z" />
-        </marker>
+        <template v-for="arrowhead in ['filled', 'open']" :key="arrowhead">
+          <marker v-for="state in ['visited', 'upcoming', 'off-scenario']" :id="`${markerId}-${arrowhead}-${state}`" :key="state" :class="['sequence-arrow', arrowhead, state]" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path :d="arrowhead === 'filled' ? 'M 0 0 L 9 5 L 0 10 z' : 'M 1 1 L 9 5 L 1 9'" />
+          </marker>
+        </template>
       </defs>
       <g v-if="!compact" aria-hidden="true" pointer-events="none">
         <template v-for="frame in layout.frames" :key="frame.id">
@@ -209,13 +220,13 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
       <SequenceHeading v-for="frame in compact ? [] : layout.frames" :key="`${frame.id}-label`"
         v-show="!pinnedIds.has(frame.id)" :data-heading-id="frame.id" :frame="frame" :width="width" :y="frame.y" :selected="onScenarioPath(frame.nodeIds)" />
       <g v-for="row in rows" :key="row.key">
-      <g :class="['sequence-message', { visited: row.visited, current: row.current, upcoming: row.upcoming, 'off-scenario': row.offScenario, self: row.self }]"
+      <g :class="['sequence-message', row.kind, { visited: row.visited, current: row.current, upcoming: row.upcoming, 'off-scenario': row.offScenario, self: row.self }]"
          :data-node-id="row.node.id" :data-occurrence-id="row.occurrence?.id" role="button" tabindex="0" :aria-label="row.accessibleLabel" :aria-current="row.current ? 'step' : undefined"
            @click="select(row)" @keydown.enter="activateDiagramNode($event, links?.get(row.node.id), () => select(row), id => emit('open', id))" @keydown.space.prevent="select(row)"
           @focusin="focusedNodeId = row.node.id" @focusout="focusedNodeId = undefined">
         <title>{{ row.accessibleLabel }}</title>
         <rect class="sequence-row" x="12" :y="row.y - 50" :width="width - 24" height="74" rx="6" />
-        <path class="sequence-message-arrow" :d="row.path" :marker-end="`url(#${markerId}-${row.visited ? 'visited' : row.offScenario ? 'off-scenario' : 'upcoming'})`" />
+        <path class="sequence-message-arrow" :d="row.path" :marker-end="`url(#${markerId}-${row.arrowhead}-${row.visited ? 'visited' : row.offScenario ? 'off-scenario' : 'upcoming'})`" />
         <svg :x="row.self ? row.labelX : row.labelX - row.labelWidth / 2" :y="row.y - 28 - (row.lines.length - 1) * 16" :width="row.labelWidth" :height="24 + (row.lines.length - 1) * 16" overflow="hidden">
           <text :text-anchor="row.self ? 'start' : 'middle'">
             <tspan v-for="(line, index) in row.lines" :key="index" :ref="element => index === row.lines.length - 1 && measureLabel(element, row.key)"

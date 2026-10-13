@@ -9,12 +9,14 @@ const inset = 24;
 export function swimlaneLayout(nodes: LayoutNode[], edges: RoutedEdge[], groups: LayoutGroup[], definitions: DiagramGroup[], authored: DiagramLane[]): GraphLayout {
   const visible = new Set(nodes.map(node => node.id));
   const lanes: LayoutLane[] = authored.map(lane => ({ ...lane, nodeIds: lane.nodeIds.filter(id => visible.has(id)),
-    lines: wrapLabel(lane.label, 20), x: 0, y: 0, width: 0, height: 0, headingWidth: 180 })).filter(lane => lane.nodeIds.length);
+    lines: wrapLabel(lane.label, 20), x: 0, y: 0, width: 0, height: 0, headingWidth: 64 })).filter(lane => lane.nodeIds.length);
   const assigned = new Set(lanes.flatMap(lane => lane.nodeIds));
   const unassigned = nodes.filter(node => !assigned.has(node.id)).map(node => node.id);
   if (unassigned.length) lanes.push({ id: '@unassigned', label: 'Unassigned', nodeIds: unassigned, lines: ['Unassigned'],
-    x: 0, y: 0, width: 0, height: 0, headingWidth: 180, implicit: true });
+    x: 0, y: 0, width: 0, height: 0, headingWidth: 64, implicit: true });
   if (!lanes.length) return { width: 64, height: 64, nodes, groups, lanes, edges: [] };
+  const headingWidth = Math.max(64, ...lanes.map(lane => lane.lines.length * 20 + inset));
+  for (const lane of lanes) lane.headingWidth = headingWidth;
   const laneByNode = new Map(lanes.flatMap(lane => lane.nodeIds.map(id => [id, lane] as const)));
   const byNode = new Map(nodes.map(node => [node.id, node]));
   const byGroup = new Map(groups.map(group => [group.id, group]));
@@ -103,7 +105,7 @@ export function swimlaneLayout(nodes: LayoutNode[], edges: RoutedEdge[], groups:
         if (track) track.push(span); else corridors.push([span]);
       }
       const bodyHeight = trackTop - 42 - top + inset;
-      lane.height = Math.max(bodyHeight, lane.lines.length * 20 + inset * 2) + corridors.length * 18 + (lanePadding.get(lane.id) ?? 0);
+      lane.height = Math.max(bodyHeight, Math.max(...lane.lines.map(line => line.length)) * 8 + inset * 2) + corridors.length * 18 + (lanePadding.get(lane.id) ?? 0);
       lane.x = (32 + right) / 2; lane.y = top + lane.height / 2; lane.width = right - 32;
       top += lane.height;
     }

@@ -27,6 +27,7 @@ type Explanation = {
   schemaVersion: 1;
   title: string;
   description: string;
+  links?: { label: string; url: string }[];
   domain: {
     entities: {
       id: string;
@@ -60,6 +61,7 @@ type Explanation = {
       role?: 'action' | 'decision' | 'start' | 'end' | 'subprocess'
         | 'database' | 'preparation' | 'inputOutput' | 'outputInput' | 'priorityAction'
         | 'manualOperation' | 'document' | 'multiDocument' | 'delay' | null;
+      stateRole?: 'initial' | 'final' | null;
       detailDiagramId?: string | null;
     }[];
     edges: {
@@ -67,6 +69,7 @@ type Explanation = {
       sourceNodeId: string;
       targetNodeId: string;
       label: string;
+      transition?: { event?: string | null; guard?: string | null; effect?: string | null } | null;
     }[];
     groups?: {
       id: string;
@@ -76,11 +79,12 @@ type Explanation = {
     }[];
     lanes?: { id: string; label: string; nodeIds: string[] }[];
     sequence?: {
-      participants: { id: string; label: string }[];
+      participants: { id: string; label: string; kind?: 'human' | 'system' }[];
       messages: {
         nodeId: string;
         fromParticipantId: string;
         toParticipantId: string;
+        kind?: 'call' | 'async' | 'reply';
       }[];
       body: SequenceStep[];
     } | null;
@@ -135,6 +139,7 @@ type ExplanationSummary = {
   updatedAtMs: number;
   diagramCount: number;
   scenarioCount: number;
+  linkCount: number;
 };
 type ChangeEvent = { id: string; revision: number; deleted?: boolean };
 ```
@@ -151,7 +156,13 @@ Every reference resolves within the document. Each scenario references one diagr
 
 Every scenario references a shared diagram definition. Flow/state scenarios traverse its declared nodes and edges. Flow nodes describe actions; state nodes describe conditions and their edges describe triggering events. The input value `process` is a compatibility alias for `flow`; serialization and tool discovery use the canonical kinds. Sequence diagrams also require `sequence` with 1–50 uniquely identified participants, exactly one message mapping per node, and a nonempty ordered `body`. Each mapping names existing sender and receiver participants; self-messages are valid. Other diagram kinds omit sequence data.
 
+Sequence participant `kind` accepts `human` or `system`, defaulting to `system`. Message `kind` accepts `call`, `async`, or `reply`, defaulting to `call`. Serialization omits default kinds. Kinds are descriptive and do not infer execution, blocking, call/reply pairing, or additional traversal constraints. Unknown kind values fail deserialization; schema-version-1 documents with omitted kinds remain valid.
+
 Flow/state diagrams may declare up to 100 `groups`: flow groups/subgraphs or state composite containers. Group IDs are unique within the diagram and distinct from node IDs. Labels are nonblank plain text. `nodeIds` lists up to 200 direct member nodes; each reference resolves in that diagram, and a node has at most one direct membership. Optional `parentGroupId` references a group in the same diagram. Nesting is acyclic and bounded to eight levels. Each group contains at least one node directly or through descendants. Omitted or empty groups serialize without the field, preserving schema-version-1 compatibility.
+
+State nodes may declare `stateRole: 'initial' | 'final'`: initial markers have no incoming edges and exactly one outgoing edge; final markers have no outgoing edges. Markers are concrete nodes and may belong to groups. Their labels remain available to accessibility, tooltips, inspection, and recorded-step navigation. Markers describe declared lifecycle boundaries. Recordings may begin or end at any node, without visiting either marker; their absence does not imply lifecycle completion. Omitted/null state roles preserve ordinary state boxes and serialize without the field.
+
+State edges may declare `transition` with optional nullable `event`, `guard`, and `effect` plain-text fields. At least one field must contain nonblank text; present non-null fields must be nonblank and obey the 32 KiB text limit. The renderer joins them as `event [guard] / effect`, omitting missing components. Structured captions replace the required free-text `label`, which may be empty; edges without transition retain label rendering. Null/omitted transitions serialize without the field. These additions retain schema version 1. Other diagram kinds reject state roles and transitions. Events and effects never execute, guards are never evaluated, and none of these fields infer occurrence triggers, snapshots, or calls.
 
 Groups describe containment, not additional traversal steps. Edges and occurrences reference concrete nodes, including cross-container entry/exit and revisits. State containers do not infer initial substates, entry/exit actions, or inherited transitions. Sequence diagrams use their sequence fragments instead of groups.
 
@@ -170,6 +181,10 @@ Each occurrence's before and after snapshots independently satisfy relationship 
 Captured JSON numbers must stay within ±9,007,199,254,740,991. Encode larger integers and precision-sensitive decimal values as strings so browser parsing and comparisons preserve them.
 
 Reject serialized documents over 2 MiB, nesting over 32 levels, text over 32 KiB, and unreasonable collection sizes (200 entities, 200 attributes and 200 methods per entity, 500 relationships, 50 diagrams, 200 nodes and 500 edges per diagram, 100 scenarios, 2,000 total occurrences, 500 instances per snapshot). Index attribute IDs once per entity. Return useful validation errors.
+
+Explanation-level `links` preserves authored `{label, url}` order with at most 50 references. Labels are nonblank inert text within the 32 KiB limit. URLs are absolute HTTP/HTTPS with a host, at most 4,096 UTF-8 bytes, and contain no credentials, whitespace, control characters, or backslashes. Omitted or empty collections serialize without the field and preserve schema version 1. The viewer shows Links with a count beside the title only when references exist. Its popover displays labels, hostnames, and external-link icons; links open in new tabs with `noopener noreferrer`. Entering focus mode dismisses the popover. Authored URLs enter only validated anchor destinations, never chart attributes or executable content.
+
+Library summaries include `linkCount`. Card footers list diagram and scenario counts, followed by the link count when positive. The footer stays at the bottom with equal top and bottom card padding.
 
 ## Rust interfaces
 
@@ -252,13 +267,15 @@ Exports default to PNG and light theme. Supplying `scenarioId` retains scenario 
 
 Flow and state connectors preserve at least 16 layout pixels of straight line between each node outline and the nearest turn. The same terminal spacing applies to swimlanes and chart exports; zoom scales these distances with the chart.
 
-Flow lanes render as horizontal bands of shared width, stacked in authored order with a separate left heading compartment. Unassigned appears last only when needed. Nested group frames remain inside their single lane; declared connectors may cross lane boundaries. Full and compact views retain lane membership and ordering; compact views show bands containing visible nodes. Lane frames and headings stay neutral in both themes while nodes, edges, and groups retain traversal emphasis. Headings render as inert text; lanes neither select recorded steps nor acquire occurrence IDs.
+Flow lanes render as open horizontal bands of shared width with alternating neutral fills. Authored order runs top-to-bottom. Each band has a narrow left heading compartment with a centered, bottom-to-top label and an inset vertical separator. Wrapped headings reserve sufficient band height and share a heading width. Unassigned appears last only when needed. Nested group frames remain inside their single lane; declared connectors may cross lane boundaries. Full and compact views retain lane membership and ordering; compact views show bands containing visible nodes. Bands and headings stay neutral in both themes while nodes, edges, and groups retain traversal emphasis. Headings render as inert text; lanes neither select recorded steps nor acquire occurrence IDs.
 
 Diagram and Domain each provide an export icon beside the bottom-right zoom controls. Its menu opens upward. When a scenario filter applies, Scenario only and All scenarios appear above SVG, PNG, and PDF. Scenario only retains muted off-path definitions; All scenarios gives every definition neutral emphasis within the current chart. Each export captures the full layout independently of zoom, panning, and sticky headings. Exports omit playback highlights, visit counts, inspection markers, shortcuts, drill controls, and snapshot-bearing tooltips. Diagram and Domain remain separate files. SVG embeds resolved presentation styles and an opaque background in the active light/dark theme. PNG and single-page PDF use the same themed artwork at up to 2× resolution, bounded to 8,192 pixels per dimension and 16 million pixels total. PDF embeds the raster image; SVG retains vector geometry. The web UI downloads through the local export endpoints in the active theme.
 
 Flow/state layouts keep direct members and nested containers inside labeled frames with a heading divider. Divider and outline share the frame's traversal color. Heading lines center vertically within the heading compartment, with equal space above and below. State composites use rounded outlines; flow subgraphs use rectangular outlines. Both kinds use solid outlines when any descendant node belongs to the selected scenario, including upcoming occurrences. Frames with no descendant node on the scenario use dashed outlines. With no scenario filter, outlines are solid. Frames size around direct members, nested frames, and internal connector routes and labels with a 24px body inset on all sides. The heading sits above that inset; wide headings may expand a frame symmetrically. Vertically stacked nested siblings have 56px between their outlines; root siblings have 42px. Normalize gaps from the innermost frames outward while moving nodes, connector points, and labels together. The canvas keeps 32px outer margins. Layout reserves space for wrapped headings and routes declared edges between nodes across container boundaries. Ancestor frames reflect current, visited, upcoming, and off-scenario membership without acquiring occurrence IDs. Full and compact views share containment; compact views show only visible nodes and their ancestor frames. The minimap includes container outlines. Headings render as inert text in both themes. Containers do not select or execute recorded steps.
 
 Flow and state use left-to-right layouts with the same action/state boxes and filled arrowheads. Flow nodes may declare a role: action uses the standard box, decision uses a content-sized diamond, start/end use pill-shaped terminators, and subprocess uses a box with inset vertical borders. Database uses a cylinder; preparation uses a hexagon; inputOutput and outputInput use opposing parallelograms; priorityAction uses a bottom-wide trapezoid; manualOperation uses a top-wide trapezoid; document uses a wavy-bottom sheet; multiDocument uses stacked sheets; delay uses a D-shaped box. Omitted roles use the standard box. Roles are accepted only on flow nodes and remain descriptive; branches follow declared edges rather than executing decisions. Graph views and chart exports share shapes, traversal colors, and revisit badges. Connectors meet each shape's visible outer boundary, including curves and stacked sheets; labels and revisit badges stay inside their node with space reserved for sloped sides, cylinder rims, and document waves.
+
+State initial markers render as filled circles; final markers render as a filled circle inside an outlined ring. Both occupy 32px square bounds with captions available through tooltips rather than text inside the symbols. Connectors meet the outer circular boundary. The minimap, selection, traversal emphasis, both themes, and chart exports share their geometry. Structured transition captions display each present event, bracketed guard, and slash-prefixed effect as a separate component, each wrapped into at most two lines. Layout reserves the entire caption height; tooltips expose the complete joined caption as inert text.
 
 Flow subprocess nodes and sequence message nodes may reference another flow or sequence diagram through `detailDiagramId`. State diagrams cannot be link sources or targets. References resolve inside the same explanation and direct self-links fail validation. The input alias `subprocessDiagramId` reads as `detailDiagramId`; serialization and MCP schema use the canonical field. Specifying both spellings fails deserialization. Cross-diagram cycles are permitted because links are explicit navigation, never execution or automatic expansion.
 
@@ -310,7 +327,7 @@ In Details, Shift+H resets every scenario cursor in the current explanation to i
 
 Y then S copies the explanation path through the current scenario; Y then D copies it through the diagram; Y then P copies it through the current event, including occurrence position. Paths include the explanation title and use ` → ` separators. These actions appear in the palette's Clipboard group and work across tabs while a scenario is selected. Yank sequences expire after one second and reset on unrelated keys. Editable controls, modified keys, composition, and repeats preserve normal input. PrimeVue toasts at the top right confirm successful clipboard writes or report clipboard failures.
 
-The full diagram distinguishes muted off-scenario elements, upcoming scenario elements, and blue visited elements. Recorded incoming edge IDs determine scenario membership. Nodes recorded more than once in the selected scenario show a badge from their first visit, counted only through the current occurrence. Graph edge labels wrap at roughly 20 characters into at most two centered lines; overflow ends with an ellipsis, and tooltips expose the complete label. Layout reserves the displayed label's width and height. Edge labels show traversal counts above one on their final line. Single-visit nodes remain unbadged. Badge numerals are centered. Graph badges follow the rendered label's upper-right corner for every shape: the circle's left edge sits four pixels after the text, and its center sits two pixels above the text's top. Wrapped labels use their complete text bounds. Self-loops leave and return beneath their node with smooth turns and separate captions. Swimlane connectors follow short, obstacle-clear orthogonal routes with captions beside chosen segments. Diagram node clicks navigate to recorded occurrences; repeated visits display an occurrence picker. Off-path nodes stay inspectable but cannot mutate a scenario. Structured SVG uses text rendering and controlled attributes. No agent-authored HTML, URLs, SVG, or scripts enter the DOM.
+The full diagram distinguishes muted off-scenario elements, upcoming scenario elements, and blue visited elements. Recorded incoming edge IDs determine scenario membership. Nodes recorded more than once in the selected scenario show a badge from their first visit, counted only through the current occurrence. Graph edge labels wrap at roughly 20 characters into at most two centered lines; overflow ends with an ellipsis, and tooltips expose the complete label. Layout reserves the displayed label's width and height. Edge labels show traversal counts above one on their final line. Single-visit nodes remain unbadged. Badge numerals are centered. Graph badges follow the rendered label's upper-right corner for every shape: the circle's left edge sits four pixels after the text, and its center sits two pixels above the text's top. Wrapped labels use their complete text bounds. Self-loops leave and return beneath their node with smooth turns and separate captions. Swimlane connectors follow short, obstacle-clear orthogonal routes with captions beside chosen segments. Diagram node clicks navigate to recorded occurrences; repeated visits display an occurrence picker. Off-path nodes stay inspectable but cannot mutate a scenario. Structured SVG uses text rendering and controlled attributes. No agent-authored HTML, URLs, SVG, or scripts enter the chart DOM.
 
 The domain ERD shows entity tables with a type heading and separate property rows; property IDs occupy the right column. Each orthogonal connector endpoint specifies both bounds: `zeroOrOne` (0..1), `exactlyOne` (1..1), `zeroOrMore` (0..*), or `oneOrMore` (1..*). A circle or bar indicates the minimum; a separate bar or crow's foot indicates the maximum. Optional circles mask the connector beneath them in both themes. Stored maximum-only `one` and `many` endpoints read as `zeroOrOne` and `zeroOrMore`, preserving their constraints. Publications require explicit bounds and snapshots satisfy both minimum and maximum link counts for present instances. Property data types are unspecified. The full shared domain determines layout, so changing scenarios preserves entity positions. Relevance spans the entire selected scenario: visited node entity references and all before/after instances identify used types, while captured links identify recorded relationships. Unused types and unrecorded relationships are muted. Every type remains keyboard-inspectable in both themes.
 
@@ -319,6 +336,8 @@ The Domain view correlates its shared definitions with the selected occurrence. 
 Domain headings begin with a plain shortcut number and a thin vertical divider. Numbers start at 1 and follow containment: finish every entity and nested block in one group before moving to the next group. At each level, order blocks and direct entities left to right, then top to bottom. Ungrouped entities follow the same spatial ordering. ERD containers reserve 24px body insets and wrap headings to their available width. Vertically stacked root frames have 42px between their outlines; nested sibling frames have 56px. Normalize finished-frame gaps from the innermost groups outward, moving entities and connector routes together. Horizontal coordinates and entity dimensions stay fixed. Digit shortcuts select, keyboard-focus, and center the entity at the current zoom, exiting fit mode. A prefix that also matches longer numbers underlines its matched digits across every matching heading for 500ms. Enter confirms the exact number immediately; another digit extends the prefix; timeout confirms the exact number. Unique complete numbers select immediately. Invalid prefixes and unrelated input cancel without selection. Viewer shortcut guards apply, and pending prefixes cancel on scenario or event changes, tab departure, editable or overlay focus, Quick actions, and window blur.
 
 Full sequence views render one diagram-owned layout with participant headers, lifelines, directed messages, and nested alt/opt/loop frames. Participant and message labels wrap into at most two lines; overflow ends with an ellipsis on the second line, and tooltips expose the complete text. Message rows reserve space for both lines in full and compact views. Switching scenarios preserves geometry; operand shading identifies the recorded branch. Current and visited messages are blue, upcoming messages remain distinct, and other paths are muted but inspectable. Revisited messages occupy one shared row with prefix visit counts and an occurrence picker for separate snapshots. Sequence and graph views share the same tab controls and keyboard navigation.
+
+Participant boxes prepend a controlled decorative person or monitor icon for their human/system kind. Labels reserve space for the icon; accessible names and tooltips expose the kind. Lifelines use consistent dashes. Calls use solid lines and filled arrowheads; asynchronous sends use solid lines and open arrowheads; replies use dashed lines and open arrowheads, including self-messages. Scenario relevance changes color and opacity only, preserving semantic line styles on messages and fragment borders. Operand separators retain their dashes. Full/compact views and chart exports share this notation in both themes.
 
 Sequence participant headers stay pinned during vertical scrolling and aligned with their lifelines during horizontal scrolling. Fragment and operand headings stick within their declared parent containers. At a container's bottom edge, the heading slides beneath its parent's heading and remains clipped until its final visible pixel leaves the parent. Root fragments use the participant bar as their sticky boundary. Sibling headings stick only when their own frame reaches that boundary. Pinned originals are hidden in the scrolling layer.
 

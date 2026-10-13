@@ -17,7 +17,7 @@ class Socket {
 }
 
 const summary = (revision: number) => ({ id: 'order-lifecycle', title: fixture.title, description: fixture.description,
-  revision, updatedAtMs: 1, diagramCount: 2, scenarioCount: 4 });
+  revision, updatedAtMs: 1, diagramCount: 2, scenarioCount: 4, linkCount: 0 });
 const stored = (revision: number) => ({ id: 'order-lifecycle', revision, updatedAtMs: 1, document: fixture });
 const flush = async () => { for (let turn = 0; turn < 12; turn++) await Promise.resolve(); };
 let browser: JSDOM;

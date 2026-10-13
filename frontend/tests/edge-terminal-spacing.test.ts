@@ -55,7 +55,7 @@ function expectNodeConnections(layout: GraphLayout) {
       [segments.at(-1)!.point, edge.target],
     ] as const) {
       const node = layout.nodes.find(node => node.id === id)!;
-      if (node.role && node.role !== 'action' && node.role !== 'subprocess') {
+      if (node.stateRole || node.role && node.role !== 'action' && node.role !== 'subprocess') {
         const boundary = nodeConnection(node, endpoint, endpoint);
         expect(endpoint.x).toBeCloseTo(boundary.x);
         expect(endpoint.y).toBeCloseTo(boundary.y);

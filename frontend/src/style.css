@@ -32,7 +32,8 @@
 .app-header{flex-shrink:0}
 .brand{display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:0 1 auto;min-width:0;max-width:100%;min-height:32px;letter-spacing:normal;line-height:0}
 .brand svg{display:block;width:20px;height:20px;flex-shrink:0}
-.header-identity{display:flex;align-items:center;flex:1;min-width:0;margin:0}
+.header-identity{display:flex;align-items:center;gap:12px;flex:1;min-width:0;margin:0}
+.explanation-heading{display:flex;min-width:0;margin:0}
 .explanation-title{min-width:0;margin:0;color:var(--text);font-size:1.12rem;line-height:24px;font-weight:600;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .workspace{flex:1;min-height:0;grid-template-columns:minmax(0,var(--sidebar-width,330px)) minmax(0,1fr);grid-template-rows:minmax(0,1fr);overflow:hidden}
 .workspace.focus-mode{grid-template-columns:minmax(0,1fr)}
@@ -155,10 +156,19 @@ kbd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.75rem;
 .graph .node-visit-badge circle{fill:var(--surface);stroke:var(--blue);stroke-width:1.5}
 .graph.scenario-path .graph-node .node-visit-badge text,.graph .graph-node .node-visit-badge text{fill:var(--blue);font-size:11px;font-weight:700}
 .edge-visit-count{font-weight:700}
+.graph-node.state-marker{--state-marker-ink:var(--text)}
+.graph-node.state-marker.off-scenario{--state-marker-ink:var(--offpath-text,#8a96a8)}
+.graph-node.state-marker.on-scenario{--state-marker-ink:var(--graph-upcoming,#6b83a3)}
+.graph-node.state-marker.visited,.graph-node.state-marker.current{--state-marker-ink:var(--blue)}
+.graph .graph-node.state-marker .node-shape,.graph .graph-node.state-marker:is(.on-scenario,.off-scenario,.visited,.current) .node-shape{fill:var(--surface);stroke:var(--state-marker-ink);stroke-dasharray:none}
+.graph .graph-node.state-marker .state-marker-dot,.graph .graph-node.state-marker:is(.on-scenario,.off-scenario,.visited,.current) .state-marker-dot{fill:var(--state-marker-ink)}
 .graph-group{pointer-events:none}
-.graph-lane .lane-shape{fill:var(--soft);stroke:var(--line);stroke-width:1.2}
-.graph-lane .lane-divider{fill:none;stroke:var(--line);stroke-width:1.2}
-.graph-lane text{fill:var(--muted);font-family:inherit;font-size:14px;font-weight:600}
+.graph-lane{--lane-surface:#fafafa;--lane-alternate:#f0f0f2;--lane-separator:#a1a1aa;--lane-text:#52525b}
+:root.app-dark .graph-lane{--lane-surface:#1c1e22;--lane-alternate:#24262b;--lane-separator:#686b72;--lane-text:#d4d4d8}
+.graph-lane .lane-shape{fill:var(--lane-surface);stroke:none}
+.graph-lane.alternate .lane-shape{fill:var(--lane-alternate)}
+.graph-lane .lane-divider{fill:none;stroke:var(--lane-separator);stroke-width:1}
+.graph-lane text{fill:var(--lane-text);font-family:inherit;font-size:14px;font-weight:600}
 .graph-group .group-shape{fill:var(--soft);stroke:var(--graph-line,#96a7be);stroke-width:1.2}
 .graph-group.off-scenario .group-shape{stroke-dasharray:6 4}
 .graph-group .group-divider{fill:none;stroke:var(--graph-line,#96a7be);stroke-width:1.2}
@@ -179,21 +189,25 @@ kbd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.75rem;
 .sequence-message{scroll-margin-top:calc(var(--sequence-sticky-height,80px) + 8px)}
 .sequence-participant rect{fill:var(--soft);stroke:var(--graph-line,#b9c9dd);stroke-width:1.5}
 .sequence-participant text{fill:var(--text);font-weight:600}
-.sequence-lifeline{stroke:var(--graph-line,#b9c9dd);stroke-width:1.5}
+.sequence-participant-icon{fill:none;stroke:var(--text);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.sequence-lifeline{stroke:var(--graph-line,#b9c9dd);stroke-width:1.5;stroke-dasharray:6 4}
 .sequence-message{cursor:pointer;outline:none;color:var(--muted)}
 .sequence-message text{fill:currentColor;font-weight:400;pointer-events:none}
 .sequence-message-arrow{fill:none;stroke:currentColor;stroke-width:2;pointer-events:none}
+.sequence-message.reply .sequence-message-arrow{stroke-dasharray:6 4}
 .sequence-row{fill:transparent;stroke:transparent;stroke-width:1.5}
 .sequence-message.off-scenario{color:var(--offpath-text,#8a96a8)}
-.sequence-message.off-scenario .sequence-message-arrow{stroke:var(--offpath-line,#c9d2df);stroke-dasharray:var(--offpath-dash)}
+.sequence-message.off-scenario .sequence-message-arrow{stroke:var(--offpath-line,#c9d2df)}
 .sequence-message.upcoming{color:var(--graph-upcoming,var(--text))}
 .sequence-message.visited{color:var(--blue)}
 .sequence-row-highlight{fill:var(--accent-surface,#edf3ff);fill-opacity:.8;pointer-events:none}
 .sequence-message.current .sequence-row{stroke:var(--blue)}
 .sequence-message:hover .sequence-row,.sequence-message:focus-visible .sequence-row{stroke:var(--blue);stroke-width:2.5}
-.sequence-arrow.visited path{fill:var(--blue)}
-.sequence-arrow.upcoming path{fill:var(--graph-upcoming,var(--text))}
-.sequence-arrow.off-scenario path{fill:var(--offpath-line,#c9d2df)}
+.sequence-arrow.visited{color:var(--blue)}
+.sequence-arrow.upcoming{color:var(--graph-upcoming,var(--text))}
+.sequence-arrow.off-scenario{color:var(--offpath-line,#c9d2df)}
+.sequence-arrow.filled path{fill:currentColor}
+.sequence-arrow.open path{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .sequence-fragment .fragment-outline,.fragment-heading rect{fill:none;stroke:var(--graph-line,#96a7be);stroke-width:1.2}
 .fragment-heading rect{fill:var(--surface)}
 .fragment-heading text{fill:var(--text);font-weight:600}
@@ -201,7 +215,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.75rem;
 .operand-surface{fill:transparent}
 .operand-surface.selected,.sequence-operand-heading.selected .operand-surface{fill:var(--accent-surface,#edf3ff);fill-opacity:.5}
 .operand-divider{stroke:var(--graph-line,#96a7be);stroke-width:1.2;stroke-dasharray:6 4}
-.sequence-fragment:not(.selected)>.fragment-outline,.fragment-heading:not(.selected) rect,.sequence-operand-heading:not(.selected) .fragment-outline{stroke:var(--offpath-line,#c9d2df);stroke-dasharray:var(--offpath-dash);stroke-opacity:.85}
+.sequence-fragment:not(.selected)>.fragment-outline,.fragment-heading:not(.selected) rect,.sequence-operand-heading:not(.selected) .fragment-outline{stroke:var(--offpath-line,#c9d2df);stroke-opacity:.85}
 .fragment-heading:not(.selected) text,.sequence-operand-heading:not(.selected) text{fill:var(--offpath-text,#8a96a8);fill-opacity:.85}
 .sequence-operand-heading.highlighted .fragment-guard{fill:var(--blue);fill-opacity:1}
 .sequence-visit-badge circle{fill:var(--surface);stroke:var(--blue);stroke-width:1.5}

@@ -77,6 +77,8 @@ Use verified domain bounds; label assumptions. Zero minima require domain-permit
 
 ## Prose and calls
 
+Optional explanation-level `links` contains ordered `{label, url}` references to repositories, documentation, tickets, or other sources. Supply a nonblank plain-text label and an absolute HTTP/HTTPS URL with a host. Allow at most 50 links and 4,096 UTF-8 bytes per URL; labels share the 32 KiB text limit. URLs contain no credentials, whitespace, control characters, or backslashes; percent-encode spaces and redact secrets in paths and query parameters. The viewer's Links button beside the explanation title opens these references in new tabs. Omitted or empty links mean no references.
+
 Card `document.description`: **at most 75 words, 1–3 short sentences**; a ceiling, not a target. Use **context → topics or concerns → practical insight**: name the system or change, identify what scenarios cover, and state what readers can understand or judge. Prefer concrete rules and consequences over generic learning promises.
 
 Use everyday words; avoid jargon, acronyms, code identifiers, and internal status names. Explain essential technical terms inline. Keep detailed rules, evidence, and source/recording metadata in scenario or step prose. Count words and check standalone meaning before publishing.
@@ -112,6 +114,20 @@ Optional flow-only `nodes[].role` describes the step's shape and purpose:
 | `delay` | Recorded wait / D-shaped box |
 
 Shapes are descriptive. Decisions, priorities, storage, and delays do not execute or alter recorded traversal. Input/output orientations share the same meaning. Use concrete nodes and edges for every occurrence, including repeated waits with separate snapshots.
+
+## State lifecycle boundaries and transitions
+
+For `kind: "state"`, optional `nodes[].stateRole` is `initial` (filled circle) or `final` (outlined ring with a filled center). Omit it for ordinary state boxes. Initial markers have no incoming edges and exactly one outgoing edge; final markers have no outgoing edges. Supply stable node IDs, plain-text labels, and `entityIds` as usual. Markers may belong to groups. Labels appear in tooltips, accessibility, inspection, and recorded-step navigation.
+
+Markers describe lifecycle boundaries, not recording boundaries. A scenario may begin or end at an ordinary state. Record marker visits only when the recording includes them, with their own occurrence IDs and captured snapshots.
+
+State edges may declare `transition: {event?, guard?, effect?}`. At least one field must contain nonblank text; omit unknown components or use null. Each non-null field is nonblank plain text within the 32 KiB limit. The caption renders as `event [guard] / effect`, with each component wrapped separately. Tooltips retain the complete text. Structured transitions supply the caption; use `label: ""` or retain a free-text fallback label. Edges without transitions display `label`.
+
+```json
+{ "id": "packed-transit", "sourceNodeId": "packed", "targetNodeId": "transit", "label": "", "transition": { "event": "Carrier pickup", "guard": "Parcel packed", "effect": "Assign tracking" } }
+```
+
+These fields describe behavior, never execution: guards are not evaluated, and events/effects do not infer triggers, calls, or snapshots. State roles and structured transitions are state-only. Omitted/null fields preserve schema-version-1 compatibility.
 
 ## Containers
 
@@ -152,7 +168,9 @@ Links navigate, never execute, inline, merge, or auto-expand recordings; explici
 
 ## Sequence recordings
 
-For `kind: "sequence"`, use `sequence.participants`: `{id, label}` and `sequence.messages`: `{nodeId, fromParticipantId, toParticipantId}`. Map each node once between declared participants; self-messages are valid. Nodes label messages; edges declare temporal transitions.
+For `kind: "sequence"`, use `sequence.participants`: `{id, label, kind?}` and `sequence.messages`: `{nodeId, fromParticipantId, toParticipantId, kind?}`. Participant kinds are `human` and `system` (default). Message kinds are `call` (default: solid filled arrow), `async` (solid open arrow), and `reply` (dashed open arrow). Human/system icons precede labels inside participant boxes; lifelines are dashed. Off-scenario elements are dimmed without changing semantic strokes.
+
+Map each node once between declared participants; self-messages are valid for every message kind. Nodes label messages; edges declare temporal transitions. Kinds describe the recorded interaction; they infer no execution, blocking, or reply pairing. Label assumed message semantics in scenario prose.
 
 Require ordered `sequence.body`, referencing each message node once across its tree. `alt` chooses one of 2–20 guarded operands per visit. `{kind: "opt", id, guard, body}` may be skipped; `loop` has the same fields and allows zero or more iterations. Fragment/operand IDs share a unique namespace. Bodies are nonempty; guards are nonblank descriptive text, never evaluated. Limits: 1–50 participants, 500 structural items, eight nesting levels, also subject to JSON depth.
 

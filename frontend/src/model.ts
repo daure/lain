@@ -13,20 +13,24 @@ export type Relationship = {
 export type FlowNodeRole = 'action' | 'decision' | 'start' | 'end' | 'subprocess'
   | 'database' | 'preparation' | 'inputOutput' | 'outputInput' | 'priorityAction'
   | 'manualOperation' | 'document' | 'multiDocument' | 'delay';
+export type StateNodeRole = 'initial' | 'final';
+export type StateTransition = { event?: string; guard?: string; effect?: string };
 export type DiagramGroup = { id: string; label: string; nodeIds: string[]; parentGroupId?: string };
 export type DiagramLane = { id: string; label: string; nodeIds: string[] };
 export type DomainGroup = { id: string; label: string; entityIds: string[]; parentGroupId?: string };
+export type SequenceParticipantKind = 'human' | 'system';
+export type SequenceMessageKind = 'call' | 'async' | 'reply';
 export type Diagram = {
   id: string;
   title: string;
   kind: 'flow' | 'state' | 'sequence';
-  nodes: { id: string; label: string; entityIds: string[]; role?: FlowNodeRole; detailDiagramId?: string; subprocessDiagramId?: string }[];
-  edges: { id: string; sourceNodeId: string; targetNodeId: string; label: string }[];
+  nodes: { id: string; label: string; entityIds: string[]; role?: FlowNodeRole; stateRole?: StateNodeRole; detailDiagramId?: string; subprocessDiagramId?: string }[];
+  edges: { id: string; sourceNodeId: string; targetNodeId: string; label: string; transition?: StateTransition }[];
   groups?: DiagramGroup[];
   lanes?: DiagramLane[];
   sequence?: {
-    participants: { id: string; label: string }[];
-    messages: { nodeId: string; fromParticipantId: string; toParticipantId: string }[];
+    participants: { id: string; label: string; kind?: SequenceParticipantKind }[];
+    messages: { nodeId: string; fromParticipantId: string; toParticipantId: string; kind?: SequenceMessageKind }[];
     body: SequenceStep[];
   };
 };
@@ -55,10 +59,12 @@ export type Explanation = {
   schemaVersion: 1;
   title: string;
   description: string;
+  links?: ExplanationLink[];
   domain: { entities: Entity[]; relationships: Relationship[]; groups?: DomainGroup[] };
   diagrams: Diagram[];
   scenarios: Scenario[];
 };
+export type ExplanationLink = { label: string; url: string };
 export type StoredExplanation = { id: string; revision: number; updatedAtMs: number; document: Explanation };
 export type ExplanationSummary = {
   id: string;
@@ -68,5 +74,6 @@ export type ExplanationSummary = {
   updatedAtMs: number;
   diagramCount: number;
   scenarioCount: number;
+  linkCount: number;
 };
 export type ChangeEvent = { id: string; revision: number; deleted?: boolean };

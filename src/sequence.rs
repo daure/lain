@@ -5,6 +5,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{Scenario, Sequence, validate_id};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceParticipantKind {
+    Human,
+    #[default]
+    System,
+}
+
+impl SequenceParticipantKind {
+    pub fn is_system(&self) -> bool {
+        *self == Self::System
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceMessageKind {
+    #[default]
+    Call,
+    Async,
+    Reply,
+}
+
+impl SequenceMessageKind {
+    pub fn is_call(&self) -> bool {
+        *self == Self::Call
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum SequenceStep {

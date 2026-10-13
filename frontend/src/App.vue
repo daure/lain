@@ -13,6 +13,7 @@ import QuickActionsDialog from './components/QuickActionsDialog.vue';
 import FocusChrome from './components/FocusChrome.vue';
 import FocusBreadcrumb from './components/FocusBreadcrumb.vue';
 import ExplanationLibrary from './components/ExplanationLibrary.vue';
+import ExplanationLinks from './components/ExplanationLinks.vue';
 import Notifications from './components/Notifications.vue';
 import type DiagramViewport from './components/DiagramViewport.vue';
 import { arrowKeyActions, shiftedPanActions, isEditableTarget, quickActions, type QuickActionId } from './quick-actions';
@@ -467,12 +468,15 @@ onUnmounted(() => {
   <Notifications ref="notifications" :restore="library.restore" />
   <FocusChrome :hidden="focusMode">
   <header class="app-header">
-    <h1 v-if="active" class="header-identity">
+    <div v-if="active" class="header-identity">
+    <h1 class="explanation-heading">
       <button class="brand" aria-label="Lain explanation library" title="Back to explanation library" @click="routes.back">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M19 12H5m7-7-7 7 7 7" /></svg>
         <span class="explanation-title" :title="active.document.title">{{ active.document.title }}</span>
       </button>
     </h1>
+    <ExplanationLinks :key="active.id" :links="active.document.links" :hidden="focusMode" />
+    </div>
     <div class="header-actions">
       <span class="connection" role="status"><i :class="['pi', connection === 'connected' ? 'pi-check-circle' : 'pi-circle', connection]" aria-hidden="true" />{{ connectionLabel }}</span>
       <button v-if="active" ref="quickButton" class="quick-actions-trigger" aria-label="Quick actions" title="Quick actions (Ctrl+K)" @click="showQuickActions"><i class="pi pi-search" aria-hidden="true" /><span>Quick actions</span><kbd>Ctrl K</kbd></button>

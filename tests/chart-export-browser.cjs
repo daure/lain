@@ -25,7 +25,7 @@ function swimlaneGeometry({ diagram, svg }) {
     const chart = host ? host.querySelector('svg') : document.querySelector('.viewport-content > svg.graph');
     const normalize = text => text.replace(/\s/g, '');
     const headings = [...chart.querySelectorAll('g > text')];
-    const frame = label => {
+    const frame = (label, isLane = false) => {
       const heading = headings.find(text => normalize(text.textContent) === normalize(label));
       if (!heading) throw new Error(`Missing chart heading: ${label}`);
       const shape = heading.parentElement.querySelector(':scope > rect, :scope > polygon, :scope > path');
@@ -34,11 +34,23 @@ function swimlaneGeometry({ diagram, svg }) {
       const matrix = chart.getCTM().inverse().multiply(shape.getCTM());
       const first = new DOMPoint(box.x, box.y).matrixTransform(matrix);
       const last = new DOMPoint(box.x + box.width, box.y + box.height).matrixTransform(matrix);
-      return { label, x: first.x, y: first.y, width: last.x - first.x, height: last.y - first.y, stroke: getComputedStyle(shape).stroke };
+      const result = { label, x: first.x, y: first.y, width: last.x - first.x, height: last.y - first.y, stroke: getComputedStyle(shape).stroke };
+      if (isLane) {
+        const textBox = heading.getBBox();
+        const textMatrix = heading.parentElement.getCTM().inverse().multiply(heading.getCTM());
+        const corners = [new DOMPoint(textBox.x, textBox.y), new DOMPoint(textBox.x + textBox.width, textBox.y),
+          new DOMPoint(textBox.x, textBox.y + textBox.height), new DOMPoint(textBox.x + textBox.width, textBox.y + textBox.height)]
+          .map(point => point.matrixTransform(textMatrix));
+        const separator = heading.parentElement.querySelector(':scope > path').getBBox();
+        result.headingVertical = Math.abs(textMatrix.a) < .01 && Math.abs(textMatrix.d) < .01;
+        result.headingFits = corners.every(point => point.x >= 0 && point.x <= separator.x && point.y >= 0 && point.y <= box.height);
+        result.fill = getComputedStyle(shape).fill;
+      }
+      return result;
     };
     const nodeLabels = diagram.nodes.map(node => normalize(node.label));
     return {
-      lanes: diagram.lanes.map(lane => ({ id: lane.id, ...frame(lane.label) })),
+      lanes: diagram.lanes.map(lane => ({ id: lane.id, ...frame(lane.label, true) })),
       groups: (diagram.groups ?? []).map(group => ({ id: group.id, ...frame(group.label) })),
       nodes: diagram.nodes.map(node => ({ id: node.id, ...frame(node.label) })),
       containers: headings.filter(heading => heading.parentElement.querySelector(':scope > rect') && !nodeLabels.includes(normalize(heading.textContent))).length,
@@ -69,8 +81,11 @@ function assertSwimlanes(diagram, geometry) {
   for (const [index, lane] of diagram.lanes.entries()) {
     const band = geometry.lanes[index];
     assert.ok(band.width > 0 && band.height > 0, `${lane.label} has visible bounds`);
+    assert.equal(band.headingVertical, true, `${lane.label} heading runs vertically`);
+    assert.equal(band.headingFits, true, `${lane.label} heading fits its compartment`);
     if (index) {
       const previous = geometry.lanes[index - 1];
+      assert.notEqual(previous.fill, band.fill, 'adjacent lane bands have alternating fills');
       assert.ok(previous.y + previous.height <= band.y + .01, 'lane bands follow authored top-to-bottom order without overlap');
       assert.ok(previous.x < band.x + band.width && band.x < previous.x + previous.width, 'horizontal lane bands share a horizontal span');
     }
@@ -278,6 +293,44 @@ function hasUnusedDefinitions(document, diagram, scenario, kind) {
   return document.domain.entities.some(entity => !entities.has(entity.id)) || document.domain.relationships.some(relationship => !relationships.has(relationship.id));
 }
 
+function sequenceNotation({ diagram, svg }) {
+  const host = svg ? document.createElement('div') : null;
+  if (host) {
+    host.style.cssText = 'position:fixed;left:-100000px;top:0';
+    host.append(document.importNode(new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement, true));
+    document.body.append(host);
+  }
+  try {
+    const chart = host ? host.querySelector('svg') : document.querySelector('.viewport-content > svg.sequence');
+    const nodeIds = [...document.querySelectorAll('.sequence-message')].map(row => row.dataset.nodeId);
+    const failures = [];
+    [...chart.querySelectorAll('path[marker-end]')].forEach((arrow, index) => {
+      const kind = diagram.sequence.messages.find(message => message.nodeId === nodeIds[index]).kind ?? 'call';
+      const head = chart.querySelector(`marker[id="${arrow.getAttribute('marker-end').slice(5, -1)}"] path`);
+      const stroke = getComputedStyle(arrow);
+      const marker = getComputedStyle(head);
+      if (stroke.strokeDasharray !== (kind === 'reply' ? '6px, 4px' : 'none')) failures.push(`${nodeIds[index]}: incorrect message stroke`);
+      if ((marker.fill === 'none') !== (kind !== 'call')) failures.push(`${nodeIds[index]}: incorrect arrowhead fill`);
+      if (kind !== 'call' && marker.stroke !== stroke.stroke) failures.push(`${nodeIds[index]}: open arrowhead does not match line color`);
+    });
+    if (!host) {
+      for (const lifeline of chart.querySelectorAll('.sequence-lifeline')) {
+        if (getComputedStyle(lifeline).strokeDasharray !== '6px, 4px') failures.push('Lifeline must be dashed');
+      }
+      for (const outline of chart.querySelectorAll('.fragment-outline')) {
+        if (getComputedStyle(outline).strokeDasharray !== 'none') failures.push('Fragment outlines must stay solid');
+      }
+    }
+    const icons = [...(host ? chart.querySelectorAll('svg[viewBox="0 0 24 24"]') : document.querySelectorAll('.sequence-participant-icon'))];
+    if (icons.length !== diagram.sequence.participants.length) failures.push('Every participant needs an icon');
+    icons.forEach((icon, index) => {
+      const human = diagram.sequence.participants[index].kind === 'human';
+      if (!!icon.querySelector('circle') !== human) failures.push('Participant icon does not match its kind');
+    });
+    return failures;
+  } finally { host?.remove(); }
+}
+
 async function startDaemon() {
   home = await fs.mkdtemp('/tmp/opencode/lain-export-home-');
   const listener = net.createServer();
@@ -312,7 +365,8 @@ async function run() {
       : kind === 'dispatch-flow' ? fixture.diagrams.find(item => item.id === 'dispatch-preparation-flow')
       : fixture.diagrams.find(item => item.kind === (kind === 'domain' ? 'flow' : kind)),
   }));
-  cases.push({ explanationID: 'release-promotion', document: releasePromotion, kind: 'release-promotion-flow', diagram: releasePromotion.diagrams.find(item => item.id === 'release-promotion-flow') },
+  cases.push({ explanationID: 'test', document: fixture, kind: 'dispatch-sequence', diagram: fixture.diagrams.find(item => item.id === 'dispatch-request-sequence') },
+    { explanationID: 'release-promotion', document: releasePromotion, kind: 'release-promotion-flow', diagram: releasePromotion.diagrams.find(item => item.id === 'release-promotion-flow') },
     { explanationID: 'incident-recovery', document: incidentRecovery, kind: 'incident-recovery-flow', diagram: incidentRecovery.diagrams.find(item => item.id === 'incident-recovery-flow') });
   function viewerURL(explanationID, scenario) {
     const url = new URL(base);
@@ -407,7 +461,12 @@ async function run() {
           assert.equal(geometry.artwork.find(node => node.role === 'multiDocument').paths.length, 3);
           await page.screenshot({ path: path.join(artifacts, `${theme}-dispatch-shapes.png`) });
         }
+        if (diagram.kind === 'sequence') {
+          assert.deepEqual(await page.evaluate(sequenceNotation, { diagram }), [], 'live sequence notation preserves semantic strokes and participant kinds');
+          await page.screenshot({ path: path.join(artifacts, `${theme}-${kind}-viewer.png`) });
+        }
         const svg = (await exportFile('svg', 'all', `${theme}-${kind}`)).toString();
+        if (diagram.kind === 'sequence') assert.deepEqual(await page.evaluate(sequenceNotation, { diagram, svg }), [], 'all-scenario export preserves sequence notation');
         const inspected = await page.evaluate(svg => {
           const document = new DOMParser().parseFromString(svg, 'image/svg+xml');
           return { error: !!document.querySelector('parsererror'), background: document.querySelector('svg > rect')?.style.fill,
@@ -445,7 +504,8 @@ async function run() {
         assert.ok(pdf.getPage(0).getWidth() > 0 && pdf.getPage(0).getHeight() > 0);
         if (kind !== 'capture-flow' && kind !== 'dispatch-flow') {
           const scoped = (await exportFile('svg', 'scenario', `${theme}-${kind}-scenario`)).toString();
-          if (hasUnusedDefinitions(document, diagram, scenario, kind)) assert.match(scoped, /stroke-dasharray: (?:8|6)px, 4px/, 'scenario export preserves muted paths');
+          if (diagram.kind === 'sequence') assert.deepEqual(await page.evaluate(sequenceNotation, { diagram, svg: scoped }), [], 'scenario export preserves sequence notation');
+          else if (hasUnusedDefinitions(document, diagram, scenario, kind)) assert.match(scoped, /stroke-dasharray: (?:8|6)px, 4px/, 'scenario export preserves muted paths');
           if (explanationID !== 'test') assertSwimlanes(diagram, await page.evaluate(swimlaneGeometry, { diagram, svg: scoped }));
         }
       }

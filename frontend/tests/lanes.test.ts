@@ -313,8 +313,9 @@ it('grows shared lane width to fit a long caption beside a same-column handoff w
   [{ id: 'sender', label: 'Sender', nodeIds: ['source'] }, { id: 'receiver', label: 'Receiver', nodeIds: ['target'] }]);
   expect(layout.lanes!.map(lane => lane.height)).toEqual([120, 120]);
   expect(new Set(layout.lanes!.map(lane => lane.width)).size).toBe(1);
-  expect(layout.width).toBeGreaterThan(532);
-  expect(layout.width).toBeLessThanOrEqual(600);
+  const minimumWidth = 32 * 2 + layout.lanes![0]!.headingWidth + 24 * 2 + nodes[0]!.width;
+  expect(layout.width).toBeGreaterThan(minimumWidth);
+  expect(layout.width).toBeLessThanOrEqual(minimumWidth + 68);
   expect(layout.edges[0]!.path).not.toContain('Q');
   expectClearRoutes(layout);
 });
@@ -446,6 +447,14 @@ it('renders safe, neutral, inert headings behind groups and exposes their outlin
     expect(heading.getAttribute('aria-label')).toBe('Lane: <script>alert("lane")</script>');
     expect(heading.querySelector('title')!.textContent).toBe(diagram.lanes![0]!.label);
     expect(heading.querySelectorAll('tspan').length).toBeGreaterThan(1);
+    for (const [index, lane] of layout.lanes!.entries()) {
+      const band = root.querySelector(`[data-lane-id="${lane.id}"]`)!;
+      expect(band.classList.contains('alternate')).toBe(index % 2 === 1);
+      expect(band.querySelector('text')!.getAttribute('transform')).toBe(`translate(${lane.headingWidth / 2},${lane.height / 2}) rotate(-90)`);
+      expect(band.querySelector('.lane-divider')!.getAttribute('d')).toBe(`M${lane.headingWidth},16 V${lane.height - 16}`);
+      expect(lane.height).toBeGreaterThanOrEqual(Math.max(...lane.lines.map(line => line.length)) * 8 + 48);
+      expect(lane.headingWidth).toBeGreaterThanOrEqual(lane.lines.length * 20 + 24);
+    }
     expect(root.querySelector('script')).toBeNull();
     expect(heading.hasAttribute('tabindex')).toBe(false);
     expect(heading.classList.contains('current')).toBe(false);

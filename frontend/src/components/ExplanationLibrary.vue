@@ -194,7 +194,7 @@ defineExpose({ handleKeydown, focusSelectedCard });
           <div v-for="item in filtered" :key="item.id" class="explanation-card-wrap">
           <button class="explanation-card" :data-explanation-id="item.id" :tabindex="item.id === selectedId ? 0 : -1" @focus="selectedId = item.id" @click="openExplanation(item.id)">
             <h2><HighlightedText :text="item.title" :query="searchTerm" /></h2><p><HighlightedText :text="item.description" :query="searchTerm" /></p>
-            <div class="card-bottom"><span>{{ item.diagramCount }} diagrams · {{ item.scenarioCount }} scenarios</span><i class="pi pi-arrow-right" /></div>
+            <div class="card-bottom"><span>{{ item.diagramCount }} diagrams · {{ item.scenarioCount }} scenarios<span v-if="item.linkCount"> · {{ item.linkCount }} {{ item.linkCount === 1 ? 'link' : 'links' }}</span></span><i class="pi pi-arrow-right" /></div>
           </button>
           <button type="button" class="delete-explanation" :aria-label="`Delete ${item.title}`" :title="`Delete ${item.title}`" aria-controls="delete-explanation-dialog" :aria-expanded="deleteDialog && deleteTarget?.id === item.id" :disabled="selecting" @focus="selectedId = item.id" @click="confirmDeletion(item)"><i class="pi pi-trash" aria-hidden="true" /></button>
           </div>
@@ -235,6 +235,8 @@ defineExpose({ handleKeydown, focusSelectedCard });
 .explanation-card-wrap{position:relative;display:flex;min-width:0}
 .explanation-card{display:flex;flex-direction:column;align-items:stretch;width:100%;min-width:0}
 .explanation-card h2{padding-right:44px;line-height:32px;overflow-wrap:anywhere}
+.explanation-card p{margin-bottom:40px}
+.card-bottom{margin-top:auto;gap:12px}
 .delete-explanation{position:absolute;top:25px;right:calc(25px - (32px - 1rem)/2);display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:6px;background:transparent;color:var(--muted)}
 .delete-explanation:hover{background:var(--soft);color:var(--danger,#ad3549)}
 .delete-explanation:focus-visible{outline:2px solid var(--blue);outline-offset:2px}

@@ -96,6 +96,26 @@ async function main() {
         await assertFit(page);
         await assertActualSize(page);
         await assertFit(page);
+        if (diagram.kind === 'state') {
+          const symbols = await page.locator('svg.graph').evaluate(svg => {
+            const initial = svg.querySelector('[data-node-id="shipment-initial"] .state-marker-dot');
+            const final = svg.querySelector('[data-node-id="shipment-final"]');
+            const pickup = [...svg.querySelectorAll('.graph-edge')].find(edge => edge.querySelector('title').textContent === 'Carrier pickup [Parcel packed] / Assign tracking');
+            return {
+              initialFill: getComputedStyle(initial).fill,
+              finalFill: getComputedStyle(final.querySelector('.state-marker-dot')).fill,
+              ringFill: getComputedStyle(final.querySelector('.node-shape')).fill,
+              ringDash: getComputedStyle(final.querySelector('.node-shape')).strokeDasharray,
+              circles: svg.querySelectorAll('.state-marker circle').length,
+              caption: [...pickup.querySelectorAll('text > tspan')].map(line => line.textContent),
+            };
+          });
+          assert.equal(symbols.circles, 3);
+          assert.equal(symbols.initialFill, symbols.finalFill, 'initial marker retains its filled center when off-scenario');
+          assert.notEqual(symbols.initialFill, symbols.ringFill);
+          assert.equal(symbols.ringDash, 'none');
+          assert.deepEqual(symbols.caption, ['Carrier pickup', '[Parcel packed]', '/ Assign tracking']);
+        }
       }
       await page.getByRole('tab', { name: 'Domain', exact: true }).click();
       await assertFit(page);

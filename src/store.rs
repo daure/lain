@@ -97,6 +97,7 @@ impl Store {
                     updated_at_ms: stored.updated_at_ms,
                     diagram_count: stored.document.diagrams.len(),
                     scenario_count: stored.document.scenarios.len(),
+                    link_count: stored.document.links.len(),
                 })
             })
             .collect()

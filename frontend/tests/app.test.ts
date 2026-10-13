@@ -41,7 +41,7 @@ async function mountFixture(documentFixture: typeof fixture | Explanation = grap
   vi.stubGlobal('WebSocket', LiveSocket);
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/explanations'
-    ? items ?? [{ id: 'order-lifecycle', revision: 1, title: fixture.title, description: fixture.description, updatedAtMs: 1, diagramCount: documentFixture.diagrams.length, scenarioCount: documentFixture.scenarios.length }]
+    ? items ?? [{ id: 'order-lifecycle', revision: 1, title: fixture.title, description: fixture.description, updatedAtMs: 1, diagramCount: documentFixture.diagrams.length, scenarioCount: documentFixture.scenarios.length, linkCount: (documentFixture as Explanation).links?.length ?? 0 }]
     : { id: path.split('/').at(-1), revision: 1, updatedAtMs: 1, document: documentFixture })));
   const root = document.createElement('div'); document.body.append(root);
   const app = createApp(App).use(PrimeVue, { unstyled: true }).use(ToastService);
@@ -131,6 +131,51 @@ it('shows explicit prose gaps for recordings with omitted or blank scenario deta
     button('Repeated callback keeps one fulfillment').click(); await settle();
     expect(document.querySelector('.scenario-overview')!.textContent).toContain('No scenario description recorded.');
     expect(document.querySelector('.step-narration')!.textContent).toBe(authored.scenarios[1]!.occurrences[0]!.narration);
+  } finally { app.unmount(); }
+});
+
+it('offers safe explanation-wide references across views without changing the recorded cursor', async () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const authored = graphFixture();
+  authored.links = [
+    { label: 'Repository', url: 'https://github.com/daure/lain' },
+    { label: '<img src=x onerror=alert(1)>', url: 'https://example.com/docs?q=one%20two#overview' },
+    { label: 'Unsafe', url: 'javascript:alert(1)' },
+    { label: 'Credentials', url: 'https://user:secret@example.com' },
+  ];
+  const app = await mountFixture(authored);
+  try {
+    expect(document.querySelector('.explanation-links-trigger')).toBeNull();
+    expect(document.querySelector('.card-bottom')!.textContent).toContain(`${authored.diagrams.length} diagrams · ${authored.scenarios.length} scenarios · 4 links`);
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    const trigger = document.querySelector<HTMLButtonElement>('.explanation-links-trigger')!;
+    expect(trigger.closest('.header-identity')).not.toBeNull();
+    expect(trigger.textContent).toBe('Links · 2');
+    await press('l');
+    const cursor = location.search;
+    for (const tab of ['Details', 'Diagram', 'Domain']) {
+      button(tab).click(); await settle();
+      trigger.click(); await settle();
+      await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('true'));
+      const links = [...document.querySelectorAll<HTMLAnchorElement>('.explanation-links-list a')];
+      expect(links.map(link => link.href)).toEqual(authored.links.slice(0, 2).map(link => link.url));
+      expect(links.map(link => link.querySelector('.reference-label')!.textContent)).toEqual(['Repository', '<img src=x onerror=alert(1)>']);
+      expect(links.map(link => link.querySelector('small')!.textContent)).toEqual(['github.com', 'example.com']);
+      expect(links.every(link => link.target === '_blank' && link.rel === 'noopener noreferrer')).toBe(true);
+      expect(document.querySelector('.explanation-links-list img')).toBeNull();
+      expect(document.activeElement).toBe(links[0]);
+      await press('l', {}, links[0]);
+      expect(location.search).toBe(cursor);
+      await press('Escape', {}, links[0]);
+      await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('false'));
+      expect(document.activeElement).toBe(trigger);
+      expect(location.search).toBe(cursor);
+    }
+    document.querySelector<HTMLButtonElement>('.brand')!.click(); await settle();
+    expect(document.querySelector('.explanation-links-popover')).toBeNull();
+    delete authored.links;
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    expect(document.querySelector('.explanation-links-trigger')).toBeNull();
   } finally { app.unmount(); }
 });
 
@@ -429,10 +474,11 @@ const libraryItems = (): ExplanationSummary[] => [
   ['Session refresh', 'Rotating a browser session.'],
   ['Queue delivery', 'Cache [hit] avoids repeated delivery.'],
   ['Safe <img src=x onerror=alert(1)>', 'Literal agent-authored text.'],
-].map(([title, description], position) => ({ id: `example-${position}`, title: title!, description: description!, revision: 1, updatedAtMs: 1, diagramCount: 1, scenarioCount: 1 }));
+].map(([title, description], position) => ({ id: `example-${position}`, title: title!, description: description!, revision: 1, updatedAtMs: 1, diagramCount: 1, scenarioCount: 1, linkCount: 0 }));
 
 it('wraps horizontal library navigation and selects the closest card in incomplete rows', async () => {
   const app = await mountFixture(graphFixture(), libraryItems());
+  expect(document.querySelector('.card-bottom')!.textContent).toBe('1 diagrams · 1 scenarios');
   let columns = 3;
   try {
     const cards = [...document.querySelectorAll<HTMLButtonElement>('.explanation-card')];

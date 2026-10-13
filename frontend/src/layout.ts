@@ -1,10 +1,10 @@
 import dagre from '@dagrejs/dagre';
 import { graphTerminalRun, roundedPath, type Point } from './edge-path';
-import type { Diagram, DiagramGroup, DiagramLane, FlowNodeRole } from './model';
+import type { Diagram, DiagramGroup, DiagramLane, FlowNodeRole, StateNodeRole } from './model';
 import { swimlaneLayout } from './swimlane-layout';
 import { flowNodeExtraHeight, flowNodeShape, flowShapeConnection } from './flow-shapes';
 
-export type LayoutNode = { id: string; label: string; lines: string[]; role?: FlowNodeRole; x: number; y: number; width: number; height: number };
+export type LayoutNode = { id: string; label: string; lines: string[]; role?: FlowNodeRole; stateRole?: StateNodeRole; x: number; y: number; width: number; height: number };
 export type LayoutEdge = { id: string; label: string; lines: string[]; path: string; x: number; y: number; source: string; target: string };
 export type LayoutGroup = { id: string; label: string; lines: string[]; nodeIds: string[]; x: number; y: number; width: number; height: number; headerHeight: number; kind: 'flow' | 'state' | 'domain' };
 export type LayoutLane = DiagramLane & { lines: string[]; x: number; y: number; width: number; height: number; headingWidth: number; implicit?: boolean };
@@ -38,6 +38,10 @@ function edgeLabelLines(label: string): string[] {
 export function nodeConnection(node: LayoutNode, toward: Point, fallback: Point): Point {
   const dx = toward.x - node.x;
   const dy = toward.y - node.y;
+  if (node.stateRole && (dx || dy)) {
+    const scale = node.width / 2 / Math.hypot(dx, dy);
+    return { x: node.x + dx * scale, y: node.y + dy * scale };
+  }
   if ((!dx && !dy) || !node.role || node.role === 'action' || node.role === 'subprocess') return fallback;
   const halfWidth = node.width / 2;
   const halfHeight = node.height / 2;
@@ -74,13 +78,17 @@ function selfLoopPoints(node: LayoutNode, labelY: number, labelHeight: number): 
   ];
 }
 
-function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role'>[], edges: { id: string; label: string; source: string; target: string }[], groups: DiagramGroup[], kind: 'flow' | 'state', lanes: DiagramLane[] = []): GraphLayout {
+function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role' | 'stateRole'>[], edges: { id: string; label: string; lines?: string[]; source: string; target: string }[], groups: DiagramGroup[], kind: 'flow' | 'state', lanes: DiagramLane[] = []): GraphLayout {
   const graph = new dagre.graphlib.Graph({ multigraph: true, compound: true });
   const headings = groups.map(group => ({ ...group, lines: wrapLabel(group.label) }));
   const headingSpace = Math.max(0, ...headings.map(group => group.lines.length * 20 + 40));
   graph.setGraph({ rankdir: 'LR', marginx: 32, marginy: 32, ranksep: 100 + graphTerminalRun * 2, nodesep: Math.max(35, headingSpace), edgesep: Math.max(28, headingSpace) });
   graph.setDefaultEdgeLabel(() => ({}));
   for (const node of nodes) {
+    if (node.stateRole) {
+      graph.setNode(node.id, { width: 32, height: 32 });
+      continue;
+    }
     const diamondWidth = Math.max(176, Math.max(...node.lines.map(line => line.length)) * 7.5 + node.lines.length * 40 + 80);
     const height = node.role === 'decision' ? diamondWidth / 2 : Math.max(72, node.lines.length * 20 + 32) + flowNodeExtraHeight(node.role);
     const width = node.role === 'decision' ? diamondWidth : node.role === 'start' || node.role === 'end' ? Math.max(240, height + 160) : 240;
@@ -91,7 +99,7 @@ function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role'>[], ed
     if (group.parentGroupId) graph.setParent(group.id, group.parentGroupId);
     for (const id of group.nodeIds) graph.setParent(id, group.id);
   }
-  const wrappedEdges = edges.map(edge => ({ ...edge, lines: edgeLabelLines(edge.label) }));
+  const wrappedEdges = edges.map(edge => ({ ...edge, lines: edge.lines ?? edgeLabelLines(edge.label) }));
   for (const edge of wrappedEdges) graph.setEdge(edge.source, edge.target, {
     width: Math.max(...edge.lines.map(line => line.length)) * 7, height: edge.lines.length * 16 + 18,
   }, edge.id);
@@ -241,9 +249,16 @@ export function diagramLayout(diagram: Diagram): GraphLayout {
   const groups = visibleGroups(diagram);
   return layout(diagram.nodes.map(node => {
     const role = diagram.kind === 'flow' ? node.role : undefined;
-    return { id: node.id, label: node.label, role,
+    return { id: node.id, label: node.label, role, stateRole: diagram.kind === 'state' ? node.stateRole : undefined,
       lines: wrapLabel(node.label, role === 'subprocess' ? 25 : role && role !== 'action' ? 20 : 29) };
-  }), diagram.edges.map(edge => ({ id: edge.id, label: edge.label, source: edge.sourceNodeId, target: edge.targetNodeId })), groups, diagram.kind === 'state' ? 'state' : 'flow', diagram.kind === 'flow' ? diagram.lanes : undefined);
+  }), diagram.edges.map(edge => ({ id: edge.id, ...edgeCaption(diagram, edge), source: edge.sourceNodeId, target: edge.targetNodeId })), groups, diagram.kind === 'state' ? 'state' : 'flow', diagram.kind === 'flow' ? diagram.lanes : undefined);
+}
+
+function edgeCaption(diagram: Diagram, edge: Diagram['edges'][number]): { label: string; lines?: string[] } {
+  if (diagram.kind !== 'state' || !edge.transition) return { label: edge.label };
+  const { event, guard, effect } = edge.transition;
+  const parts = [event?.trim(), guard ? `[${guard.trim()}]` : undefined, effect ? `/ ${effect.trim()}` : undefined].filter((part): part is string => Boolean(part));
+  return { label: parts.join(' '), lines: parts.flatMap(edgeLabelLines) };
 }
 
 function visibleGroups(diagram: Diagram): DiagramGroup[] {

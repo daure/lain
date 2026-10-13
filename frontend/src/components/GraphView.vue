@@ -49,9 +49,10 @@ function nodeBadgeCount(id: string) {
   return (scenarioNodeVisitCounts.value.get(id) ?? 0) > 1 ? nodeVisitCounts.value.get(id) ?? 0 : 0;
 }
 
-function nodeLabel(id: string, label: string) {
-  const count = nodeBadgeCount(id);
-  return (count > 0 ? `${label} · visited ${count} ${count === 1 ? 'time' : 'times'}` : label) + diagramLinkHint(props.links?.get(id));
+function nodeLabel(node: LayoutNode) {
+  const label = node.stateRole ? `${node.stateRole === 'initial' ? 'Initial' : 'Final'} lifecycle boundary: ${node.label}` : node.label;
+  const count = nodeBadgeCount(node.id);
+  return (count > 0 ? `${label} · visited ${count} ${count === 1 ? 'time' : 'times'}` : label) + diagramLinkHint(props.links?.get(node.id));
 }
 
 function nodeLabelY(node: LayoutNode, showDrill: boolean) {
@@ -90,14 +91,14 @@ function edgeMarker(id: string) {
           <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b83a3" />
         </marker>
       </defs>
-      <g v-for="lane in layout.lanes" :key="lane.id" :data-lane-id="lane.id" class="graph-lane"
+      <g v-for="(lane, index) in layout.lanes" :key="lane.id" :data-lane-id="lane.id" :class="['graph-lane', { alternate: index % 2 === 1 }]"
          :transform="`translate(${lane.x - lane.width / 2},${lane.y - lane.height / 2})`"
          role="group" :aria-label="`Lane: ${lane.label}`">
         <title>{{ lane.label }}</title>
         <rect class="lane-shape" :width="lane.width" :height="lane.height" />
-        <path class="lane-divider" :d="`M${lane.headingWidth},0 V${lane.height}`" />
-        <text :x="lane.headingWidth / 2" :y="(lane.height - (lane.lines.length - 1) * 20) / 2" text-anchor="middle" dominant-baseline="central">
-          <tspan v-for="(line, index) in lane.lines" :key="index" :x="lane.headingWidth / 2" :dy="index ? 20 : 0">{{ line }}</tspan>
+        <path class="lane-divider" :d="`M${lane.headingWidth},16 V${lane.height - 16}`" />
+        <text :transform="`translate(${lane.headingWidth / 2},${lane.height / 2}) rotate(-90)`" x="0" :y="-(lane.lines.length - 1) * 20 / 2" text-anchor="middle" dominant-baseline="central">
+          <tspan v-for="(line, index) in lane.lines" :key="index" x="0" :dy="index ? 20 : 0">{{ line }}</tspan>
         </text>
       </g>
       <g v-for="group in layout.groups" :key="group.id" :data-group-id="group.id"
@@ -120,18 +121,23 @@ function edgeMarker(id: string) {
       </g>
       <g v-for="node in layout.nodes" :key="node.id" :transform="`translate(${node.x - node.width / 2},${node.y - node.height / 2})`">
       <g :data-node-id="node.id"
-         :class="['graph-node', { current: node.id === currentNodeId, visited: visitedNodeIds?.includes(node.id), interactive, 'on-scenario': scenarioNodeIds?.includes(node.id), 'off-scenario': scenarioNodeIds !== undefined && !scenarioNodeIds.includes(node.id) }]"
+         :class="['graph-node', { 'state-marker': node.stateRole, current: node.id === currentNodeId, visited: visitedNodeIds?.includes(node.id), interactive, 'on-scenario': scenarioNodeIds?.includes(node.id), 'off-scenario': scenarioNodeIds !== undefined && !scenarioNodeIds.includes(node.id) }]"
          :role="interactive ? 'button' : undefined" :tabindex="interactive ? 0 : undefined"
-         :aria-label="nodeLabel(node.id, node.label)" @click="interactive && emit('select', node.id)"
+         :aria-label="nodeLabel(node)" @click="interactive && emit('select', node.id)"
           @keydown.enter="interactive && activateDiagramNode($event, links?.get(node.id), () => emit('select', node.id), id => emit('open', id))" @keydown.space.prevent="interactive && emit('select', node.id)">
-        <template v-if="nodeShapes.get(node.id)">
+         <template v-if="node.stateRole">
+           <title>{{ nodeLabel(node) }}</title>
+           <circle :class="['node-shape', { 'state-marker-dot': node.stateRole === 'initial' }]" :cx="node.width / 2" :cy="node.height / 2" :r="node.width / 2" />
+           <circle v-if="node.stateRole === 'final'" class="state-marker-dot" :cx="node.width / 2" :cy="node.height / 2" r="10" />
+         </template>
+         <template v-else-if="nodeShapes.get(node.id)">
           <path v-for="(path, index) in nodeShapes.get(node.id)!.paths" :key="index" class="node-shape" :d="path.d" />
           <path v-if="nodeShapes.get(node.id)!.border" class="node-shape node-divider" :d="nodeShapes.get(node.id)!.border" style="fill: none" aria-hidden="true" />
         </template>
         <polygon v-else-if="node.role === 'decision'" class="node-shape" :points="`${node.width / 2},0 ${node.width},${node.height / 2} ${node.width / 2},${node.height} 0,${node.height / 2}`" />
         <rect v-else class="node-shape" :width="node.width" :height="node.height" :rx="node.role === 'start' || node.role === 'end' ? node.height / 2 : 8" />
         <path v-if="node.role === 'subprocess'" class="node-shape subprocess-divider" :d="`M20,0 V${node.height} M${node.width - 20},0 V${node.height}`" style="fill: none" aria-hidden="true" />
-        <text :ref="element => measureLabel(element, node.id)" :x="nodeShapes.get(node.id)?.label.x ?? node.width / 2" :y="nodeLabelY(node, true)" :data-export-y="nodeLabelY(node, false)" text-anchor="middle" dominant-baseline="middle">
+         <text v-if="!node.stateRole" :ref="element => measureLabel(element, node.id)" :x="nodeShapes.get(node.id)?.label.x ?? node.width / 2" :y="nodeLabelY(node, true)" :data-export-y="nodeLabelY(node, false)" text-anchor="middle" dominant-baseline="middle">
           <tspan v-for="(line, index) in node.lines" :key="index" :x="nodeShapes.get(node.id)?.label.x ?? node.width / 2" :dy="index ? 20 : 0">{{ line }}</tspan>
         </text>
         <g v-if="nodeBadgeCount(node.id) > 0" class="node-visit-badge" :transform="nodeBadgePosition(node)" aria-hidden="true">

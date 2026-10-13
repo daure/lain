@@ -5,10 +5,13 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub use crate::cardinality::Cardinality;
+pub use crate::explanation_links::ExplanationLink;
 pub use crate::groups::{DiagramGroup, DomainGroup};
 pub use crate::lanes::DiagramLane;
 pub use crate::method_calls::MethodCall;
-pub use crate::sequence::{SequenceOperand, SequenceStep};
+pub use crate::sequence::{
+    SequenceMessageKind, SequenceOperand, SequenceParticipantKind, SequenceStep,
+};
 
 pub const MAX_DOCUMENT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 32 * 1024;
@@ -22,6 +25,10 @@ pub struct Explanation {
     pub schema_version: u32,
     pub title: String,
     pub description: String,
+    /// Ordered explanation-wide references displayed beside the viewer title.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 50))]
+    pub links: Vec<ExplanationLink>,
     pub domain: Domain,
     #[schemars(length(min = 1, max = 50))]
     pub diagrams: Vec<Diagram>,
@@ -143,6 +150,9 @@ pub struct SequenceParticipant {
     #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub id: String,
     pub label: String,
+    /// Human or system icon in the participant header. Omission means system.
+    #[serde(default, skip_serializing_if = "SequenceParticipantKind::is_system")]
+    pub kind: SequenceParticipantKind,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -154,6 +164,10 @@ pub struct SequenceMessage {
     pub from_participant_id: String,
     #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub to_participant_id: String,
+    /// Call: solid filled arrow; async: solid open arrow; reply: dashed open arrow.
+    /// Descriptive only; omission means call. No execution or reply pairing is inferred.
+    #[serde(default, skip_serializing_if = "SequenceMessageKind::is_call")]
+    pub kind: SequenceMessageKind,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -167,6 +181,10 @@ pub struct Node {
     /// Optional flow-only descriptive role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<FlowNodeRole>,
+    /// State-only lifecycle boundary. Initial markers have no incoming edges; final markers have no outgoing edges.
+    /// Recordings may start or stop at any concrete node without visiting these markers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_role: Option<StateNodeRole>,
     /// Detail flow or sequence diagram in this explanation. Flow sources require role subprocess;
     /// sequence sources are message nodes. State diagrams cannot be sources or targets. Never executed.
     #[serde(
@@ -197,6 +215,30 @@ pub enum FlowNodeRole {
     Delay,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum StateNodeRole {
+    Initial,
+    Final,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StateTransition {
+    /// Descriptive triggering event, never executed or inferred from occurrence triggers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 32768))]
+    pub event: Option<String>,
+    /// Descriptive condition rendered in brackets, never evaluated against snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 32768))]
+    pub guard: Option<String>,
+    /// Descriptive effect rendered after a slash, never executed or used to infer recorded calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 32768))]
+    pub effect: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Edge {
@@ -206,7 +248,11 @@ pub struct Edge {
     pub source_node_id: String,
     #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub target_node_id: String,
+    /// Free-text caption used when transition is omitted. May be empty.
     pub label: String,
+    /// State-only descriptive event/guard/effect. At least one nonblank field; renders instead of label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<StateTransition>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -337,6 +383,7 @@ pub struct ExplanationSummary {
     pub updated_at_ms: u64,
     pub diagram_count: usize,
     pub scenario_count: usize,
+    pub link_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -401,6 +448,7 @@ impl Explanation {
         if self.schema_version != 1 {
             return Err("schemaVersion must be 1".into());
         }
+        self.validate_links()?;
         limit(self.domain.entities.len(), 200, "entities")?;
         limit(self.domain.relationships.len(), 500, "relationships")?;
         limit(self.diagrams.len(), 50, "diagrams")?;
@@ -497,6 +545,7 @@ impl Explanation {
                 require(&nodes, &edge.source_node_id, "edge source node")?;
                 require(&nodes, &edge.target_node_id, "edge target node")?;
             }
+            diagram.validate_state_diagram()?;
         }
         let mut occurrence_count = 0;
         for scenario in &self.scenarios {

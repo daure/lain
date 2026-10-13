@@ -131,7 +131,7 @@ Publish with `publish_explanation({id, document})`, or REST `PUT /api/explanatio
 
 Delete with `delete_explanation({id})`, or bodyless REST `DELETE /api/explanations/{id}`. Missing or already-deleted IDs return not-found. After an uncertain deletion, refetch and reassess before retrying: a delayed retry can delete newer or recreated content. Not-found proves only absence at that read, not a particular request's success. Never repeat deletion after a success response. Internal revisions continue across deletion and recreation for synchronization only.
 
-See [agent-instructions.md](agent-instructions.md), the discoverable MCP tool schemas, and [Order lifecycle](examples/order-lifecycle.json). Its six diagrams cover payment success/retry/decline, shipment delivery/redelivery/return, corresponding payment exchanges, linked capture details, and a priority dispatch workflow demonstrating database, preparation, input/output, priority, manual, document, and delay shapes.
+See [agent-instructions.md](agent-instructions.md), the discoverable MCP tool schemas, and [Order lifecycle](examples/order-lifecycle.json). Its seven diagrams cover payment success/retry/decline, shipment delivery/redelivery/return, corresponding payment exchanges, linked capture details, dispatch requests with human/system icons and call/async/reply arrows, and a priority dispatch workflow demonstrating database, preparation, input/output, priority, manual, document, and delay shapes.
 
 [Release approval](examples/release-promotion.json) uses swimlanes for developer, pipeline, and reviewer responsibilities. [Incident recovery](examples/incident-recovery.json) combines responsibility lanes with assessment and restoration phases. Use lanes and groups only when those distinctions clarify the explanation.
 
@@ -148,6 +148,8 @@ The URL records explanation, scenario, and occurrence IDs. Reload and browser Ba
 The header's Diagram button opens the full map with muted off-scenario elements, upcoming scenario elements, and blue visited elements. Visit counts appear on nodes and edges after their second visit through the current event. Off-path nodes do not change the scenario. Domain opens the ERD with domain definitions. Live publications update the displayed document automatically, preserving surviving scenario and occurrence selections. Revisions remain internal synchronization metadata; the GUI shows update status and retry actions.
 
 Sequence diagrams share one ordered interaction across their scenarios. The full view shows participant lifelines and alt/opt/loop frames with every alternative visible. Select a message to inspect its snapshots; repeated messages offer an occurrence picker. The compact view shows the previous and current recorded messages.
+
+Participant boxes prepend human or system icons. Calls use solid filled arrows, asynchronous sends use solid open arrows, and replies use dashed open arrows. Lifelines are dashed; scenario relevance dims elements without changing their semantic line styles. Omitted kinds default to system participants and call messages.
 
 The right-side data inspector shows Changes, Before, After, and recorded Calls for the current occurrence. It stays open across views and scenarios until you close it. Heading chips count recorded instances and nested array items or object fields. Select an ERD property to focus its value in the inspector.
 

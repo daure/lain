@@ -91,6 +91,22 @@ fn sequence_document() -> Explanation {
 async fn sequences_preserve_messages_self_calls_and_recorded_revisits() {
     let (_directory, service) = service().await;
     let mut authored = sequence_document();
+    let sequence = authored.diagrams[0].sequence.as_mut().unwrap();
+    assert!(
+        sequence
+            .participants
+            .iter()
+            .all(|participant| participant.kind == lain::model::SequenceParticipantKind::System)
+    );
+    assert!(
+        sequence
+            .messages
+            .iter()
+            .all(|message| message.kind == lain::model::SequenceMessageKind::Call)
+    );
+    sequence.participants[0].kind = lain::model::SequenceParticipantKind::Human;
+    sequence.messages[1].kind = lain::model::SequenceMessageKind::Async;
+    sequence.messages[2].kind = lain::model::SequenceMessageKind::Reply;
     for (id, node, edge) in [
         ("second", "accepted", "accept"),
         ("revisit", "start", "retry"),
@@ -118,6 +134,16 @@ async fn sequences_preserve_messages_self_calls_and_recorded_revisits() {
 async fn sequence_payloads_require_bounded_participants_and_exact_node_message_mapping() {
     let (_directory, service) = service().await;
     let original = serde_json::to_value(sequence_document()).unwrap();
+    for (pointer, invalid) in [
+        ("/diagrams/0/sequence/participants/0", json!("actor")),
+        ("/diagrams/0/sequence/messages/0", json!("signal")),
+        ("/diagrams/0/sequence/participants/0", json!(null)),
+        ("/diagrams/0/sequence/messages/0", json!(null)),
+    ] {
+        let mut value = original.clone();
+        value.pointer_mut(pointer).unwrap()["kind"] = invalid;
+        assert!(serde_json::from_value::<Explanation>(value).is_err());
+    }
     for (pointer, replacement, error) in [
         ("/diagrams/0/sequence", json!(null), "require sequence data"),
         ("/diagrams/0/kind", json!("flow"), "requires kind sequence"),
@@ -186,6 +212,7 @@ async fn sequence_payloads_require_bounded_participants_and_exact_node_message_m
         participants.push(lain::model::SequenceParticipant {
             id: format!("p-{number}"),
             label: "Participant".into(),
+            kind: Default::default(),
         });
     }
     service
@@ -200,6 +227,7 @@ async fn sequence_payloads_require_bounded_participants_and_exact_node_message_m
         .push(lain::model::SequenceParticipant {
             id: "excess".into(),
             label: "Excess".into(),
+            kind: Default::default(),
         });
     assert_invalid(
         &service,

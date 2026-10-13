@@ -89,6 +89,10 @@ fn document() -> Value {
 
 fn sequence_document() -> Value {
     let mut value = document();
+    value["links"] = json!([
+        {"label": "Documentation", "url": "https://example.com/docs"},
+        {"label": "Repository", "url": "https://github.com/daure/lain"}
+    ]);
     value["scenarios"][0]["description"] =
         json!("A client records a self-message. The recording stops after that message.");
     value["scenarios"][0]["occurrences"][0]["changeSummary"] =
@@ -722,6 +726,18 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
     assert!(publish["inputSchema"].to_string().contains("occurrences"));
     let schema = &publish["inputSchema"];
     let definitions = &publish["inputSchema"]["$defs"];
+    assert_eq!(
+        definitions["Explanation"]["properties"]["links"]["maxItems"],
+        50
+    );
+    assert_eq!(
+        definitions["ExplanationLink"]["properties"]["url"]["maxLength"],
+        4096
+    );
+    assert_eq!(
+        definitions["ExplanationLink"]["required"],
+        json!(["label", "url"])
+    );
     fn assert_id_schema(schema: &Value) {
         assert_eq!(schema["type"], "string");
         assert_eq!(schema["minLength"], 1);

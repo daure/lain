@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick } from 'vue';
+import { readFileSync } from 'node:fs';
 import { afterEach, expect, it } from 'vitest';
 import fixture from '../../examples/order-lifecycle.json';
 import GraphView from '../src/components/GraphView.vue';
@@ -40,6 +41,7 @@ function exported(root: HTMLElement, scope: 'scenario' | 'all') {
 afterEach(() => {
   apps.splice(0).forEach(app => app.unmount());
   document.body.replaceChildren();
+  document.documentElement.classList.remove('app-dark');
 });
 
 it('exports the whole graph with scenario muting but without playback state or live-view mutations', async () => {
@@ -130,18 +132,60 @@ it.each([['Reserve stock automatically'], ['Reserve stock', 'automatically']])('
   expect(root.querySelector('.graph')!.outerHTML).toBe(source);
 });
 
-it('exports sequence participants and every fragment heading independently of sticky scrolling', async () => {
+it.each([false, true])('exports semantic sequence arrows and every fragment heading with dark=%s', async dark => {
+  document.documentElement.classList.toggle('app-dark', dark);
+  const style = document.createElement('style');
+  style.textContent = readFileSync('src/style.css', 'utf8');
+  document.body.append(style);
   const diagram = explanation.diagrams.find(item => item.kind === 'sequence')!;
   const scenario = explanation.scenarios.find(item => item.diagramId === diagram.id)!;
   const root = await mount(() => h(SequenceView, { diagram, scenario, currentOccurrenceId: scenario.occurrences.at(-1)!.id }));
   const source = root.querySelector('.sequence')!;
   source.querySelectorAll<SVGElement>('.fragment-heading, .sequence-operand-heading').forEach(heading => heading.style.display = 'none');
-  const capture = exported(root, 'all');
-  for (const participant of diagram.sequence!.participants) expect(capture.documentElement.textContent).toContain(participant.label.slice(0, 22));
-  expect(capture.querySelectorAll('[marker-end]')).toHaveLength(diagram.nodes.length);
-  expect([...capture.querySelectorAll('[marker-end]')].every(path => path.getAttribute('marker-end')?.endsWith('-upcoming)'))).toBe(true);
-  expect([...capture.querySelectorAll('[style]')].every(element => !element.getAttribute('style')!.includes('display: none'))).toBe(true);
-  expect(capture.querySelectorAll('title')).toHaveLength(1);
+  const kinds = [...source.querySelectorAll('.sequence-message')].map(row => diagram.sequence!.messages.find(message => message.nodeId === row.getAttribute('data-node-id'))!.kind ?? 'call');
+  for (const scope of ['scenario', 'all'] as const) {
+    const capture = exported(root, scope);
+    for (const participant of diagram.sequence!.participants) expect(capture.documentElement.textContent).toContain(participant.label.slice(0, 16));
+    const arrows = [...capture.querySelectorAll<SVGPathElement>('[marker-end]')];
+    expect(arrows).toHaveLength(diagram.nodes.length);
+    arrows.forEach((arrow, index) => {
+      const kind = kinds[index]!;
+      expect(arrow.style.strokeDasharray).toBe(kind === 'reply' ? '6 4' : '');
+      const markerId = arrow.getAttribute('marker-end')!.slice(5, -1);
+      const marker = capture.getElementById(markerId)!;
+      const head = marker.querySelector<SVGPathElement>('path')!;
+      expect(head.getAttribute('d')).toBe(kind === 'call' ? 'M 0 0 L 9 5 L 0 10 z' : 'M 1 1 L 9 5 L 1 9');
+      expect(head.style.fill, head.outerHTML).toBe(kind === 'call' ? 'currentcolor' : 'none');
+      if (scope === 'all') expect(markerId).toMatch(/-upcoming$/);
+    });
+    expect([...capture.querySelectorAll('[style]')].every(element => !element.getAttribute('style')!.includes('display: none'))).toBe(true);
+    expect([...capture.querySelectorAll<SVGLineElement>('line')].filter(line => line.getAttribute('y1') === '66').every(line => line.style.strokeDasharray === '6 4')).toBe(true);
+    expect([...capture.querySelectorAll<SVGRectElement>('rect')].filter(rect => rect.getAttribute('width') === '196')).toHaveLength(diagram.sequence!.participants.length);
+    expect(capture.querySelectorAll('title')).toHaveLength(1);
+  }
+});
+
+it.each([false, true])('renders and exports human/system icons inside participant boxes with compact=%s', async compact => {
+  const diagram = explanation.diagrams.find(item => item.id === 'dispatch-request-sequence')!;
+  const scenario = explanation.scenarios.find(item => item.diagramId === diagram.id)!;
+  const root = await mount(() => h(SequenceView, { diagram, scenario, compact, currentOccurrenceId: scenario.occurrences.at(-1)!.id }));
+  for (const participant of diagram.sequence!.participants) {
+    const header = root.querySelector(`[data-participant-id="${participant.id}"]`)!;
+    expect(header.getAttribute('aria-label')).toBe(`${participant.label}, ${participant.kind ?? 'system'}`);
+    expect(header.querySelector('.sequence-participant-icon')!.getAttribute('aria-hidden')).toBe('true');
+    expect(header.querySelectorAll('.sequence-participant-icon circle')).toHaveLength(participant.kind === 'human' ? 1 : 0);
+    const box = header.querySelector('rect')!;
+    const label = header.querySelector('svg:not(.sequence-participant-icon)')!;
+    expect(Number(label.getAttribute('x'))).toBeGreaterThan(32);
+    expect(Number(label.getAttribute('x')) + Number(label.getAttribute('width'))).toBeLessThan(Number(box.getAttribute('width')));
+  }
+  if (!compact) {
+    for (const scope of ['scenario', 'all'] as const) {
+      const capture = exported(root, scope);
+      expect(capture.querySelectorAll('svg[viewBox="0 0 24 24"]')).toHaveLength(3);
+      expect(capture.querySelectorAll('svg[viewBox="0 0 24 24"] circle')).toHaveLength(1);
+    }
+  }
 });
 
 it('exports domain definitions without snapshot tooltips, instance counts, selection, or call markers', async () => {
