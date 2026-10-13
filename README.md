@@ -22,7 +22,7 @@ To upgrade, run the installer again, then `lain status`. Runtime data remains un
 curl -LsSf https://github.com/daure/lain/releases/latest/download/lain-installer.sh | LAIN_NO_SETUP=1 sh
 ```
 
-Versioned archives, SHA-256 checksums, and installers are on the [releases page](https://github.com/daure/lain/releases). The pinned installer URL uses `/releases/download/v0.1.1/lain-installer.sh`.
+Versioned archives, SHA-256 checksums, and installers are on the [releases page](https://github.com/daure/lain/releases). The pinned installer URL uses `/releases/download/v0.2.0/lain-installer.sh`.
 
 ## Build from source
 
@@ -212,15 +212,15 @@ GitHub Actions checks pushes to `main`. A stable `vX.Y.Z` tag matching `Cargo.to
 From a clean, verified `main` checkout with the release version committed in `Cargo.toml` and `Cargo.lock`:
 
 ```sh
-git tag -a v0.1.1 -m 'Release v0.1.1'
-git push --atomic origin main v0.1.1
+git tag -a v0.2.0 -m 'Release v0.2.0'
+git push --atomic origin main v0.2.0
 gh run list --workflow release.yml
 ```
 
 Use the matching new version for later tags. Local packaging requires cargo-dist 0.32.0 after `./scripts/build.sh`:
 
 ```sh
-dist build --artifacts=all --target=x86_64-unknown-linux-gnu --tag=v0.1.1
+dist build --artifacts=all --target=x86_64-unknown-linux-gnu --tag=v0.2.0
 python3 scripts/prepare_installer.py target/distrib/lain-installer.sh
 node tests/release-smoke.mjs target/release/lain
 ```

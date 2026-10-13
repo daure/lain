@@ -220,7 +220,7 @@ async fn publish(
     };
     let revision = match expected_revision(&headers) {
         Ok(revision) => revision,
-        Err(response) => return response,
+        Err(message) => return error(StatusCode::BAD_REQUEST, message),
     };
     service_response(
         state
@@ -237,12 +237,12 @@ async fn delete(
 ) -> Response {
     let revision = match expected_revision(&headers) {
         Ok(revision) => revision,
-        Err(response) => return response,
+        Err(message) => return error(StatusCode::BAD_REQUEST, message),
     };
     service_response(state.service.delete_with_revision(&id, revision).await)
 }
 
-fn expected_revision(headers: &HeaderMap) -> Result<Option<u64>, Response> {
+fn expected_revision(headers: &HeaderMap) -> Result<Option<u64>, &'static str> {
     let values = headers.get_all(header::IF_MATCH);
     let mut values = values.iter();
     let Some(value) = values.next() else {
@@ -256,10 +256,7 @@ fn expected_revision(headers: &HeaderMap) -> Result<Option<u64>, Response> {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|revision| *revision > 0 && *revision <= i64::MAX as u64);
     if values.next().is_some() || revision.is_none() {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            "If-Match must contain one quoted positive revision",
-        ));
+        return Err("If-Match must contain one quoted positive revision");
     }
     Ok(revision)
 }

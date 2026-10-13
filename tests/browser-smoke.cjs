@@ -326,7 +326,7 @@ async function canvasControls(selector) {
       return { origin, target, positions, screenOrigin };
     }, { key, x, y });
     const last = motion.positions.at(-1);
-    if (!fitted) assert.ok(Math.abs(last.left - motion.target.left) < 1 && Math.abs(last.top - motion.target.top) < 1, 'shifted keys pan 187.5 screen pixels');
+    assert.ok(Math.abs(last.left - motion.target.left) < 1 && Math.abs(last.top - motion.target.top) < 1, 'shifted keys pan 187.5 screen pixels within scroll bounds');
     let previous = motion.screenOrigin;
     for (const position of motion.positions) {
       const delta = { left: position.screenLeft - previous.left, top: position.screenTop - previous.top };
@@ -334,7 +334,11 @@ async function canvasControls(selector) {
       assert.ok(y ? delta.top * Math.sign(y) <= 1 : Math.abs(delta.top) < 1, `vertical panning stays continuous: ${JSON.stringify(motion)}`);
       previous = { left: position.screenLeft, top: position.screenTop };
     }
-    assert.ok(motion.positions.some(position => Math.abs(position.left - last.left) > 1 || Math.abs(position.top - last.top) > 1), 'keyboard panning animates');
+    if (Math.abs(motion.target.left - motion.origin.left) > 1 || Math.abs(motion.target.top - motion.origin.top) > 1) {
+      assert.ok(motion.positions.some(position => Math.abs(position.left - last.left) > 1 || Math.abs(position.top - last.top) > 1), 'keyboard panning animates');
+    } else {
+      assert.ok(motion.positions.every(position => Math.abs(position.left - motion.origin.left) < 1 && Math.abs(position.top - motion.origin.top) < 1), 'keyboard panning preserves the position at scroll bounds');
+    }
     assert.equal(Number(await canvas.getAttribute('data-scale')), scale);
     assert.equal(new URL(page.url()).searchParams.get('occurrence'), cursor);
   }
@@ -485,6 +489,8 @@ async function followGraphSteps() {
   await text(page.locator('.step-tile.is-current .step-number'), '3/5');
   await delay(350);
   assert.deepEqual(await framing(), fitted, 'fit preserves the complete layout during event navigation');
+  await page.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
+  await focusedGraphStep();
   await canvas.locator('.viewport-scroll').evaluate(element => { element.scrollLeft += 60; element.scrollTop += 40; });
   await page.waitForFunction(() => document.querySelector('.diagram-panel .viewport-enabled').dataset.fitted === 'false');
   const manual = await framing();
@@ -492,7 +498,7 @@ async function followGraphSteps() {
   assert.deepEqual(await framing(), manual, 'manual scrolling preserves its position until event navigation');
   await page.keyboard.press('ArrowLeft');
   await focusedGraphStep();
-  assert.equal((await framing()).scale, fitted.scale);
+  assert.equal((await framing()).scale, manual.scale);
   await page.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
   await focusedGraphStep();
 }
@@ -875,7 +881,7 @@ async function main() {
 
 main().catch(async error => {
   if (page && !page.isClosed()) await page.screenshot({ path: path.join(artifacts, 'failure.png'), fullPage: true }).catch(() => {});
-  console.error(`FAIL ${stage}: ${error.message}\nArtifacts: ${artifacts || '(none)'}`);
+  console.error(`FAIL ${stage}: ${error.stack || error.message}\nArtifacts: ${artifacts || '(none)'}`);
   process.exitCode = 1;
 }).finally(async () => {
   for (const child of children) child.kill('SIGKILL');

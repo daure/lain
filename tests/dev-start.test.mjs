@@ -178,7 +178,11 @@ test('npm start serves local Rust, Vite and MCP, preserves data, and owns server
     running = launch('npm', ['start'], project, { LAIN_DEV_HOME: home });
     await ready(running);
     const listed = await request(backend, '/api/explanations');
-    assert.deepEqual((await listed.json()).map(item => [item.id, item.revision]), [['order-lifecycle', 1]]);
+    const initialLibrary = await listed.json();
+    const seededRevisions = [
+      ['incident-recovery', 1], ['order-lifecycle', 1], ['release-promotion', 1],
+    ];
+    assert.deepEqual(initialLibrary.map(item => [item.id, item.revision]), seededRevisions);
     const page = await request(viewer, '/');
     assert.match(await page.text(), /\/@vite\/client/);
 
@@ -187,7 +191,7 @@ test('npm start serves local Rust, Vite and MCP, preserves data, and owns server
     assert.equal(url.search, '');
     const proxied = await request(viewer, '/api/explanations', { headers: { Origin: viewer } });
     assert.equal(proxied.status, 200);
-    assert.equal((await proxied.json())[0].id, 'order-lifecycle');
+    assert.deepEqual((await proxied.json()).map(item => [item.id, item.revision]), seededRevisions);
 
     const initialized = await rpc({
       jsonrpc: '2.0', id: 1, method: 'initialize', params: {
@@ -222,8 +226,9 @@ test('npm start serves local Rust, Vite and MCP, preserves data, and owns server
     running = launch(process.execPath, [launcher], temporary, { LAIN_DEV_HOME: home });
     await ready(running);
     const preserved = await request(backend, '/api/explanations');
-    assert.deepEqual((await preserved.json()).map(item => [item.title, item.revision]),
-      [['Preserved development data', 2]]);
+    assert.deepEqual((await preserved.json()).map(item => [item.id, item.title, item.revision]),
+      initialLibrary.map(item => item.id === 'order-lifecycle'
+        ? [item.id, 'Preserved development data', 2] : [item.id, item.title, item.revision]));
     assert.ok(!running.output().includes('Published order-lifecycle'));
     const secondOwned = await descendants(running.child.pid);
     signal(running.child.pid, 'SIGTERM');
