@@ -27,7 +27,9 @@ let savedScroll = state.value.scrollTop;
 const searchTerm = computed(() => query.value.trim());
 const filtered = computed(() => {
   const term = searchTerm.value.toLowerCase();
-  return props.summaries.filter(item => item.title.toLowerCase().includes(term) || item.description.toLowerCase().includes(term));
+  return props.summaries
+    .filter(item => item.title.toLowerCase().includes(term) || item.description.toLowerCase().includes(term))
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs || a.id.localeCompare(b.id));
 });
 const cards = () => [...(grid.value?.querySelectorAll<HTMLButtonElement>('.explanation-card') ?? [])];
 

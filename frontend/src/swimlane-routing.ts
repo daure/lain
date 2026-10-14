@@ -154,6 +154,9 @@ function placeCaption(route: Route, all: Route[], captions: Bounds[], allowGrowt
     if (!allowGrowth && !inside({ x: bounds.right, y: bounds.bottom }, route.domain)) continue;
     const padded = expand(bounds, margin);
     if ([...route.obstacles, ...captions].some(other => intersects(padded, other))) continue;
+    if (all.some(other => other.terminals.escape.y > other.terminals.start.y && other.terminals.entry.y > other.terminals.end.y
+      && [other.terminals.escape, other.terminals.entry]
+      .some(point => intersects(padded, boxBounds({ ...point, width: cornerRadius * 2 + 2, height: cornerRadius * 2 + 2 }))))) continue;
     if (bends.some(bend => intersects(padded, bend))) continue;
     if (all.some(other => other.points.slice(1).some((b, index) => !clearSegment(other.points[index]!, b, [padded])))) continue;
     return point;
@@ -173,12 +176,28 @@ function captionRoutes(route: Route, captions: Bounds[]): Point[][] {
   const points = candidates(escape, entry, trial);
   for (const y of channels) points.push([escape, { x: escape.x, y }, { x: entry.x, y }, entry]);
   if (route.edge.source === route.edge.target) {
-    const width = Math.max(Math.abs(entry.x - escape.x), size.width + 2);
+    const width = Math.max(Math.abs(entry.x - escape.x), size.width + 2 * (margin + cornerRadius) + 2);
     const center = (escape.x + entry.x) / 2;
     for (const y of [Math.max(escape.y, entry.y) + 18, ...channels]) {
       points.push([escape, { x: center - width / 2, y: escape.y }, { x: center - width / 2, y },
         { x: center + width / 2, y }, { x: center + width / 2, y: entry.y }, entry]);
     }
+  }
+  if (start.x === escape.x && end.x === entry.x) {
+    const occupied = [...route.obstacles.filter(bounds => intersects(bounds, route.domain)), ...captions];
+    const left = Math.max(escape.x, entry.x, ...occupied.map(bounds => bounds.right)) + margin + cornerRadius + 1;
+    const right = left + size.width + 2 * (margin + cornerRadius) + 2;
+    const bottom = Math.max(escape.y, entry.y, ...occupied.map(bounds => bounds.bottom)) + pitch;
+    trial.right = Math.max(trial.right, right);
+    trial.bottom = Math.max(trial.bottom, bottom);
+    const blocked = [...route.obstacles.map(bounds => expand(bounds, 8)), ...captions.map(bounds => expand(bounds, margin + cornerRadius + 1))];
+    const first = { start, escape, entry: { x: left, y: bottom }, end: { x: left + 1, y: bottom } };
+    const last = { start: { x: right - 1, y: bottom }, escape: { x: right, y: bottom }, entry, end };
+    const firstGrid = buildGrid(first.escape, first.entry, blocked, trial);
+    const lastGrid = buildGrid(last.escape, last.entry, blocked, trial);
+    const outward = firstGrid && gridRoute(firstGrid, first, []);
+    const inward = lastGrid && gridRoute(lastGrid, last, []);
+    if (outward && inward) points.push([...outward, ...inward]);
   }
   const blocked = route.obstacles.map(bounds => expand(bounds, 8));
   return points.filter(points => points.every((point, index) => inside(point, trial)

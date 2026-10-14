@@ -72,11 +72,12 @@ it('preserves zoom and clamps manual panning when the current layout shrinks', a
   } finally { view.app.unmount(); }
 });
 
-it.each([980, 1000, 2000])('centers fitting axes and hugs overflowing bounds at 1:1 at layout width %i', async width => {
+it.each([980, 1000, 2000])('starts at 1:1 with centered fitting axes and follows steps within overflowing bounds at layout width %i', async width => {
   const view = await mountGraph(width);
   try {
-    await view.click('Zoom to 100% and focus');
     expect(view.canvas.dataset.scale).toBe('1');
+    expect(view.canvas.dataset.fitted).toBe('false');
+    expect(view.canvas.querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('true');
     expect(view.scroller.scrollWidth).toBe(width <= 1000 ? 1000 : width + 40);
     expect(view.scroller.scrollHeight).toBe(600);
     expect(view.position()).toEqual([0, 0]);
@@ -91,9 +92,6 @@ it('keeps a tall chart centered horizontally while limiting vertical panning to 
   const view = await mountViewport(() => h(DiagramViewport, { width: 800, height: 1400, title: 'Tall chart', focusPoint: { x: 400, y: 700 } }));
   try {
     expect(view.scroller.scrollWidth).toBe(1000);
-    expect(view.scroller.scrollHeight).toBe(600);
-    await view.click('Zoom to 100% and focus');
-    expect(view.scroller.scrollWidth).toBe(1000);
     expect(view.scroller.scrollHeight).toBe(1440);
     expect(view.position()).toEqual([0, 420]);
     await view.click('Fit diagram');
@@ -103,9 +101,10 @@ it('keeps a tall chart centered horizontally while limiting vertical panning to 
   } finally { view.app.unmount(); }
 });
 
-it.each([800, 2000])('defaults to fit mode and preserves its viewport across event navigation at layout width %i', async width => {
+it.each([800, 2000])('preserves explicit fit mode across event navigation at layout width %i', async width => {
   const view = await mountGraph(width);
   try {
+    await view.click('Fit diagram');
     const scale = view.canvas.dataset.scale;
     const position = view.position();
     expect(view.canvas.dataset.fitted).toBe('true');
@@ -130,17 +129,19 @@ it.each([800, 2000])('defaults to fit mode and preserves its viewport across eve
   } finally { view.app.unmount(); }
 });
 
-it('opens each scene fitted to its content after using 1:1 in another scene', async () => {
+it('opens each fresh scene at 1:1 with current-step focus after fitting another scene', async () => {
   const scene = ref('first');
-  const view = await mountViewport(() => h(DiagramViewport, { width: 2000, height: 300, title: 'Scene', sceneKey: scene.value }));
+  const view = await mountViewport(() => h(DiagramViewport, { width: 2000, height: 300, title: 'Scene', sceneKey: scene.value,
+    focusPoint: { x: 1500, y: 150 } }));
   try {
-    expect(view.canvas.dataset.scale).toBe('0.48');
-    await view.click('Zoom to 100% and focus');
     expect(view.canvas.dataset.scale).toBe('1');
-    scene.value = 'second'; await settle();
-    expect(view.canvas.dataset.fitted).toBe('true');
+    expect(view.position()).toEqual([1020, 0]);
+    await view.click('Fit diagram');
     expect(view.canvas.dataset.scale).toBe('0.48');
-    expect(view.position()).toEqual([0, 0]);
+    scene.value = 'second'; await settle();
+    expect(view.canvas.dataset.fitted).toBe('false');
+    expect(view.canvas.dataset.scale).toBe('1');
+    expect(view.position()).toEqual([1020, 0]);
   } finally { view.app.unmount(); }
 });
 
@@ -213,8 +214,8 @@ it('centers complete sequence rows horizontally and preserves fitted framing acr
   const selected = ref(scenario.occurrences[0]!.id);
   const view = await mountViewport(() => h(SequenceView, { diagram, scenario, currentOccurrenceId: selected.value }));
   try {
-    expect(view.canvas.dataset.fitted).toBe('true');
-    await view.click('Zoom to 100% and focus');
+    expect(view.canvas.dataset.fitted).toBe('false');
+    expect(view.canvas.dataset.scale).toBe('1');
     const width = Number(view.canvas.querySelector('.sequence')!.getAttribute('viewBox')!.split(' ')[2]);
     const centeredLeft = width <= view.scroller.clientWidth ? 0 : (width - view.scroller.clientWidth) / 2 + 20;
     expect(view.scroller.scrollLeft).toBe(centeredLeft);

@@ -476,6 +476,24 @@ const libraryItems = (): ExplanationSummary[] => [
   ['Safe <img src=x onerror=alert(1)>', 'Literal agent-authored text.'],
 ].map(([title, description], position) => ({ id: `example-${position}`, title: title!, description: description!, revision: 1, updatedAtMs: 1, diagramCount: 1, scenarioCount: 1, linkCount: 0 }));
 
+it('orders overview cards by latest update and preserves selection when live updates reorder them', async () => {
+  const items = libraryItems().map((item, position) => ({ ...item, updatedAtMs: [100, 300, 200, 300, 50][position]! }));
+  const app = await mountFixture(graphFixture(), items);
+  const cardIds = () => [...document.querySelectorAll<HTMLElement>('.explanation-card')].map(card => card.dataset.explanationId);
+  try {
+    expect(cardIds()).toEqual(['example-1', 'example-3', 'example-2', 'example-0', 'example-4']);
+    expect(document.activeElement?.getAttribute('data-explanation-id')).toBe('example-1');
+    items[0] = { ...items[0]!, revision: 2, updatedAtMs: 400 };
+    LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'example-0', revision: 2 }) });
+    await settle();
+    expect(cardIds()).toEqual(['example-0', 'example-1', 'example-3', 'example-2', 'example-4']);
+    expect(document.activeElement?.getAttribute('data-explanation-id')).toBe('example-1');
+    const search = document.querySelector<HTMLInputElement>('[aria-label="Search explanations"]')!;
+    search.value = 'cache'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle();
+    expect(cardIds()).toEqual(['example-0', 'example-3']);
+  } finally { app.unmount(); }
+});
+
 it('wraps horizontal library navigation and selects the closest card in incomplete rows', async () => {
   const app = await mountFixture(graphFixture(), libraryItems());
   expect(document.querySelector('.card-bottom')!.textContent).toBe('1 diagrams · 1 scenarios');
@@ -1048,8 +1066,11 @@ it.each(['Diagram', 'Domain'])('zooms %s and toggles fit / 1:1 through guarded s
     });
     window.dispatchEvent(new Event('resize')); await settle();
     const cursor = new URLSearchParams(location.search).get('occurrence');
+    expect(canvas().dataset.fitted).toBe('false');
+    expect(canvas().querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('true');
+    expect(zoom()).toBe(1);
+    await press(';');
     expect(canvas().dataset.fitted).toBe('true');
-    expect(canvas().querySelector('[aria-label="Fit diagram"]')!.getAttribute('aria-pressed')).toBe('true');
     await press(';');
     expect(zoom()).toBe(1);
     await press('='); expect(zoom()).toBe(1.25);

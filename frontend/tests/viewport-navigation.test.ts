@@ -88,11 +88,12 @@ it.each(['flow', 'state', 'sequence'])('restores independent Diagram and Domain 
     expect(canvas().querySelector('[aria-label="Zoom to 100% and focus"]')!.getAttribute('aria-pressed')).toBe('true');
 
     await click(other!.title);
-    expect(state().fitted).toBe('true');
+    expect(state().fitted).toBe('false');
+    expect(state().scale).toBe('1');
     const otherDomainState = state();
     await click('Diagram');
-    expect(state().fitted).toBe('true');
-    await control('Zoom to 100% and focus');
+    expect(state().fitted).toBe('false');
+    expect(state().scale).toBe('1');
     const otherDiagramState = state();
 
     await click(source!.title);
@@ -133,7 +134,8 @@ it('keeps canvas state separate for explanations with matching scenario IDs', as
     document.querySelector<HTMLButtonElement>('[data-explanation-id="second"]')!.click();
     await settle();
     await click('Diagram');
-    expect(state().fitted).toBe('true');
+    expect(state().fitted).toBe('false');
+    expect(state().scale).toBe('1');
     document.querySelector<HTMLButtonElement>('[aria-label="Lain explanation library"]')!.click();
     await settle();
     document.querySelector<HTMLButtonElement>('[data-explanation-id="first"]')!.click();

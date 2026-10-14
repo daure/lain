@@ -24,7 +24,7 @@ const emit = defineEmits<{ change: [] }>();
 const root = ref<HTMLElement>();
 const region = ref<HTMLElement>();
 const scale = ref(1);
-const fitted = ref(true);
+const fitted = ref(false);
 const states = inject(viewportStatesKey, undefined);
 let activeStateKey = props.stateKey;
 let restoring = false;
@@ -302,7 +302,7 @@ async function restoreState() {
   restoring = true;
   const version = zoomVersion;
   const saved = activeStateKey ? states?.get(activeStateKey) : undefined;
-  fitted.value = saved?.fitted ?? true;
+  fitted.value = saved?.fitted ?? false;
   scale.value = saved?.scale ?? 1;
   await nextTick();
   track();
@@ -314,8 +314,9 @@ async function restoreState() {
     if (version !== zoomVersion) return;
     pan(offset.value.x + props.width * scale.value / 2 - view.value.width / 2,
       offset.value.y + props.height * scale.value / 2 - view.value.height / 2);
-  } else pan(saved!.left, saved!.top);
+  } else if (saved) pan(saved.left, saved.top);
   restoring = false;
+  if (!saved) await centerCurrent();
 }
 
 watch(() => [props.stateKey, props.sceneKey], () => {

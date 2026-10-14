@@ -306,6 +306,31 @@ it.each([3, 6, 8, 12])('fits %i authored parallel captions in deterministic clea
   expect(unlabeled.lanes![0]!.height).toBe(120);
 });
 
+it.each([
+  { kind: 'handoff', count: 16, grouped: false },
+  { kind: 'retry', count: 4, grouped: false },
+  { kind: 'self-loop', count: 8, grouped: false },
+  { kind: 'self-loop', count: 8, grouped: true },
+] as const)('fits $count dense $kind captions in clear deterministic corridors (grouped: $grouped)', ({ kind, count, grouped }) => {
+  const ids = kind === 'self-loop' ? ['source'] : ['source', 'target'];
+  const diagram: Diagram = { id: 'dense', title: 'Dense routing', kind: 'flow',
+    nodes: ids.map(id => ({ id, label: id, entityIds: [] })),
+    lanes: kind === 'handoff' ? ids.map(id => ({ id: `lane-${id}`, label: id, nodeIds: [id] }))
+      : [{ id: 'team', label: 'Team', nodeIds: ids }],
+    edges: Array.from({ length: count }, (_, index) => ({ id: `e${index}`,
+      sourceNodeId: kind === 'retry' ? 'target' : 'source',
+      targetNodeId: kind === 'self-loop' ? 'source' : 'target', label: 'Condition confirmed' })),
+  };
+  if (grouped) diagram.groups = [{ id: 'parent', label: 'Parent', nodeIds: [] },
+    { id: 'child', label: 'Child', nodeIds: ids, parentGroupId: 'parent' }];
+  if (kind === 'retry') diagram.edges.unshift({ id: 'forward', sourceNodeId: 'source', targetNodeId: 'target', label: '' });
+  const layout = diagramLayout(diagram);
+  expect(layout).toEqual(diagramLayout(diagram));
+  expect(layout.edges.map(edge => edge.id)).toEqual(diagram.edges.map(edge => edge.id));
+  expect(new Set(layout.edges.filter(edge => edge.label).map(edge => `${edge.x},${edge.y}`)).size).toBe(count);
+  expectClearRoutes(layout);
+});
+
 it('grows shared lane width to fit a long caption beside a same-column handoff without adding a footer', () => {
   const nodes = ['source', 'target'].map((id, index) => ({ id, label: id, lines: [id], x: 200, y: 100 + index * 200, width: 240, height: 72 }));
   const layout = swimlaneLayout(nodes, [{ id: 'handoff', label: 'An important handoff', lines: ['An important handoff'],

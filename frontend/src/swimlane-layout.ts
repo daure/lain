@@ -56,8 +56,9 @@ export function swimlaneLayout(nodes: LayoutNode[], edges: RoutedEdge[], groups:
 
   const grouped = new Set(groups.flatMap(group => group.nodeIds));
   const contentLeft = 32 + lanes[0]!.headingWidth + inset;
+  const packingPassLimit = 3 + edges.length * 2;
   let translated = false;
-  for (let pass = 0; pass < 3; pass++) {
+  for (let pass = 0; pass < packingPassLimit; pass++) {
     fitFrames(true);
     normalizeGroupGaps(definitions, () => groups, (top, bottom, gap, groupId) => {
       const delta = gap - (bottom - top);
@@ -123,5 +124,5 @@ export function swimlaneLayout(nodes: LayoutNode[], edges: RoutedEdge[], groups:
     }
     contentPadding += widthShortage;
   }
-  throw new Error('Swimlane captions need more than three local packing passes.');
+  throw new Error(`Swimlane routing did not converge within ${packingPassLimit} packing passes.`);
 }
