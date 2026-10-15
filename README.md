@@ -151,7 +151,7 @@ Sequence diagrams share one ordered interaction across their scenarios. The full
 
 Participant boxes prepend human or system icons. Calls use solid filled arrows, asynchronous sends use solid open arrows, and replies use dashed open arrows. Lifelines are dashed; scenario relevance dims elements without changing their semantic line styles. Omitted kinds default to system participants and call messages.
 
-The right-side data inspector shows Changes, Before, After, and recorded Calls for the current occurrence. It stays open across views and scenarios until you close it. Heading chips count recorded instances and nested array items or object fields. Select an ERD property to focus its value in the inspector.
+The right-side data inspector shows Changes, Before, After, and recorded Calls for the current occurrence. It starts hidden; use Show data or N to open it. Its visibility persists across views and scenarios. Heading chips count recorded instances and nested array items or object fields. Select an ERD property to focus its value in the inspector.
 
 The sun/moon button to the right of Quick actions switches between light and dark mode. The browser remembers the choice; light mode is the default.
 

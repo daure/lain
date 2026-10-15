@@ -131,7 +131,7 @@ These fields describe behavior, never execution: guards are not evaluated, and e
 
 ## Containers
 
-Swimlanes and groups are available, not defaults. Use them only when they make the explanation clearer. Lanes clarify responsibility across real roles or components; groups clarify a meaningful subprocess or domain boundary. Combine them only when each adds different information. Omit frames that repeat a lane's meaning, manufacture actors, or surround a single routine action.
+Prefer containers (`groups`) over swimlanes when grouping makes the explanation clearer. Groups clarify a meaningful subprocess or domain boundary. Use swimlanes only when responsibility or handoffs across real roles or components add clear value beyond containers. Combine them only when each adds different information. Omit frames that repeat a lane's meaning, manufacture actors, or surround a single routine action.
 
 `domain.groups`: `{id, label, entityIds, parentGroupId?}` shared ERD containers by domain area, external system, API DTOs, or technology boundary; nest to combine concerns. They imply no ownership, deployment, or runtime behavior. Relationships retain concrete endpoints across groups.
 

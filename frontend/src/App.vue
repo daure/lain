@@ -47,7 +47,7 @@ provide(chartDownloadKey, async (format, scope) => {
     format, dark.value ? 'dark' : 'light', scope === 'scenario' ? scenarioId.value : undefined);
   await downloadChartUrl(url);
 });
-const dataOpen = ref(true);
+const dataOpen = ref(false);
 const dataInspector = ref<InstanceType<typeof StepInspector>>();
 const dataToggleButton = ref<HTMLButtonElement>();
 const focusMode = ref(false);

@@ -49,6 +49,13 @@ afterEach(() => {
 it('keeps the inspector and its bounded tab selection across views, scenarios, revisits, and collapse', async () => {
   await mount();
   const pane = inspector();
+  expect(toggle().getAttribute('aria-expanded')).toBe('false');
+  expect(toggle().textContent).toContain('Show data');
+  expect(pane.closest('[inert]')).not.toBeNull();
+  expect(pane.closest('[aria-hidden="true"]')).not.toBeNull();
+  expect((await press('.')).defaultPrevented).toBe(false);
+  expect(selectedDataTab().textContent).toBe('Changes');
+  toggle().click(); await settle();
   expect(toggle().getAttribute('aria-expanded')).toBe('true');
   expect(selectedDataTab().textContent).toBe('Changes');
   expect((await press(',')).defaultPrevented).toBe(false);
@@ -96,6 +103,7 @@ it('counts multiple instances and expandable nested collections while rendering 
     { id: 'created', entityId: 'order', values: { total: null } },
   ], links: [] };
   await mount(authored);
+  await press('n');
   const group = () => inspector().querySelector('.inspector-entity')!;
   expect(group().querySelector('h3 .data-count')!.textContent).toBe('3');
   await click('Domain');
@@ -127,6 +135,7 @@ it('shows ordered recorded calls even when the snapshots are unchanged', async (
   visit.before = structuredClone(visit.after);
   visit.methodCalls = [{ entityId: 'order', methodId: 'mark-paid', instanceId: 'ord-1042' }, { entityId: 'order', methodId: 'mark-paid' }];
   await mount(authored);
+  await press('n');
   expect(inspector().querySelector('.inspector-metrics')!.textContent).toContain('0 properties');
   await press('.'); await press('.'); await press('.');
   expect([...inspector().querySelectorAll('.inspector-calls small')].map(node => node.textContent)).toEqual(['ord-1042', 'Receiver not captured']);
@@ -134,7 +143,7 @@ it('shows ordered recorded calls even when the snapshots are unchanged', async (
 });
 
 it.each(['Changes', 'Before', 'After', 'Calls'])('pages only the active %s data tab within its scroll bounds', async tab => {
-  await mount(); await click(tab);
+  await mount(); await press('n'); await click(tab);
   const body = inspector().querySelector<HTMLElement>('.inspector-body')!;
   Object.defineProperties(body, { clientHeight: { value: 400 }, scrollHeight: { value: 1350 } });
   const cursor = location.search;
@@ -160,6 +169,7 @@ it.each(['Changes', 'Before', 'After', 'Calls'])('pages only the active %s data 
 
 it('guards data shortcuts in editing controls and overlays and exposes them through quick actions', async () => {
   await mount();
+  await press('n');
   const body = inspector().querySelector<HTMLElement>('.inspector-body')!;
   Object.defineProperties(body, { clientHeight: { value: 400 }, scrollHeight: { value: 1350 } });
   body.scrollTop = 300;
@@ -188,7 +198,7 @@ it('guards data shortcuts in editing controls and overlays and exposes them thro
 });
 
 it('focuses a selected ERD field in the inspector without moving the occurrence or main view', async () => {
-  await mount(); await click('First delivery closes fulfillment'); await click('Domain'); await press('n');
+  await mount(); await click('First delivery closes fulfillment'); await click('Domain');
   const cursor = location.search;
   const field = document.querySelector<SVGGElement>('.domain-entity[data-entity-id="fulfillment"] [data-attribute-id="warehouse"]')!;
   field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await settle();
