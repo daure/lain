@@ -106,6 +106,18 @@ function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role' | 'sta
   dagre.layout(graph);
   const placedNodes = nodes.map(node => ({ ...node, ...graph.node(node.id) }));
   const nodeById = new Map(placedNodes.map(node => [node.id, node]));
+  if (lanes.length) {
+    for (const group of groups) {
+      if (groups.some(child => child.parentGroupId === group.id)) continue;
+      const members = group.nodeIds.map(id => nodeById.get(id)!).sort((a, b) => a.x - b.x);
+      if (members.some((node, index) => index && boxBounds(members[index - 1]!).right + groupPadding > boxBounds(node).left)) continue;
+      if (edges.some(edge => group.nodeIds.includes(edge.source) && group.nodeIds.includes(edge.target)
+        && nodeById.get(edge.source)!.x >= nodeById.get(edge.target)!.x)) continue;
+      const centers = members.map(node => node.y).sort((a, b) => a - b);
+      const center = centers[Math.floor(centers.length / 2)]!;
+      for (const node of members) node.y = center;
+    }
+  }
   const placedEdges: RoutedEdge[] = wrappedEdges.map(edge => {
     const placed = graph.edge({ v: edge.source, w: edge.target, name: edge.id });
     const points: Point[] = edge.source === edge.target
@@ -116,6 +128,7 @@ function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role' | 'sta
     }
     return { ...edge, x: placed.x ?? 0, y: placed.y ?? 0, points };
   });
+  if (lanes.length) return swimlaneLayout(placedNodes, placedEdges, groupFrames(headings, placedNodes, [], kind), groups, lanes);
   let placedGroups = groupFrames(headings, placedNodes, placedEdges, kind);
   normalizeGroupGaps(headings, () => placedGroups, (top, bottom, gap) => {
     const delta = gap - (bottom - top);
@@ -132,7 +145,6 @@ function layout(nodes: Pick<LayoutNode, 'id' | 'label' | 'lines' | 'role' | 'sta
   });
   separateBranchLanes(groups, placedGroups, placedEdges);
   placedGroups = groupFrames(headings, placedNodes, placedEdges, kind);
-  if (lanes.length) return swimlaneLayout(placedNodes, placedEdges, placedGroups, groups, lanes);
   let width = graph.graph().width ?? 600;
   let height = graph.graph().height ?? 400;
   if (placedGroups.length) {

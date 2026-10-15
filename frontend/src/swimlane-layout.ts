@@ -28,6 +28,21 @@ export function swimlaneLayout(nodes: LayoutNode[], edges: RoutedEdge[], groups:
   const byDefinition = new Map(definitions.map(group => [group.id, group]));
   const subtree = (id: string): string[] => [id, ...definitions.filter(group => group.parentGroupId === id).flatMap(group => subtree(group.id))];
   const depth = (id: string): number => byDefinition.get(id)?.parentGroupId ? 1 + depth(byDefinition.get(id)!.parentGroupId!) : 0;
+  const forwardDepth = new Map<string, number>();
+  function continuation(id: string): number {
+    const cached = forwardDepth.get(id);
+    if (cached !== undefined) return cached;
+    const next = edges.filter(edge => edge.source === id && byNode.get(edge.target)!.x > byNode.get(id)!.x);
+    const value = Math.max(0, ...next.map(edge => 1 + continuation(edge.target)));
+    forwardDepth.set(id, value);
+    return value;
+  }
+  const priority = (block: Block) => Math.max(...block.nodeIds.map(continuation));
+  const centerline = (block: Block) => {
+    const centers = block.nodeIds.map(id => byNode.get(id)!.y).sort((a, b) => a - b);
+    const middle = Math.floor(centers.length / 2);
+    return centers.length % 2 ? centers[middle]! : (centers[middle - 1]! + centers[middle]!) / 2;
+  };
 
   function move(block: Block, dy: number) {
     for (const id of block.nodeIds) byNode.get(id)!.y += dy;
@@ -82,7 +97,7 @@ export function swimlaneLayout(nodes: LayoutNode[], edges: RoutedEdge[], groups:
     let top = 32;
     for (const lane of lanes) {
       const tracks: Block[][] = [];
-      for (const block of blocks.filter(block => laneByNode.get(block.nodeIds[0]!) === lane).sort((a, b) => a.x - b.x || a.y - b.y)) {
+      for (const block of blocks.filter(block => laneByNode.get(block.nodeIds[0]!) === lane).sort((a, b) => a.x - b.x || priority(b) - priority(a))) {
         const bounds = boxBounds(block);
         const track = tracks.find(track => track.every(other => {
           const placed = boxBounds(other);
@@ -92,8 +107,10 @@ export function swimlaneLayout(nodes: LayoutNode[], edges: RoutedEdge[], groups:
       }
       let trackTop = top + inset;
       for (const track of tracks) {
-        const height = Math.max(...track.map(block => block.height));
-        for (const block of track) move(block, trackTop + height / 2 - block.y);
+        const above = Math.max(...track.map(block => centerline(block) - boxBounds(block).top));
+        const below = Math.max(...track.map(block => boxBounds(block).bottom - centerline(block)));
+        const height = above + below;
+        for (const block of track) move(block, trackTop + above - centerline(block));
         trackTop += height + 42;
       }
       const exceptional = edges.filter(edge => !groupOwner.get(edge.id) && laneByNode.get(edge.source) === lane
@@ -106,7 +123,10 @@ export function swimlaneLayout(nodes: LayoutNode[], edges: RoutedEdge[], groups:
         if (track) track.push(span); else corridors.push([span]);
       }
       const bodyHeight = trackTop - 42 - top + inset;
-      lane.height = Math.max(bodyHeight, Math.max(...lane.lines.map(line => line.length)) * 8 + inset * 2) + corridors.length * 18 + (lanePadding.get(lane.id) ?? 0);
+      const headingHeight = Math.max(...lane.lines.map(line => line.length)) * 8 + inset * 2;
+      const headingSlack = Math.max(0, headingHeight - bodyHeight);
+      for (const block of tracks.flat()) move(block, headingSlack / 2);
+      lane.height = bodyHeight + headingSlack + corridors.length * 18 + (lanePadding.get(lane.id) ?? 0);
       lane.x = (32 + right) / 2; lane.y = top + lane.height / 2; lane.width = right - 32;
       top += lane.height;
     }

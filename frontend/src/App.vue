@@ -7,6 +7,7 @@ import GraphView from './components/GraphView.vue';
 import ScenarioDetails from './components/ScenarioDetails.vue';
 import DomainView from './components/DomainView.vue';
 import SequenceView from './components/SequenceView.vue';
+import ScenarioJump from './components/ScenarioJump.vue';
 import StepInspector from './components/StepInspector.vue';
 import StepNavigator from './components/StepNavigator.vue';
 import QuickActionsDialog from './components/QuickActionsDialog.vue';
@@ -50,7 +51,8 @@ const dataOpen = ref(true);
 const dataInspector = ref<InstanceType<typeof StepInspector>>();
 const dataToggleButton = ref<HTMLButtonElement>();
 const focusMode = ref(false);
-const diagramView = ref<{ canvas?: InstanceType<typeof DiagramViewport> }>();
+const diagramView = ref<{ canvas?: InstanceType<typeof DiagramViewport>; focusNode: (nodeId: string) => void }>();
+const scenarioJump = ref<InstanceType<typeof ScenarioJump>>();
 const domainView = ref<InstanceType<typeof DomainView>>();
 const activeCanvas = computed(() => selectedTab.value === 1 ? diagramView.value?.canvas : selectedTab.value === 2 ? domainView.value?.canvas : undefined);
 const quickDialog = ref(false);
@@ -62,6 +64,7 @@ const scenariosRegion = ref<HTMLElement>();
 const quickButton = ref<HTMLButtonElement>();
 let focusOrigin: HTMLElement | null = null;
 let pendingDialog = false;
+let pendingJumpHints = false;
 let modalClosing = false;
 const ownedDialogSelector = '.quick-actions-dialog[aria-modal="true"]';
 const visualScenarios = computed(() => active.value?.document.diagrams.flatMap(group => active.value!.document.scenarios.filter(item => item.diagramId === group.id)) ?? []);
@@ -81,9 +84,10 @@ const actions = computed(() => quickActions.map(action => ({ ...action, ...(acti
   ys: !scenario.value, yp: !occurrence.value, yd: !diagram.value,
   '=': !activeCanvas.value, '-': !activeCanvas.value, ';': !activeCanvas.value,
   'pan-left': !activeCanvas.value, 'pan-down': !activeCanvas.value, 'pan-up': !activeCanvas.value, 'pan-right': !activeCanvas.value,
+  '?': selectedTab.value !== 1 || !active.value?.document.scenarios.some(item => item.diagramId === diagram.value?.id && item.id !== scenarioId.value),
 })[action.id] })));
 watch(quickDialog, (next, previous) => {
-  if (next) domainView.value?.cancelNumberShortcut();
+  if (next) { domainView.value?.cancelNumberShortcut(); scenarioJump.value?.cancel(); }
   if (previous && !next) modalClosing = true;
 }, { flush: 'sync' });
 const inspectedNodeId = ref('');
@@ -189,6 +193,8 @@ function afterDialogHide() {
   const reopen = pendingDialog;
   pendingDialog = false;
   if (reopen) void nextTick(showQuickActions);
+  else if (pendingJumpHints) scenarioJump.value?.start();
+  pendingJumpHints = false;
 }
 
 function selectTab(position: number, focus = false) {
@@ -219,6 +225,11 @@ function openDetail(targetScenarioId: string) {
   if (navigation.openDetail(targetScenarioId)) selectTab(1, true);
 }
 
+function jumpToOccurrence(targetScenarioId: string, occurrenceId: string) {
+  routes.jumpToOccurrence(targetScenarioId, occurrenceId);
+  selectTab(1, true);
+}
+
 function onTabKeydown(event: KeyboardEvent) {
   const position = { ArrowLeft: selectedTab.value - 1, ArrowRight: selectedTab.value + 1, Home: 0, End: tabs.length - 1 }[event.key];
   if (position === undefined || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
@@ -228,6 +239,11 @@ function onTabKeydown(event: KeyboardEvent) {
 
 function executeAction(id: QuickActionId, heldKey?: string) {
   if (actions.value.find(action => action.id === id)?.disabled !== false) return;
+  if (id === '?') {
+    if (quickDialog.value) { pendingJumpHints = true; modalClosing = true; quickDialog.value = false; }
+    else scenarioJump.value?.start();
+    return;
+  }
   if (id === 'n' || id === ',' || id === '.' || id === "'" || id === '/') {
     if (id === 'n') toggleData();
     else if (id === "'" || id === '/') dataInspector.value?.page(id === "'" ? -1 : 1);
@@ -326,7 +342,19 @@ function canUseDomainNumbers(target: EventTarget | null) {
     && !document.querySelector('.p-select-overlay');
 }
 
+function canUseScenarioJump(target: EventTarget | null) {
+  return selectedTab.value === 1 && !!active.value && !!scenario.value && !quickDialog.value && !pendingDialog && !hasUnknownModal()
+    && !isEditableTarget(target) && !isSelectionOverlayTarget(target) && !document.querySelector('.p-select-overlay, [data-chart-export-menu]');
+}
+
 function onOwnedKeydown(event: KeyboardEvent) {
+  if (!canUseScenarioJump(event.target)) scenarioJump.value?.cancel();
+  else if (scenarioJump.value?.handleKeydown(event, () => canUseScenarioJump(document.activeElement))) {
+    firstEventDeadline = 0;
+    yankDeadline = 0;
+    event.preventDefault(); event.stopPropagation();
+    return;
+  }
   if (document.querySelector('[data-chart-export-menu]')) return;
   if (event.defaultPrevented || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !canUseDomainNumbers(event.target)) {
     domainView.value?.cancelNumberShortcut();
@@ -376,6 +404,7 @@ function onOwnedKeydown(event: KeyboardEvent) {
 }
 
 function onGlobalKeydown(event: KeyboardEvent) {
+  if (event.key === '?') return;
   if (document.querySelector('[data-chart-export-menu]')) return;
   const key = arrowKeyActions[event.key] ?? event.key;
   const awaitingFirstEvent = Date.now() < firstEventDeadline;
@@ -425,6 +454,10 @@ function onGlobalKeydown(event: KeyboardEvent) {
 }
 
 function inspectNode(id: string) {
+  if (inspectedDiagramId.value === diagram.value?.id && inspectedNodeId.value === id) {
+    inspectedNodeId.value = ''; inspectedDiagramId.value = ''; pickedOccurrenceId.value = null;
+    return;
+  }
   inspectedDiagramId.value = diagram.value?.id ?? '';
   inspectedNodeId.value = id;
   pickedOccurrenceId.value = null;
@@ -437,7 +470,7 @@ function onPanKeyup(event: KeyboardEvent) {
   else activeCanvas.value?.releasePan(event.key.toUpperCase());
 }
 
-function cancelKeyboardPan() { activeCanvas.value?.cancelPan(); domainView.value?.cancelNumberShortcut(); }
+function cancelKeyboardPan() { activeCanvas.value?.cancelPan(); domainView.value?.cancelNumberShortcut(); scenarioJump.value?.cancel(); }
 
 function onPanFocus(event: FocusEvent) {
   if (isEditableTarget(event.target) || isSelectionOverlayTarget(event.target) || hasUnknownModal()) cancelKeyboardPan();
@@ -526,8 +559,10 @@ onUnmounted(() => {
           <div class="event-panels">
           <ScenarioDetails v-show="selectedTab === 0" id="event-panel-0" role="tabpanel" aria-labelledby="event-tab-0" tabindex="0" :document="active.document" :scenario="scenario" :occurrence="occurrence" />
           <div v-if="selectedTab === 1" id="event-panel-1" class="diagram-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-1" tabindex="0">
+            <ScenarioJump ref="scenarioJump" :diagram="diagram" :scenarios="active.document.scenarios" :scenario-id="scenario.id" :occurrence-id="occurrence.id" @jump="jumpToOccurrence" @focus="diagramView?.focusNode($event)">
             <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :state-key="`${canvasStateKey}/diagram`" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" :links="detailLinks" @inspect="inspectNode" @open="openDetail" />
             <GraphView v-else-if="graph" ref="diagramView" :key="diagram.id" :state-key="`${canvasStateKey}/diagram`" :layout="graph" :title="diagram.title" :scenario-title="scenario.title" :current-node-id="occurrence.nodeId" :current-occurrence-id="`${scenario.id}/${occurrence.id}`" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" :links="detailLinks" interactive @select="inspectNode" @open="openDetail" />
+            </ScenarioJump>
             <div v-if="inspectedNode" class="node-inspector"><h3>{{ inspectedNode.label }}</h3><p class="muted">Entities: {{ inspectedNode.entityIds.map(id => active?.document.domain.entities.find(entity => entity.id === id)?.label).join(', ') || 'None linked' }}</p>
               <p v-if="!nodeOccurrences.length" class="offpath-note">Off this scenario’s path. You can inspect this node, but it has no captured occurrence here. The current event stays unchanged.</p>
               <div v-else-if="nodeOccurrences.length > 1" class="occurrence-picker"><p>This node appears {{ nodeOccurrences.length }} times. Choose an occurrence; each visit has its own snapshots.</p><Select v-model="pickedOccurrenceId" :options="nodeOccurrences" option-label="label" option-value="id" placeholder="Choose a recorded occurrence" aria-label="Recorded occurrence" /><Button label="Go to occurrence" :disabled="!pickedOccurrenceId" @click="pickedOccurrenceId && navigation.selectOccurrence(pickedOccurrenceId)" /></div>

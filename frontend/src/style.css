@@ -150,6 +150,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.75rem;
 .graph-arrow.off-scenario path{fill:var(--offpath-line,#c9d2df)}
 .graph-arrow.walked path{fill:var(--blue)}
 .graph-node.current{--graph-node-highlight:var(--current-node-highlight)}
+.graph-node:focus{outline:none}
 .graph-node.current .node-shape,.graph.scenario-path .graph-node.current .node-shape{stroke:var(--current-node-border);stroke-width:3}
 .graph:not(.scenario-path):has(.graph-edge.walked) .graph-arrow.default path{fill:var(--blue)}
 .graph-node.interactive:hover .node-shape,.graph-node:focus .node-shape,.graph.scenario-path .graph-node.interactive:hover .node-shape,.graph.scenario-path .graph-node:focus .node-shape{stroke:var(--graph-node-highlight,var(--blue));stroke-width:3}

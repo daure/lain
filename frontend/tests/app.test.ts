@@ -712,6 +712,28 @@ it('wires traversal and automatically updates the explanation while preserving r
   } finally { app.unmount(); }
 });
 
+it.each(['existing', 'check', 'capture'])('toggles the %s node inspector without navigating when it closes', async nodeId => {
+  const app = await mountFixture();
+  try {
+    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    button('Repeated callback keeps one fulfillment').click(); await settle();
+    button('Diagram').click(); await settle();
+    const node = document.querySelector<SVGGElement>(`.diagram-panel [data-node-id="${nodeId}"]`)!;
+    const click = async () => { node.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle(); };
+    await click();
+    expect(document.querySelector('.diagram-panel .node-inspector')).not.toBeNull();
+    if (nodeId === 'check') expect(document.querySelector('.occurrence-picker')).not.toBeNull();
+    if (nodeId === 'capture') expect(document.querySelector('.offpath-note')).not.toBeNull();
+    await press('h');
+    const cursor = location.search;
+    await click();
+    expect(document.querySelector('.diagram-panel .node-inspector')).toBeNull();
+    expect(location.search).toBe(cursor);
+    await click();
+    expect(document.querySelector('.diagram-panel .node-inspector')).not.toBeNull();
+  } finally { app.unmount(); }
+});
+
 it('renders entity methods as safe definitions in the domain compartment and inspector without snapshot rows', async () => {
   const documentFixture = structuredClone(fixture) as Explanation;
   const signature = 'capturePayment(paymentId: string): void';
@@ -1097,7 +1119,7 @@ it.each(['Diagram', 'Domain'])('zooms %s and toggles fit / 1:1 through guarded s
     canvas().querySelector<HTMLButtonElement>('[aria-label="Zoom to 100% and focus"]')!.click(); await settle();
     expect(zoom()).toBe(1);
     await press('='); await press('k', { ctrlKey: true });
-    expect([...document.querySelectorAll('[role="group"][aria-label="Diagram"] kbd')].map(key => key.textContent)).toEqual(['=', '-', ';', 'Shift+H', 'Shift+J', 'Shift+K', 'Shift+L']);
+    expect([...document.querySelectorAll('[role="group"][aria-label="Diagram"] kbd')].map(key => key.textContent)).toEqual(['=', '-', ';', '?', 'Shift+H', 'Shift+J', 'Shift+K', 'Shift+L']);
     const search = document.querySelector<HTMLInputElement>('[aria-label="Search quick actions"]')!;
     await press(';', {}, search); expect(zoom()).toBe(1.25);
     search.value = 'Toggle fit'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle();
@@ -1227,8 +1249,8 @@ it('searches all quick actions, skips disabled options, executes selection, and 
     await press('k', { ctrlKey: true }, origin);
     const search = () => document.querySelector<HTMLInputElement>('[aria-label="Search quick actions"]')!;
     expect(document.activeElement).toBe(search());
-    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(27);
-    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(27);
+    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(28);
+    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(28);
     await closeDialog();
     document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
     await press('k', { ctrlKey: true });

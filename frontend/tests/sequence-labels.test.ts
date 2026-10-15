@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createApp, h, nextTick } from 'vue';
+import { createApp, h, nextTick, ref } from 'vue';
 import { expect, it } from 'vitest';
 import SequenceView from '../src/components/SequenceView.vue';
 import type { Diagram, Scenario } from '../src/model';
@@ -43,5 +43,35 @@ it.each([false, true])('wraps sequence labels into two lines before truncating w
         expect(Number(row.getAttribute('y'))).toBeGreaterThan(Number(previous.getAttribute('y')) + Number(previous.getAttribute('height')));
       }
     }
+  } finally { app.unmount(); }
+});
+
+it('anchors sequence revisit counts above the rendered label’s upper-right text bounds', async () => {
+  const diagram: Diagram = { id: 'retry', title: 'Receipt retry', kind: 'sequence',
+    nodes: [{ id: 'check', label: 'Check the recorded receipt before handling the callback', entityIds: [] }],
+    edges: [{ id: 'retry-check', sourceNodeId: 'check', targetNodeId: 'check', label: 'Retry' }],
+    sequence: {
+      participants: [{ id: 'client', label: 'Client' }, { id: 'service', label: 'Service' }],
+      messages: [{ nodeId: 'check', fromParticipantId: 'client', toParticipantId: 'service' }],
+      body: [{ kind: 'loop', id: 'retries', guard: 'Receipt verification repeats', body: [{ kind: 'message', nodeId: 'check' }] }],
+    },
+  };
+  const scenario: Scenario = { id: 'verify', title: 'Verify receipt twice', diagramId: diagram.id,
+    occurrences: [0, 1].map(index => ({ id: `visit-${index}`, nodeId: 'check', incomingEdgeId: index ? 'retry-check' : null,
+      trigger: null, narration: '', before: { instances: [], links: [] }, after: { instances: [], links: [] } })),
+  };
+  const selected = ref('visit-0');
+  const root = document.createElement('div');
+  const app = createApp({ render: () => h(SequenceView, { diagram, scenario, currentOccurrenceId: selected.value }) });
+  app.mount(root);
+  try {
+    const label = root.querySelector('.sequence-message > svg')!;
+    const text = label.querySelector('text')!;
+    Object.defineProperty(text, 'getBBox', { value: () => ({ x: 12, y: 3, width: 144, height: 32 }) });
+    selected.value = 'visit-1'; await nextTick(); await nextTick();
+    const x = Number(label.getAttribute('x')) + 12 + 144 + 15;
+    const y = Number(label.getAttribute('y')) + 3 - 2;
+    expect(root.querySelector('.sequence-visit-badge')!.getAttribute('transform')).toBe(`translate(${x},${y})`);
+    expect(root.querySelector('.sequence-visit-badge text')!.textContent).toBe('2');
   } finally { app.unmount(); }
 });

@@ -7,6 +7,7 @@ import { sequenceHeadings, stickySequenceContext } from '../sequence-sticky';
 import SequenceHeading from './SequenceHeading.vue';
 import DiagramViewport from './DiagramViewport.vue';
 import DrillLink from './DrillLink.vue';
+import ScenarioJumpBadge from './ScenarioJumpBadge.vue';
 import { activateDiagramNode, diagramLinkHint, type DiagramLink } from '../diagram-links';
 
 const props = withDefaults(defineProps<{
@@ -32,6 +33,7 @@ const scenarioNodes = computed(() => new Set(props.scenario.occurrences.map(occu
 const currentNodeId = computed(() => props.scenario.occurrences[currentIndex.value]?.nodeId);
 const focusedNodeId = ref<string>();
 const labelEnds = ref(new Map<string, number>());
+const labelBounds = ref(new Map<string, { right: number; top: number }>());
 const highlightedNodes = computed(() => new Set([
   ...props.scenario.occurrences.slice(0, currentIndex.value + 1).map(occurrence => occurrence.nodeId),
   ...(focusedNodeId.value ? [focusedNodeId.value] : []),
@@ -101,7 +103,12 @@ const focusPoint = computed(() => {
   const row = rows.value.find(row => row.current);
   return row ? { x: width.value / 2, y: row.y - 13 } : undefined;
 });
-defineExpose({ canvas });
+defineExpose({ canvas, focusNode });
+
+function focusNode(id: string) {
+  const row = rows.value.find(row => row.node.id === id);
+  if (row) void canvas.value?.focusAt({ x: width.value / 2, y: row.y - 13 });
+}
 
 function trackScroll() {
   const element = region.value;
@@ -149,6 +156,23 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
   const bounds = (element as SVGGraphicsElement).getBBox();
   const end = bounds.x + bounds.width;
   if (labelEnds.value.get(key) !== end) labelEnds.value.set(key, end);
+}
+
+function measureMessageLabel(element: Element | ComponentPublicInstance | null, key: string) {
+  if (!(element instanceof SVGElement) || typeof (element as SVGGraphicsElement).getBBox !== 'function') return;
+  const bounds = (element as SVGGraphicsElement).getBBox();
+  const right = bounds.x + bounds.width;
+  const previous = labelBounds.value.get(key);
+  if (previous?.right !== right || previous.top !== bounds.y) labelBounds.value.set(key, { right, top: bounds.y });
+}
+
+function visitBadgePosition(row: typeof rows.value[number]) {
+  const labelLeft = row.self ? row.labelX : row.labelX - row.labelWidth / 2;
+  const labelTop = row.y - 28 - (row.lines.length - 1) * 16;
+  const textWidth = Math.max(...row.lines.map(line => line.length)) * 8;
+  const bounds = labelBounds.value.get(row.key);
+  const right = bounds?.right ?? (row.self ? textWidth : (row.labelWidth + textWidth) / 2);
+  return `translate(${labelLeft + right + 15},${labelTop + (bounds?.top ?? 6) - 2})`;
 }
 </script>
 
@@ -219,7 +243,7 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
       </template>
       <SequenceHeading v-for="frame in compact ? [] : layout.frames" :key="`${frame.id}-label`"
         v-show="!pinnedIds.has(frame.id)" :data-heading-id="frame.id" :frame="frame" :width="width" :y="frame.y" :selected="onScenarioPath(frame.nodeIds)" />
-      <g v-for="row in rows" :key="row.key">
+      <g v-for="row in rows" :key="row.key" class="scenario-jump-target">
       <g :class="['sequence-message', row.kind, { visited: row.visited, current: row.current, upcoming: row.upcoming, 'off-scenario': row.offScenario, self: row.self }]"
          :data-node-id="row.node.id" :data-occurrence-id="row.occurrence?.id" role="button" tabindex="0" :aria-label="row.accessibleLabel" :aria-current="row.current ? 'step' : undefined"
            @click="select(row)" @keydown.enter="activateDiagramNode($event, links?.get(row.node.id), () => select(row), id => emit('open', id))" @keydown.space.prevent="select(row)"
@@ -228,12 +252,12 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
         <rect class="sequence-row" x="12" :y="row.y - 50" :width="width - 24" height="74" rx="6" />
         <path class="sequence-message-arrow" :d="row.path" :marker-end="`url(#${markerId}-${row.arrowhead}-${row.visited ? 'visited' : row.offScenario ? 'off-scenario' : 'upcoming'})`" />
         <svg :x="row.self ? row.labelX : row.labelX - row.labelWidth / 2" :y="row.y - 28 - (row.lines.length - 1) * 16" :width="row.labelWidth" :height="24 + (row.lines.length - 1) * 16" overflow="hidden">
-          <text :text-anchor="row.self ? 'start' : 'middle'">
+          <text :ref="element => measureMessageLabel(element, row.key)" :text-anchor="row.self ? 'start' : 'middle'">
             <tspan v-for="(line, index) in row.lines" :key="index" :ref="element => index === row.lines.length - 1 && measureLabel(element, row.key)"
                    :x="row.self ? 0 : row.labelWidth / 2" :y="18 + index * 16">{{ line }}</tspan>
           </text>
         </svg>
-        <g v-if="row.visitCount > 0" class="sequence-visit-badge" :transform="`translate(${width - 30},${row.y - 32})`">
+        <g v-if="row.visitCount > 0" class="sequence-visit-badge" :transform="visitBadgePosition(row)">
           <title>{{ row.visitCount }} visits through the current occurrence</title>
           <circle r="11" /><text text-anchor="middle" dominant-baseline="central">{{ row.visitCount }}</text>
         </g>
@@ -241,6 +265,7 @@ function measureLabel(element: Element | ComponentPublicInstance | null, key: st
       <DrillLink v-if="links?.has(row.node.id)" svg :link="links.get(row.node.id)!"
                  :x="(row.self ? row.labelX : row.labelX - row.labelWidth / 2) + (labelEnds.get(row.key) ?? row.labelWidth) + 8 - 20 * 8 / 28"
                  :y="row.y - 26" :style="{ color: row.current || row.visited ? 'var(--blue)' : 'var(--muted)' }" @open="emit('open', $event)" />
+      <ScenarioJumpBadge v-if="!compact" :node-id="row.node.id" :x="width / 2" :y="row.y - 50" />
       </g>
     </svg>
     </template>

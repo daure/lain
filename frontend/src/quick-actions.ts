@@ -19,6 +19,7 @@ export const quickActions = [
   { id: '=', title: 'Zoom in', description: 'Enlarge the active diagram', group: 'Diagram', icon: 'pi-plus' },
   { id: '-', title: 'Zoom out', description: 'Shrink the active diagram', group: 'Diagram', icon: 'pi-minus' },
   { id: ';', title: 'Toggle fit / 1:1', description: 'Switch between the whole layout and actual size focused on the current step', group: 'Diagram', icon: 'pi-expand' },
+  { id: '?', title: 'Jump to another scenario at a node', description: 'Show numbered nodes, then choose a numbered alternative scenario', group: 'Diagram', icon: 'pi-directions-alt' },
   { id: 'pan-left', shortcut: 'Shift+H', title: 'Pan left', description: 'Scroll left by 187.5 pixels; hold the shortcut to continue', group: 'Diagram', icon: 'pi-arrow-left' },
   { id: 'pan-down', shortcut: 'Shift+J', title: 'Pan down', description: 'Scroll down by 187.5 pixels; hold the shortcut to continue', group: 'Diagram', icon: 'pi-arrow-down' },
   { id: 'pan-up', shortcut: 'Shift+K', title: 'Pan up', description: 'Scroll up by 187.5 pixels; hold the shortcut to continue', group: 'Diagram', icon: 'pi-arrow-up' },

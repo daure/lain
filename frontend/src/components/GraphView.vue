@@ -3,6 +3,7 @@ import { computed, ref, useId, type ComponentPublicInstance } from 'vue';
 import type { GraphLayout, LayoutNode } from '../layout';
 import DiagramViewport from './DiagramViewport.vue';
 import DrillLink from './DrillLink.vue';
+import ScenarioJumpBadge from './ScenarioJumpBadge.vue';
 import { activateDiagramNode, diagramLinkHint, type DiagramLink } from '../diagram-links';
 import { flowNodeShape } from '../flow-shapes';
 
@@ -23,7 +24,7 @@ const props = defineProps<{
 const emit = defineEmits<{ select: [id: string]; open: [scenarioId: string] }>();
 const canvas = ref<InstanceType<typeof DiagramViewport>>();
 const focusPoint = computed(() => props.layout.nodes.find(node => node.id === props.currentNodeId));
-defineExpose({ canvas });
+defineExpose({ canvas, focusNode });
 const markerId = `arrow-${useId().replace(/[^a-z0-9-]/gi, '')}`;
 const arrowStyles = ['default', 'on-scenario', 'off-scenario', 'walked'] as const;
 const nodeVisitCounts = computed(() => countVisits(props.visitedNodeIds));
@@ -43,6 +44,11 @@ function countVisits(ids: string[] | undefined) {
   const counts = new Map<string, number>();
   for (const id of ids ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
   return counts;
+}
+
+function focusNode(id: string) {
+  const node = props.layout.nodes.find(node => node.id === id);
+  if (node) void canvas.value?.focusAt(node);
 }
 
 function nodeBadgeCount(id: string) {
@@ -119,7 +125,7 @@ function edgeMarker(id: string) {
           <tspan v-for="(line, index) in edge.lines" :key="index" :x="edge.x" :dy="index ? 16 : 0">{{ line }}<tspan v-if="index === edge.lines.length - 1 && (edgeVisitCounts.get(edge.id) ?? 0) > 1" class="edge-visit-count" dx="6">×{{ edgeVisitCounts.get(edge.id) }}</tspan></tspan>
         </text>
       </g>
-      <g v-for="node in layout.nodes" :key="node.id" :transform="`translate(${node.x - node.width / 2},${node.y - node.height / 2})`">
+      <g v-for="node in layout.nodes" :key="node.id" class="scenario-jump-target" :transform="`translate(${node.x - node.width / 2},${node.y - node.height / 2})`">
       <g :data-node-id="node.id"
          :class="['graph-node', { 'state-marker': node.stateRole, current: node.id === currentNodeId, visited: visitedNodeIds?.includes(node.id), interactive, 'on-scenario': scenarioNodeIds?.includes(node.id), 'off-scenario': scenarioNodeIds !== undefined && !scenarioNodeIds.includes(node.id) }]"
          :role="interactive ? 'button' : undefined" :tabindex="interactive ? 0 : undefined"
@@ -147,6 +153,7 @@ function edgeMarker(id: string) {
       </g>
       <DrillLink v-if="interactive && links?.has(node.id)" svg :link="links.get(node.id)!"
                  :x="node.width / 2 - 10" :y="node.height - 28" :class="{ current: node.id === currentNodeId, visited: visitedNodeIds?.includes(node.id) }" @open="emit('open', $event)" />
+      <ScenarioJumpBadge v-if="interactive" :node-id="node.id" :x="node.width / 2" :y="0" />
       </g>
     </svg>
   </DiagramViewport>

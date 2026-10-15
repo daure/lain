@@ -99,6 +99,16 @@ export function useBrowserNavigation(library: ReturnType<typeof useLibrary>, nav
     write('push');
   }
 
+  function jumpToOccurrence(scenarioId: string, occurrenceId: string) {
+    const target = navigation.document.value?.scenarios.find(item => item.id === scenarioId);
+    if (!target?.occurrences.some(item => item.id === occurrenceId)) return;
+    applying = true;
+    navigation.selectScenario(scenarioId);
+    navigation.selectOccurrence(occurrenceId);
+    applying = false;
+    write('push');
+  }
+
   function back() {
     ++generation;
     applying = true;
@@ -114,5 +124,5 @@ export function useBrowserNavigation(library: ReturnType<typeof useLibrary>, nav
     stopActive(); stopCursor(); stopReady(); stopDeleted();
   }
 
-  return { start, stop, select, reset, back, traverseDrill };
+  return { start, stop, select, reset, back, traverseDrill, jumpToOccurrence };
 }

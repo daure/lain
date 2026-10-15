@@ -4,7 +4,8 @@ import { boxBounds, nodeConnection, type LayoutEdge, type LayoutGroup, type Layo
 type Bounds = ReturnType<typeof boxBounds>;
 export type RoutingDemand = { width: number; height: number };
 type Terminals = ReturnType<typeof swimlanePorts>;
-type Route = { edge: RoutedEdge; points: Point[]; domain: Bounds; obstacles: Bounds[]; owner: string; alternatives: Point[][]; terminals: Terminals };
+type RouteOption = { points: Point[]; terminals: Terminals };
+type Route = RouteOption & { edge: RoutedEdge; domain: Bounds; obstacles: Bounds[]; owner: string; alternatives: RouteOption[] };
 const margin = 12;
 const cornerRadius = 6;
 const terminalOffset = graphTerminalRun + cornerRadius;
@@ -78,6 +79,19 @@ export function swimlanePorts(source: LayoutNode, target: LayoutNode) {
   const start = { x: source.x, y: a.bottom }; const end = { x: target.x, y: b.bottom };
   const escape = { x: source.x, y: a.bottom + terminalOffset }; const entry = { x: target.x, y: b.bottom + terminalOffset };
   return { start: nodeConnection(source, escape, start), end: nodeConnection(target, entry, end), escape, entry };
+}
+
+function alternativePorts(source: LayoutNode, target: LayoutNode): Terminals[] {
+  const ordinary = swimlanePorts(source, target);
+  const down = source.y < target.y;
+  const a = boxBounds(source); const b = boxBounds(target);
+  const start = { x: source.x, y: down ? a.bottom : a.top };
+  const end = { x: target.x, y: down ? b.top : b.bottom };
+  const escape = { x: start.x, y: start.y + (down ? terminalOffset : -terminalOffset) };
+  const entry = { x: end.x, y: end.y + (down ? -terminalOffset : terminalOffset) };
+  const departure = { start: nodeConnection(source, escape, start), escape };
+  const arrival = { end: nodeConnection(target, entry, end), entry };
+  return [ordinary, { ...ordinary, ...departure }, { ...ordinary, ...arrival }, { ...departure, ...arrival }];
 }
 
 function candidates(start: Point, end: Point, domain: Bounds): Point[][] {
@@ -238,28 +252,41 @@ export function routeSwimlaneEdges(nodes: LayoutNode[], edges: RoutedEdge[], gro
         ? { ...frameBounds, bottom: frameBounds.top + frame.headerHeight } : frameBounds;
     })];
     const blocked = obstacles.map(bounds => expand(bounds, 8));
-    const terminals = swimlanePorts(byNode.get(edge.source)!, byNode.get(edge.target)!);
-    const { start, end, escape, entry } = terminals;
-    const alternatives = candidates(escape, entry, domain)
-      .filter(points => points.every((point, index) => !index || clearSegment(points[index - 1]!, point, blocked)))
-      .map(points => simplify([start, ...points, end])).filter(validTurns);
-    if (!alternatives.length) {
-      const grid = buildGrid(escape, entry, blocked, domain);
-      const minimum = grid && gridRoute(grid, terminals, []);
-      if (!minimum) { reserveDemand(shortages, owner, { width: 0, height: 48 }); continue; }
-      const points = simplify([start, ...minimum, end]);
-      alternatives.push(points);
-      const previous = routes.map(route => route.points);
-      if (points.slice(1).some((point, index) => overlap(points[index]!, point, previous) > 0)) {
-        const occupied = gridRoute(grid!, terminals, previous);
-        if (occupied) alternatives.push(simplify([start, ...occupied, end]));
+    const source = byNode.get(edge.source)!; const target = byNode.get(edge.target)!;
+    const ports = Math.abs(source.y - target.y) < 1e-6
+      ? [swimlanePorts(source, target)] : alternativePorts(source, target);
+    const options = ports.flatMap(terminals => {
+      const { start, end, escape, entry } = terminals;
+      const terminalObstacles = blocked.filter((_, index) => index >= nodes.length || nodes[index]!.id !== source.id && nodes[index]!.id !== target.id);
+      if (!clearSegment(start, escape, terminalObstacles) || !clearSegment(entry, end, terminalObstacles)) return [];
+      const alternatives = candidates(escape, entry, domain)
+        .filter(points => points.every((point, index) => !index || clearSegment(points[index - 1]!, point, blocked)))
+        .map(points => simplify([start, ...points, end])).filter(validTurns);
+      if (!alternatives.length) {
+        const grid = buildGrid(escape, entry, blocked, domain);
+        const minimum = grid && gridRoute(grid, terminals, []);
+        if (!minimum) return [];
+        const points = simplify([start, ...minimum, end]);
+        alternatives.push(points);
+        const previous = routes.map(route => route.points);
+        if (points.slice(1).some((point, index) => overlap(points[index]!, point, previous) > 0)) {
+          const occupied = gridRoute(grid!, terminals, previous);
+          if (occupied) alternatives.push(simplify([start, ...occupied, end]));
+        }
       }
-    }
-    const shortest = Math.min(...alternatives.map(length));
+      return alternatives.map(points => ({ points, terminals }));
+    });
+    if (!options.length) { reserveDemand(shortages, owner, { width: 0, height: 48 }); continue; }
+    const shortest = Math.min(...options.map(option => length(option.points)));
     const budget = shortest + Math.max(64, shortest * .25);
-    const eligible = alternatives.filter(points => length(points) <= budget);
-    eligible.sort((a, b) => score(a, routes.map(route => route.points)) - score(b, routes.map(route => route.points)));
-    routes.push({ edge, points: eligible[0]!, alternatives: eligible, domain, obstacles, owner, terminals });
+    const eligible = options.filter(option => length(option.points) <= budget);
+    const optionScore = (option: RouteOption) => score(option.points, routes.map(route => route.points))
+      + (routes.some(route => route.edge.source === edge.source && route.edge.target !== edge.target
+        && Math.abs(byNode.get(route.edge.target)!.y - target.y) > 1e-6
+        && distance(route.terminals.start, option.terminals.start) < 1e-6) ? terminalOffset * 4 : 0);
+    eligible.sort((a, b) => optionScore(a) - optionScore(b));
+    const selected = eligible[0]!;
+    routes.push({ edge, ...selected, alternatives: eligible, domain, obstacles, owner });
   }
   if (shortages.size) return { edges: [], shortages };
   const labels = new Map<string, Point>();
@@ -270,29 +297,30 @@ export function routeSwimlaneEdges(nodes: LayoutNode[], edges: RoutedEdge[], gro
   })) {
     let point = placeCaption(route, routes, captions);
     if (!point) {
-      const original = route.points;
-      const local = [...route.alternatives, ...captionRoutes(route, captions)].sort((a, b) => length(a) - length(b) || score(a, []) - score(b, []));
+      const original = { points: route.points, terminals: route.terminals };
+      const local = [...route.alternatives, ...captionRoutes(route, captions).map(points => ({ points, terminals: route.terminals }))]
+        .sort((a, b) => score(a.points, []) - score(b.points, []));
       for (const alternative of local) {
-        if (!alternative.every(point => inside(point, route.domain))) continue;
-        if (!clearCaptionRoute(alternative, captions)) continue;
-        route.points = alternative;
+        if (!alternative.points.every(point => inside(point, route.domain))) continue;
+        if (!clearCaptionRoute(alternative.points, captions)) continue;
+        Object.assign(route, alternative);
         point = placeCaption(route, routes, captions);
         if (point) break;
       }
       if (!point) {
-        let best: { points: Point[]; point: Point; demand: RoutingDemand } | undefined;
+        let best: RouteOption & { point: Point; demand: RoutingDemand } | undefined;
         for (const alternative of local) {
-          if (!clearCaptionRoute(alternative, captions)) continue;
-          route.points = alternative;
+          if (!clearCaptionRoute(alternative.points, captions)) continue;
+          Object.assign(route, alternative);
           const candidate = placeCaption(route, routes, captions, true);
           if (!candidate) continue;
           const demand = demandFor(route, candidate);
-          if (!best || demand.width + demand.height < best.demand.width + best.demand.height) best = { points: alternative, point: candidate, demand };
+          if (!best || demand.width + demand.height < best.demand.width + best.demand.height) best = { ...alternative, point: candidate, demand };
         }
         if (best) {
-          route.points = best.points; point = best.point;
+          route.points = best.points; route.terminals = best.terminals; point = best.point;
           reserveDemand(shortages, route.owner, best.demand);
-        } else route.points = original;
+        } else Object.assign(route, original);
       }
     }
     if (!point) { reserveDemand(shortages, route.owner, { width: 0, height: captionSize(route.edge).height + margin * 2 + 2 }); continue; }

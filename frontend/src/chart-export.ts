@@ -13,7 +13,7 @@ const presentationProperties = [
 
 function cleanChart(svg: SVGSVGElement, scope: ExportScope) {
   svg.querySelectorAll<SVGTextElement>('text[data-export-y]').forEach(label => label.setAttribute('y', label.dataset.exportY!));
-  svg.querySelectorAll('title, .node-visit-badge, .edge-visit-count, .sequence-visit-badge, .sequence-row-highlight, .domain-instance-count, .domain-activity-surface, .domain-call-marker, .domain-shortcut-number, .domain-shortcut-divider, .drill-link').forEach(element => element.remove());
+  svg.querySelectorAll('title, .node-visit-badge, .edge-visit-count, .sequence-visit-badge, .sequence-row-highlight, .domain-instance-count, .domain-activity-surface, .domain-call-marker, .domain-shortcut-number, .domain-shortcut-divider, .drill-link, .scenario-jump-badge').forEach(element => element.remove());
   for (const element of [svg, ...svg.querySelectorAll<SVGElement>('*')]) {
     element.classList.remove(...stateClasses);
     if (!element.matches('.sequence-fragment, .sequence-operand, .fragment-heading, .sequence-operand-heading, .operand-surface')) element.classList.remove('selected');

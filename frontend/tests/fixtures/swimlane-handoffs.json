@@ -1,0 +1,45 @@
+{
+  "id": "request-routing",
+  "title": "Request routing",
+  "kind": "flow",
+  "nodes": [
+    { "id": "request", "label": "Receive request", "role": "start", "entityIds": [] },
+    { "id": "validate", "label": "Is the request valid?", "role": "decision", "entityIds": [] },
+    { "id": "prepare", "label": "Prepare request", "entityIds": [] },
+    { "id": "read", "label": "Read request data", "role": "inputOutput", "entityIds": [] },
+    { "id": "route", "label": "Choose the processing route", "role": "decision", "entityIds": [] },
+    { "id": "record", "label": "Create processing record", "role": "document", "entityIds": [] },
+    { "id": "process", "label": "Process request", "entityIds": [] },
+    { "id": "save", "label": "Save processing result", "entityIds": [] },
+    { "id": "review", "label": "Review the result", "role": "manualOperation", "entityIds": [] },
+    { "id": "send", "label": "Send result", "role": "inputOutput", "entityIds": [] },
+    { "id": "acknowledge", "label": "Receive confirmation", "role": "inputOutput", "entityIds": [] },
+    { "id": "complete", "label": "Request completed", "role": "end", "entityIds": [] },
+    { "id": "reject", "label": "Request rejected", "role": "end", "entityIds": [] },
+    { "id": "manual", "label": "Manual result delivery", "role": "inputOutput", "entityIds": [] }
+  ],
+  "edges": [
+    { "id": "request-validate", "sourceNodeId": "request", "targetNodeId": "validate", "label": "" },
+    { "id": "validate-prepare", "sourceNodeId": "validate", "targetNodeId": "prepare", "label": "Request accepted" },
+    { "id": "prepare-read", "sourceNodeId": "prepare", "targetNodeId": "read", "label": "Read data" },
+    { "id": "read-route", "sourceNodeId": "read", "targetNodeId": "route", "label": "" },
+    { "id": "route-record", "sourceNodeId": "route", "targetNodeId": "record", "label": "Standard route" },
+    { "id": "route-record-cached", "sourceNodeId": "route", "targetNodeId": "record", "label": "Cached result" },
+    { "id": "route-record-fallback", "sourceNodeId": "route", "targetNodeId": "record", "label": "Fallback route" },
+    { "id": "record-process", "sourceNodeId": "record", "targetNodeId": "process", "label": "" },
+    { "id": "process-save", "sourceNodeId": "process", "targetNodeId": "save", "label": "" },
+    { "id": "save-review", "sourceNodeId": "save", "targetNodeId": "review", "label": "Review result" },
+    { "id": "review-send", "sourceNodeId": "review", "targetNodeId": "send", "label": "Deliver result" },
+    { "id": "send-acknowledge", "sourceNodeId": "send", "targetNodeId": "acknowledge", "label": "" },
+    { "id": "acknowledge-complete", "sourceNodeId": "acknowledge", "targetNodeId": "complete", "label": "" },
+    { "id": "validate-reject", "sourceNodeId": "validate", "targetNodeId": "reject", "label": "Request invalid" },
+    { "id": "review-manual", "sourceNodeId": "review", "targetNodeId": "manual", "label": "Manual delivery" },
+    { "id": "manual-send", "sourceNodeId": "manual", "targetNodeId": "send", "label": "" }
+  ],
+  "groups": [{ "id": "processing", "label": "Request processing and result preparation", "nodeIds": ["route", "record", "process", "save"] }],
+  "lanes": [
+    { "id": "reviewer", "label": "Reviewer", "nodeIds": ["request", "review"] },
+    { "id": "service", "label": "Service", "nodeIds": ["validate", "prepare", "read", "route", "record", "process", "save", "reject", "complete"] },
+    { "id": "delivery", "label": "Delivery", "nodeIds": ["manual", "send", "acknowledge"] }
+  ]
+}

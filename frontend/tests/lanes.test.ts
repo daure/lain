@@ -8,6 +8,7 @@ import { swimlaneLayout } from '../src/swimlane-layout';
 import { routeSwimlaneEdges } from '../src/swimlane-routing';
 import { graphTerminalRun } from '../src/edge-path';
 import fixture from '../../examples/order-lifecycle.json';
+import handoffs from './fixtures/swimlane-handoffs.json';
 
 function flow(): Diagram {
   return { id: 'responsibilities', title: 'Order handling', kind: 'flow',
@@ -250,6 +251,52 @@ it('aligns unequal-height forward nodes on one compact centerline with a straigh
   expectClearRoutes(layout);
 });
 
+it.each([false, true])('centers lane contents when rotated headings reserve extra height (grouped: %s)', grouped => {
+  const diagram: Diagram = { id: 'capture', title: 'Payment capture', kind: 'flow',
+    nodes: [{ id: 'capture', label: 'Capture authorized payment', role: 'subprocess', entityIds: [] },
+      { id: 'paid', label: 'Mark order paid', role: 'end', entityIds: [] }],
+    edges: [{ id: 'capture-paid', sourceNodeId: 'capture', targetNodeId: 'paid', label: 'Capture succeeds' }],
+    lanes: [{ id: 'payments', label: grouped ? 'Payment verification' : 'Payment service', nodeIds: ['capture'] },
+      { id: 'orders', label: 'Order service', nodeIds: ['paid'] }],
+    groups: grouped ? [{ id: 'verification', label: 'Verification', nodeIds: ['capture'] }] : [],
+  };
+  const layout = diagramLayout(diagram);
+  for (const lane of layout.lanes!) {
+    const content = grouped && lane.id === 'payments' ? layout.groups![0]! : layout.nodes.find(node => lane.nodeIds.includes(node.id))!;
+    const band = boxBounds(lane); const bounds = boxBounds(content);
+    expect(bounds.top - band.top).toBeCloseTo(band.bottom - bounds.bottom);
+    expect(content.y).toBeCloseTo(lane.y);
+  }
+  expectClearRoutes(layout);
+});
+
+it('aligns a grouped processing spine with its lane and places a terminating branch below it', () => {
+  const diagram = handoffs as Diagram;
+  const layout = diagramLayout(diagram);
+  const byId = new Map(layout.nodes.map(node => [node.id, node]));
+  const center = byId.get('validate')!.y;
+  for (const id of ['prepare', 'read', 'route', 'record', 'process', 'save', 'complete']) expect(byId.get(id)!.y, id).toBe(center);
+  expect(byId.get('reject')!.y).toBeGreaterThan(center);
+  for (const id of ['validate-prepare', 'prepare-read', 'read-route', 'record-process', 'process-save']) {
+    expect(layout.edges.find(edge => edge.id === id)!.path, id).not.toContain('Q');
+  }
+  const branch = pathPoints(layout.edges.find(edge => edge.id === 'validate-reject')!.path);
+  expect(branch[0]).toEqual({ x: byId.get('validate')!.x, y: center + byId.get('validate')!.height / 2 });
+  expect(layout).toEqual(diagramLayout(diagram));
+  expectClearRoutes(layout);
+});
+
+it('connects offset cross-lane nodes through their facing vertical outlines', () => {
+  const nodes = ['source', 'target'].map((id, index) => ({ id, label: id, lines: [id], x: 200 + index * 80, y: 100 + index * 200, width: 240, height: 72 }));
+  const layout = swimlaneLayout(nodes, [{ id: 'handoff', label: '', lines: [''], source: 'source', target: 'target', x: 240, y: 200, points: [] }], [], [],
+    [{ id: 'sender', label: 'Sender', nodeIds: ['source'] }, { id: 'receiver', label: 'Receiver', nodeIds: ['target'] }]);
+  const points = pathPoints(layout.edges[0]!.path);
+  expect(points[0]).toEqual({ x: nodes[0]!.x, y: nodes[0]!.y + nodes[0]!.height / 2 });
+  expect(points.at(-1)).toEqual({ x: nodes[1]!.x, y: nodes[1]!.y - nodes[1]!.height / 2 });
+  expect([...layout.edges[0]!.path.matchAll(/Q/g)]).toHaveLength(2);
+  expectClearRoutes(layout);
+});
+
 it('uses a vertical connector for a same-column responsibility handoff', () => {
   const nodes = ['source', 'target'].map((id, index) => ({ id, label: id, lines: [id], x: 200, y: 100 + index * 200, width: 240, height: 72 }));
   const layout = swimlaneLayout(nodes, [{ id: 'handoff', label: 'Handoff', lines: ['Handoff'], source: 'source', target: 'target', x: 200, y: 200, points: [] }], [], [],
@@ -418,7 +465,7 @@ it('normalizes the named sibling subtree when two parents have identical sibling
   }
 });
 
-it('finds a clear terminal-aware grid route without reversing at the target stem', () => {
+it('routes around obstacles without reversing at the target stem', () => {
   const bounds = [[60, 100, 80, 120], [210, 250, 180, 220], [60, 112, 220, 270], [120, 178, 190, 255], [111, 183, 111, 162]];
   const nodes = bounds.map(([left, right, top, bottom], index) => ({ id: `n${index}`, label: 'Node', lines: ['Node'],
     x: (left! + right!) / 2, y: (top! + bottom!) / 2, width: right! - left!, height: bottom! - top! }));
@@ -430,7 +477,7 @@ it('finds a clear terminal-aware grid route without reversing at the target stem
   expect(result.shortages.size).toBe(0);
   const points = pathPoints(result.edges[0]!.path);
   expect(points[0]).toEqual({ x: 100, y: 100 });
-  expect(points.at(-1)).toEqual({ x: 210, y: 200 });
+  expect(points.at(-1)).toEqual({ x: 230, y: 180 });
   expectClearRoutes({ nodes, edges: result.edges, lanes: [], groups: [], width: 332, height: 332 });
 });
 
