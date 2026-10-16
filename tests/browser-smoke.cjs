@@ -560,7 +560,7 @@ async function main() {
   await ready(port);
   await runFile(binary, ['--home', home, '--port', String(port), 'demo'], { cwd: artifacts, timeout: 10000 });
   const summaries = await api(port, '/api/explanations');
-  assert.deepEqual(summaries.map(summary => summary.id).sort(), ['incident-recovery', 'order-lifecycle', 'release-promotion']);
+  assert.deepEqual(summaries.map(summary => summary.id).sort(), ['incident-recovery', 'order-lifecycle', 'pr-comment-review', 'release-promotion']);
   const stored = await api(port, '/api/explanations/order-lifecycle');
   const orderSummary = summaries.find(summary => summary.id === 'order-lifecycle');
   assert.equal(orderSummary.diagramCount, stored.document.diagrams.length);
@@ -568,6 +568,7 @@ async function main() {
   // Keep the order-only UI fixture so navigation assertions target the order recording.
   await api(port, '/api/explanations/release-promotion', 'DELETE');
   await api(port, '/api/explanations/incident-recovery', 'DELETE');
+  await api(port, '/api/explanations/pr-comment-review', 'DELETE');
   stage = 'same-home daemon exclusion on another port';
   const second = startDaemon(await freePort());
   const secondResult = await bounded(second.closed, 5000, 'second daemon did not reject shared home');

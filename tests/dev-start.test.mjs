@@ -180,7 +180,7 @@ test('npm start serves local Rust, Vite and MCP, preserves data, and owns server
     const listed = await request(backend, '/api/explanations');
     const initialLibrary = await listed.json();
     const seededRevisions = [
-      ['incident-recovery', 1], ['order-lifecycle', 1], ['release-promotion', 1],
+      ['incident-recovery', 1], ['order-lifecycle', 1], ['pr-comment-review', 1], ['release-promotion', 1],
     ];
     assert.deepEqual(initialLibrary.map(item => [item.id, item.revision]), seededRevisions);
     const page = await request(viewer, '/');
