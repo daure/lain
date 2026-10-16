@@ -133,7 +133,7 @@ async function dataInspector() {
   }
   await page.keyboard.press('.');
   assert.equal(await pane.getByRole('tab', { name: 'Calls', exact: true }).getAttribute('aria-selected'), 'true');
-  for (const view of ['Diagram', 'Domain', 'Details']) {
+  for (const view of ['Diagram', 'Domain']) {
     await page.locator('.event-tablist').getByRole('tab', { name: view, exact: true }).click();
     assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
     assert.equal(await pane.getByRole('tab', { name: 'Calls', exact: true }).getAttribute('aria-selected'), 'true');
@@ -270,7 +270,7 @@ async function stepNavigator() {
   await text(page.locator('.step-tile.is-current .step-number'), '2/4');
   await fullWidthTabs();
   await page.keyboard.press('g'); await page.keyboard.press('g');
-  await page.getByRole('tab', { name: 'Details', exact: true }).click();
+  await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
   await fullWidthTabs();
 }
 
@@ -587,8 +587,9 @@ async function main() {
   await themeToggle.click();
   assert.equal(await page.locator('html').evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(9, 9, 11)');
   await page.locator('.explanation-card').click();
-  await page.getByRole('tab', { name: 'Details', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.event-tablist').getByRole('tab').allTextContents(), ['Details', 'Diagram', 'Domain']);
+  await page.locator('.sidebar .scenario-link').first().click();
+  await page.getByRole('tab', { name: 'Diagram', exact: true }).waitFor();
+  assert.deepEqual(await page.locator('.event-tablist').getByRole('tab').allTextContents(), ['Diagram', 'Domain']);
   stage = 'persistent data inspector, slide motion and tab shortcuts';
   await dataInspector();
   await fullWidthTabs();
@@ -690,7 +691,6 @@ async function main() {
     if (!activityWasDark) await themeToggle.click();
    await page.getByRole('button', { name: 'Previous event', exact: true }).click();
     assert.equal(await page.locator('.domain-method.called').count(), 0);
-    await page.getByRole('tab', { name: 'Details', exact: true }).click();
   await page.getByRole('button', { name: 'Repeated callback keeps one fulfillment', exact: true }).click();
     await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
      assert.equal(await page.locator('.diagram-panel .node-visit-badge').count(), 0);
@@ -710,7 +710,6 @@ async function main() {
      await showData();
    await text(page.locator('.step-tile.is-current .step-number'), '4/5');
     await values(page.locator('.value-row').filter({ hasText: 'Receipt lookups' }).locator('pre'), ['1', '2']);
-     await page.getByRole('tab', { name: 'Details', exact: true }).click();
    const title = page.locator('.explanation-title');
    await text(title, stored.document.title);
    stage = 'deep route reload and browser Back/Forward restoration';

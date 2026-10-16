@@ -838,6 +838,10 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
     for (definition, field, minimum, maximum) in [
         ("Explanation", "diagrams", Some(1), 50),
         ("Explanation", "scenarios", Some(1), 100),
+        ("Explanation", "topics", None, 50),
+        ("Explanation", "comparisons", None, 100),
+        ("ScenarioTopic", "scenarioIds", Some(1), 100),
+        ("Scenario", "labels", None, 8),
         ("Domain", "entities", None, 200),
         ("Domain", "relationships", None, 500),
         ("Domain", "groups", None, 100),
@@ -876,6 +880,11 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
         ("Node", &["id"][..]),
         ("Edge", &["id", "sourceNodeId", "targetNodeId"][..]),
         ("Scenario", &["id", "diagramId"][..]),
+        ("ScenarioTopic", &["id"][..]),
+        (
+            "ScenarioComparison",
+            &["id", "leftScenarioId", "rightScenarioId"][..],
+        ),
         ("Occurrence", &["id", "nodeId"][..]),
         ("Instance", &["id", "entityId"][..]),
         (

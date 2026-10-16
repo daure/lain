@@ -35,7 +35,7 @@ enum Commands {
     },
     /// Check daemon health; return a nonzero exit code when unavailable.
     Status,
-    /// Publish the three bundled demos, replacing saved explanations with matching IDs.
+    /// Publish the bundled demos, replacing saved explanations with matching IDs.
     Demo,
 }
 
@@ -139,6 +139,10 @@ async fn demo(runtime: &Runtime) -> Result<()> {
         (
             "incident-recovery",
             include_str!("../examples/incident-recovery.json"),
+        ),
+        (
+            "pr-comment-review",
+            include_str!("../examples/pr-comment-review.json"),
         ),
     ] {
         let document: serde_json::Value =

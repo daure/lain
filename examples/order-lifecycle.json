@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "title": "Order lifecycle",
   "description": "An order moves through payment, packing, and delivery. Scenarios cover repeated payment notices, declined payments, delivery retries, and returns. See how saved payment records prevent duplicate work and how parcel records retain failed attempts and final delivery or return outcomes.",
+  "overview": "These synthetic recordings follow an order from payment through delivery. Start with Payment handling to contrast successful, repeated, and declined callbacks. Packing and dispatch connects request messages to warehouse work; Delivery outcomes contrasts a first delivery, a retry, and a return. Payment internals exposes the capture details. Diagrams are shared definitions: flow and message recordings can answer the same reader question without becoming separate topics.",
+  "topics": [
+    { "id": "payments", "title": "Payment handling", "description": "What happens when a callback succeeds, repeats, or reports a decline? Flow and message views describe the same alternatives.", "scenarioIds": ["successful-callback", "duplicate-callback", "declined-payment", "sequence-successful-callback", "sequence-duplicate-callback", "sequence-declined-payment"] },
+    { "id": "dispatch", "title": "Packing and dispatch", "description": "How does accepting a dispatch request differ from completing warehouse work?", "scenarioIds": ["dispatch-request-accepted", "priority-order-dispatch"] },
+    { "id": "delivery", "title": "Delivery outcomes", "description": "Compare a first delivery with redelivery and a return to the sender.", "scenarioIds": ["parcel-delivered", "delivery-retry", "returned-to-sender"] },
+    { "id": "capture", "title": "Payment internals", "description": "Follow the capture operation through its flow and message recordings.", "scenarioIds": ["capture-authorized-payment", "capture-payment-exchange"] }
+  ],
+  "comparisons": [
+    { "id": "payment-outcomes", "title": "Successful payment versus issuer decline", "description": "A successful capture queues fulfillment; a decline records a failure and stops before fulfillment. These are synthetic alternatives under the same callback workflow.", "leftScenarioId": "successful-callback", "rightScenarioId": "declined-payment" },
+    { "id": "callback-views", "title": "One callback through actions and messages", "description": "These recordings explain the successful callback from two perspectives. Their steps have different granularity and are not automatically aligned.", "leftScenarioId": "successful-callback", "rightScenarioId": "sequence-successful-callback" },
+    { "id": "delivery-outcomes", "title": "Successful redelivery versus return", "description": "Both recordings include a failed attempt. Agreeing to redelivery leads to delivery; declining it returns the parcel.", "leftScenarioId": "delivery-retry", "rightScenarioId": "returned-to-sender" }
+  ],
   "domain": {
     "entities": [
       { "id": "order", "label": "Order", "attributes": [{ "id": "number", "label": "Order number" }, { "id": "paymentStatus", "label": "Payment status" }, { "id": "total", "label": "Total (EUR)" }], "methods": [
@@ -239,6 +251,7 @@
   "scenarios": [
     {
       "id": "successful-callback", "title": "New payment queues fulfillment", "diagramId": "payment-flow",
+      "labels": ["pay-72", "New"],
       "description": "In this synthetic example, a gateway sends a new authorized-payment callback for pending order ORD-1042. The service verifies the receipt, captures EUR 89.90, and queues one fulfillment item. The recording ends with the order paid and ready for packing.\n\nThe shared domain groups commerce records, payment messages, and an external payment gateway. Gateway and message definitions illustrate integration boundaries; their instances are outside this recording’s captured state.",
       "occurrences": [
         {
@@ -308,6 +321,7 @@
     },
     {
       "id": "duplicate-callback", "title": "Repeated callback keeps one fulfillment", "diagramId": "payment-flow",
+      "labels": ["evt_481", "Duplicate"],
       "description": "In this synthetic example, the gateway retries event evt_481 after its payment and fulfillment work have been recorded. The service reads and verifies the handled receipt, then acknowledges the retry with HTTP 200. The paid order retains exactly one fulfillment item.",
       "occurrences": [
         {
@@ -401,6 +415,7 @@
     },
     {
       "id": "declined-payment", "title": "Declined payment stops fulfillment", "diagramId": "payment-flow",
+      "labels": ["pay-73", "Declined"],
       "description": "In this synthetic example, the issuer declines the payment for pending order ORD-1043 because funds are insufficient. The service checks the new receipt, records the decline, and acknowledges the callback. The recording ends with a declined order and no fulfillment work.",
       "occurrences": [
         {
@@ -452,6 +467,7 @@
     },
     {
       "id": "parcel-delivered", "title": "First delivery closes fulfillment", "diagramId": "shipment-state",
+      "labels": ["ship-88", "First attempt"],
       "description": "In this synthetic example, Rotterdam packs paid order ORD-1042 for Utrecht. DemoParcel collects and delivers the parcel on the first attempt. The queue closes the fulfillment item, while the order keeps a durable link to the delivered shipment.",
       "occurrences": [
         {
@@ -517,6 +533,7 @@
     },
     {
       "id": "sequence-successful-callback", "title": "New payment exchange queues fulfillment", "diagramId": "payment-sequence",
+      "labels": ["pay-72", "New"],
       "description": "This synthetic exchange follows a new authorized-payment callback between the gateway, payment service, receipt store, and fulfillment queue. Receipt verification permits capture and fulfillment. The recording ends with order ORD-1042 paid and one work item queued.",
       "occurrences": [
         {
@@ -584,6 +601,7 @@
     },
     {
       "id": "delivery-retry", "title": "Retry delivers the parcel", "diagramId": "shipment-state",
+      "labels": ["ship-88", "Retry"],
       "description": "In this synthetic example, DemoParcel cannot deliver the Utrecht parcel because the recipient is unavailable. The recipient schedules redelivery and the parcel revisits In transit before delivery on the second attempt. Closing fulfillment retains both attempts and the delivery timestamp on the shipment.",
       "occurrences": [
         {
@@ -680,6 +698,7 @@
     },
     {
       "id": "returned-to-sender", "title": "Declined redelivery returns the parcel", "diagramId": "shipment-state",
+      "labels": ["ship-88", "Return"],
       "description": "In this synthetic example, the recipient is unavailable for delivery and declines redelivery. DemoParcel returns the parcel to Rotterdam and the queue closes its fulfillment item. The order retains the returned shipment; this recording covers parcel handling and contains no refund event.",
       "occurrences": [
         {
@@ -761,6 +780,7 @@
     },
     {
       "id": "sequence-duplicate-callback", "title": "Repeated payment exchange keeps one fulfillment", "diagramId": "payment-sequence",
+      "labels": ["evt_481", "Duplicate"],
       "description": "This synthetic exchange follows a gateway retry of handled event evt_481. The payment service reads the receipt twice through the verification loop, then acknowledges the duplicate. The existing payment and single fulfillment item remain intact.",
       "occurrences": [
         {
@@ -852,6 +872,7 @@
     },
     {
       "id": "sequence-declined-payment", "title": "Declined payment exchange stops fulfillment", "diagramId": "payment-sequence",
+      "labels": ["pay-73", "Declined"],
       "description": "This synthetic exchange follows an issuer-declined callback for order ORD-1043. The payment service verifies a new receipt and takes the insufficient-funds branch. The recording ends with the decline acknowledged and no fulfillment item created.",
       "occurrences": [
         {
@@ -903,6 +924,7 @@
     },
     {
       "id": "capture-authorized-payment", "title": "Authorized payment marks order paid", "diagramId": "payment-capture-flow",
+      "labels": ["pay-72", "Capture"],
       "description": "This synthetic detail recording expands payment capture for ORD-1042 into two actions. Payment pay-72 starts pending with an authorized amount of EUR 89.90. The service captures it, then marks the order paid.\n\nOnly the order and payment are captured here. Receipt acknowledgement and fulfillment queuing belong to the surrounding callback recording.",
       "occurrences": [
         {
@@ -937,6 +959,7 @@
     },
     {
       "id": "capture-payment-exchange", "title": "Captured payment marks the order paid", "diagramId": "payment-capture-sequence",
+      "labels": ["pay-72", "Capture"],
       "description": "This synthetic sequence shows the payment service capturing pay-72 and then marking ORD-1042 paid. It expands the capture message from the callback sequence into the two domain operations.\n\nThe recording captures order and payment state only, and ends with a captured payment and paid order. The linked flow presents these operations as ordered actions.",
       "occurrences": [
         {
@@ -971,6 +994,7 @@
     },
     {
       "id": "dispatch-request-accepted", "title": "Operator queues paid order dispatch", "diagramId": "dispatch-request-sequence",
+      "labels": ["ORD-1042", "Queued"],
       "description": "In this synthetic example, a warehouse operator requests dispatch of paid order ORD-1042. The dispatch service queues fulfillment work and returns acceptance without waiting for packing or delivery. Only the order and queued work are captured; the recording stops before a worker consumes the asynchronous message.",
       "occurrences": [
         {
@@ -1005,6 +1029,7 @@
     },
     {
       "id": "priority-order-dispatch", "title": "Priority order packed and dispatched", "diagramId": "dispatch-preparation-flow",
+      "labels": ["ful-shape-demo", "Priority"],
       "description": "In this synthetic example, a Rotterdam warehouse operator scans a priority packing request, prepares the workstation, and saves the dispatch work. The operator packs the parcel and prints its invoice and dispatch documents. Two recorded carrier checks retain separate snapshots. The recording ends after the carrier arrives and the dispatch notice is sent. Only one fulfillment work item is captured.",
       "occurrences": [
         {

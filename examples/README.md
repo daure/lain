@@ -1,6 +1,6 @@
 # Examples
 
-## Publish the three demos
+## Publish the demos
 
 Against a running daemon:
 
@@ -15,6 +15,7 @@ The command publishes these complete schema-version-1 documents in order:
 | `order-lifecycle` | `order-lifecycle.json` |
 | `release-promotion` | `release-promotion.json` |
 | `incident-recovery` | `incident-recovery.json` |
+| `pr-comment-review` | `pr-comment-review.json` |
 
 For an individual MCP publication, call `get_context` first, then `publish_explanation({id, document})` with the matching ID and the file's complete parsed JSON object as `document`. A filename or partial document is not a publication payload. Publication atomically creates, replaces, or recreates that ID; the last commit wins. The browser loads committed explanations from the API; it does not publish examples on startup.
 
@@ -22,7 +23,9 @@ For an individual MCP publication, call `get_context` first, then `publish_expla
 
 `order-lifecycle.json` records payment handling, shipment state, and payment messages with shared domain relationships.
 
-Payment handling demonstrates five flow-node roles: Callback received is the start, Receipt checked is a decision diamond, Capture the payment is a double-bordered subprocess, Event already handled is an action box, and the success, duplicate, and decline endpoints are end terminators. Select Diagram to see the full left-to-right flow. Details keeps the agent-authored scenario description above the current step's narration and recorded method calls.
+Overview organizes these recordings under Payment handling, Packing and dispatch, Delivery outcomes, and Payment internals. Payment handling combines flow and message scenarios under one reader question. Scenario tags pair recorded IDs with short terms, such as `evt_481` and Duplicate or `ship-88` and Retry. Each tag uses 1–20 characters. Explicit comparisons contrast payment outcomes, action/message perspectives, and redelivery/return outcomes. Comparisons present authored summaries; they do not align steps automatically.
+
+Payment handling demonstrates five flow-node roles: Callback received is the start, Receipt checked is a decision diamond, Capture the payment is a double-bordered subprocess, Event already handled is an action box, and the success, duplicate, and decline endpoints are end terminators. Diagram shows the full left-to-right flow. Hover a scenario or press D to read its description; the data inspector's Calls tab shows recorded method calls.
 
 **Dispatch preparation** (`dispatch-preparation-flow`) demonstrates the other nine roles in **Priority order packed and dispatched**. Scan packing request uses `inputOutput`; Prepare workstation uses `preparation`; Save dispatch work uses `database`; Expedite priority order uses `priorityAction`; Pack parcel by hand uses `manualOperation`; Create invoice uses `document`; Print dispatch documents uses `multiDocument`; Wait for carrier uses `delay`; Send dispatch notice uses `outputInput`. Pills mark entry and completion. The two recorded visits to Wait for carrier have distinct occurrence IDs and snapshots. Grouped intake, packing, and dispatch steps exercise containment, curved connectors, traversal colors, and the delay revisit badge. The synthetic recording captures one fulfillment work item throughout its processing stages.
 
@@ -78,6 +81,8 @@ Snapshots contain complete captured state for each occurrence. An omitted attrib
 
 ## Release approval and deployment
 
+Release readiness pairs Happy path and Retry recordings under one topic. Its comparison explains why the failed candidate must return through checks before deployment.
+
 `release-promotion.json` records `release-promotion-flow` with Developer, Build pipeline, and Release reviewer lanes. The passing scenario follows submission, build, checks, approval, deployment, and announcement. The retry scenario returns failed checks to the developer, then revisits build and checks with distinct occurrence IDs for the same release instance.
 
 These actors make the approval boundary visible: the pipeline cannot reach the recorded deployment until the reviewer approves. A failure returns responsibility to the developer rather than proceeding to review. Lanes alone express those handoffs; the short process needs no phase groups.
@@ -85,6 +90,8 @@ These actors make the approval boundary visible: the pipeline cannot reach the r
 The synthetic assumptions are explicit in each scenario. Fictional releases `rel-42` (1.4.0) and `rel-43` (1.4.1) capture version, status, check result, approval, and build attempt in every nonempty snapshot.
 
 ## Incident response and prevention
+
+Restoring invoice downloads pairs the first repair and retry recordings. Its Overview distinguishes confirmed recovery from the prevention task that remains queued.
 
 `incident-recovery.json` records `incident-recovery-flow` with Customer, Support, and Engineering lanes. Support reproduces a customer's failed Invoice downloads; Engineering diagnoses an assumed stale cache key and repairs it. A failed health check revisits repair and health on the same incident. Support verifies recovery, the customer confirms it, and Support closes the incident. Engineering then queues a prevention task; the preventive work remains pending.
 
@@ -94,8 +101,16 @@ Both synthetic scenarios capture all seven Incident fields for fictional instanc
 
 ## Responsibility lanes
 
+Prefer containers when grouping clarifies a subprocess or domain boundary. Use responsibility lanes when real handoffs add clear value beyond containment.
+
 Declare optional flow-only `diagrams[].lanes` as `{id, label, nodeIds}` entries: ≤50 lanes, each with 1–200 existing member nodes. IDs are unique within the diagram and distinct from node/group IDs; labels are nonblank plain text. Each node has at most one explicit lane. Every group's direct and nested descendant nodes share one lane, or all are unassigned. Lanes describe responsibility; concrete edges and occurrences define traversal, with no execution or automatic handoff inferred. Omitted or empty lanes serialize without the field; lane-free schema-version-1 documents remain readable.
 
 The viewer stacks horizontal lanes in authored top-to-bottom order with shared width and a left heading compartment. Nodes without lanes occupy an implicit final Unassigned band when needed. Compact views retain bands containing visible nodes in authored order. Lane frames and headings stay neutral in both themes; nested groups retain containment and traversal emphasis.
 
 IDs, references, edge continuity, relationship endpoints, and cardinalities follow `architecture.md`. These examples contain fictional identifiers and no credentials. Labels and prose are inert text. Redact sensitive captured values before publication.
+
+## Payment callback review comments
+
+`pr-comment-review.json` examines two fictional review comments under separate topics: Repeated callback work and Failed queue write. Each topic pairs Current and Proposed scenarios that share a setup but use different diagrams. The synthetic current handler queues duplicate work or acknowledges a failed queue write. The proposals check a handled receipt and retry a failed write before acknowledgement.
+
+Read Compare scenarios in Overview, open either recording, and use its comparison-partner link to switch. Each scenario retains its recorded cursor. The Current and Proposed badges identify the side; descriptions state assumptions and limits. The receipt-check example covers sequential retries, not concurrent delivery guarantees. The queue-recovery example assumes one successful retry and does not establish a production retry policy.

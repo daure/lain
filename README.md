@@ -141,9 +141,11 @@ GET `/api/explanations/{id}/diagrams/{diagramId}/export` or `/api/explanations/{
 
 ## Viewer
 
-Select an explanation, then a scenario under its diagram in the full-height sidebar. The carousel shows the current event with its position and total, such as `1/4`. Previous and next move through recorded occurrences. Adjacent carousel steps are clickable. Repeated visits to a node retain separate snapshots.
+Select an explanation to read its Overview, compare scenario summaries, and choose a topic. Search matches scenarios, topics, labels, and comparisons; / focuses search. The sidebar groups scenarios by reader question and shows badges such as Happy path, Failure, Current, and Proposed. Hover or focus a scenario to preview its description and recording details. Diagrams remain shared definitions underneath the topics. Documents without reader structure retain diagram-based navigation and open at Overview.
 
-The URL records explanation, scenario, and occurrence IDs. Reload and browser Back/Forward restore that location. Share a location with another browser on the same machine; links contain no captured values.
+Open a scenario to follow its recorded steps. Its context strip links to Overview and comparison partners; switching partners preserves each recording's cursor and the selected view. The carousel shows the current event with its position and total, such as `1/4`. Previous and next move through recorded occurrences. Adjacent carousel steps are clickable. Repeated visits to a node retain separate snapshots.
+
+The URL records explanation, scenario, and occurrence IDs, or `view=overview` for the explanation overview. Reload and browser Back/Forward restore that location. Share a location with another browser on the same machine; links contain no captured values.
 
 The header's Diagram button opens the full map with muted off-scenario elements, upcoming scenario elements, and blue visited elements. Visit counts appear on nodes and edges after their second visit through the current event. Off-path nodes do not change the scenario. Domain opens the ERD with domain definitions. Live publications update the displayed document automatically, preserving surviving scenario and occurrence selections. Revisions remain internal synchronization metadata; the GUI shows update status and retry actions.
 
@@ -163,7 +165,8 @@ Diagram and Domain canvases open fitted to their content. The active Fit or 1:1 
 | --- | --- |
 | Ctrl+K | Open quick actions with the search input focused |
 | H / L | Previous / next recorded event |
-| J / K | Next / previous scenario in sidebar order |
+| J / K | Next / previous sidebar item, including Overview |
+| d | Show / hide the scenario description beside the sidebar, or centered in focus mode |
 | I | Toggle the current scenario's diagram |
 | O | Toggle the domain ERD |
 | n | Open / close the data inspector with a 150ms slide |
@@ -204,6 +207,8 @@ node tests/browser-smoke.cjs
 ```
 
 The harness exercises the actual daemon, live updates, restart persistence, and mobile layout. It cleans up its processes and retains diagnostic artifacts under `/tmp/opencode`.
+
+`tests/browser-overview-smoke.cjs` uses the same Playwright/browser settings to check topic navigation, comparison partners, browser history, both themes, and mobile layout against an isolated daemon. It defaults to `target/debug/lain`; `LAIN_BINARY` selects another built executable.
 
 ## Release
 

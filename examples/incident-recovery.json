@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "title": "Incident response and prevention",
   "description": "A customer reports failed invoice downloads. Support assesses the incident, Engineering restores service, and the customer confirms recovery. Compare a first-attempt repair with a retry. Responsibility lanes show handoffs; phase groups separate initial assessment and restoration from later verification, closure, and queued prevention work.",
+  "overview": "These synthetic recordings contrast a repair that passes its first health check with a repair that needs another attempt. Each incident reaches customer-confirmed recovery and queues a prevention task. Queuing that task does not mean the preventive work is complete. Read the comparison, then follow either recording through assessment, restoration, and verification.",
+  "topics": [{ "id": "restoring-service", "title": "Restoring invoice downloads", "description": "How does a failed health check change the route to confirmed recovery?", "scenarioIds": ["incident-success", "incident-retry"] }],
+  "comparisons": [{ "id": "repair-attempts", "title": "First repair versus another restoration attempt", "description": "The first incident passes verification after one repair. The second revisits repair and health checks, retaining its incident identity and separate snapshots for each attempt.", "leftScenarioId": "incident-success", "rightScenarioId": "incident-retry" }],
   "domain": {
     "entities": [{
       "id": "incident", "label": "Incident",
@@ -56,6 +59,7 @@
   "scenarios": [
     {
       "id": "incident-success", "title": "First repair restores invoice downloads",
+      "labels": ["Happy path", "Synthetic"],
       "description": "Synthetic recording. Assume fictional incident inc-81 affects Invoice downloads because of a stale cache key. A customer wants downloads restored; Support reproduces the failure and Engineering repairs it on the first attempt. The customer confirms recovery, Support closes the incident, and Engineering queues prevention work. Snapshots capture every Incident field, with no relationships.",
       "diagramId": "incident-recovery-flow",
       "occurrences": [
@@ -123,6 +127,7 @@
     },
     {
       "id": "incident-retry", "title": "Second repair restores invoice downloads",
+      "labels": ["Retry", "Synthetic"],
       "description": "Synthetic recording. Assume fictional incident inc-82 affects Invoice downloads because of a stale cache key. The first repair reaches only part of the cache, so Engineering repeats restoration. The second health check passes; Support and the customer verify recovery, then Support closes the incident. Engineering queues prevention work. Snapshots capture every Incident field, with no relationships.",
       "diagramId": "incident-recovery-flow",
       "occurrences": [

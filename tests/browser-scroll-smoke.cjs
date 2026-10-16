@@ -88,7 +88,6 @@ async function positions() {
     footer: document.querySelector('.event-controls').getBoundingClientRect().toJSON(),
     page: document.scrollingElement.scrollTop,
     sidebar: document.querySelector('.sidebar-scroll').scrollTop,
-    story: document.querySelector('.event-story').scrollTop,
     state: document.querySelector('.state-panel').scrollTop,
     content: document.querySelector('.event-content').scrollTop,
     notices: document.querySelector('.event-notices')?.scrollTop ?? 0,
@@ -248,9 +247,7 @@ async function main() {
     await wheelInside('.sidebar-scroll', 'sidebar');
     if (viewport.width > 1200) {
       await wheelInside('.state-panel', 'state');
-      await wheelInside('.event-story', 'story');
       await keyboardEnd('.state-panel', '.snapshot-note');
-      await keyboardEnd('.event-story', '.event-context');
     } else {
       await wheelInside('.event-content', 'content');
       await keyboardEnd('.event-content', '.snapshot-note');

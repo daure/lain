@@ -48,6 +48,20 @@ Require nullable `incomingEdgeId` and `trigger`. First `incomingEdgeId` is null;
 
 Label assumptions; never claim inferred production values as captured facts. Use short labels and plain text, never HTML, SVG, scripts, executable expressions, or externally loaded diagram content.
 
+## Reader structure
+
+Author explanation-level `overview` as plain text describing the purpose, scope, and how its topics and comparisons fit together. Keep the card `description` short; use the overview for the reader's map of the explanation.
+
+Use ordered `topics: [{id, title, description?, scenarioIds}]` to group scenarios by reader question or subject, independent of diagram ownership. A payment topic can contain both flow and message recordings. For a review, use one topic per concern or comment. Each topic requires 1–100 existing scenario IDs in reading order; a scenario belongs to at most one topic. Allow at most 50 topics. Ungrouped scenarios remain under Other scenarios; documents without topics retain diagram grouping.
+
+Use scenario `labels` for IDs and short terms, such as PAY-101, Retry, or Current. They appear as small outlined chips beneath the title inside each scenario row. Write 1–20 characters per label; the schema accepts up to 64 for compatibility. Allow at most eight unique nonblank plain-text labels. Labels describe the recording; they do not establish a runtime outcome, prove a fix, or infer a relationship.
+
+Use ordered `comparisons: [{id, title, description?, leftScenarioId, rightScenarioId}]` for explicit pairs worth contrasting. Allow at most 100 comparisons with unique IDs and nonblank titles. Each pair names two distinct existing scenarios, including scenarios using different diagrams or topics. Describe the contrast and its evidence or assumptions; comparisons present summaries and links, not inferred step alignment or computed execution differences.
+
+For happy/unhappy paths, pair the success and failure recordings under their workflow topic. For PR comments, pair Current and Proposed recordings under each concern, keeping the setup comparable and distinguishing code evidence from hypothetical behavior. Name the finding in the comparison description; labels alone do not explain the difference.
+
+Overview, topic descriptions, and comparison descriptions share the 32 KiB text limit. Topic and comparison IDs use the standard ID rules. These fields are optional within schema version 1. Every explanation opens at Overview; direct scenario links open their recorded step. Documents without topics use diagram-based navigation.
+
 ## Names and labels
 
 Use sentence case and these authoring budgets, not schema limits:
@@ -87,7 +101,9 @@ One explanation can examine independent drafted comments on a pull request. Trea
 
 Example card: "Review a payment-handling change for duplicate requests and failed retries. Use concrete scenarios to judge whether the drafted comments identify real risks."
 
-Author each new `scenarios[].description` as the fixed Details overview: actor, setup, goal, recorded outcome/stopping point. `occurrences[].narration` explains action, cause, and observed consequence in blank-line-separated paragraphs. Early stops are not success. Lain displays, never generates, prose.
+Author each new `scenarios[].description` as a scenario overview: **at most 75 words, 2–4 short sentences**, a ceiling rather than a target. Name the actor, setup, goal, and recorded outcome or stopping point. Include material assumptions or limits; put detailed evidence, domain background, and step-by-step explanation in occurrence narration or the explanation overview. This description appears in scenario cards and sidebar previews.
+
+`occurrences[].narration` explains action, cause, and observed consequence in blank-line-separated paragraphs. Early stops are not success. Lain displays, never generates, prose.
 
 Use `occurrences[].changeSummary` only for meaningful before/after changes beyond narration; distinguish state changes from capture differences. Description and change summary are optional for compatibility; missing/empty descriptions show a notice.
 

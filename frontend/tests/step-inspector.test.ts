@@ -3,7 +3,7 @@ import { createApp, nextTick } from 'vue';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { afterEach, expect, it, vi } from 'vitest';
-import fixture from '../../examples/order-lifecycle.json';
+import fixture from './fixtures/legacy-order-lifecycle';
 import App from '../src/App.vue';
 import type { Explanation } from '../src/model';
 
@@ -39,6 +39,7 @@ async function mount(documentFixture = structuredClone(fixture) as Explanation) 
   app = createApp(App).use(PrimeVue, { unstyled: true }).use(ToastService); app.mount(root);
   LiveSocket.current.onopen?.(); await settle();
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+  document.querySelector<HTMLButtonElement>('.scenario-link')!.click(); await settle();
 }
 
 afterEach(() => {
@@ -62,7 +63,7 @@ it('keeps the inspector and its bounded tab selection across views, scenarios, r
   for (const label of ['Before', 'After', 'Calls']) { await press('.'); expect(selectedDataTab().textContent).toBe(label); }
   expect((await press('.')).defaultPrevented).toBe(false);
   await press(',');
-  for (const view of ['Diagram', 'Domain', 'Details']) {
+  for (const view of ['Diagram', 'Domain']) {
     await click(view); expect(inspector()).toBe(pane); expect(selectedDataTab().textContent).toBe('After');
     expect(toggle().getAttribute('aria-expanded')).toBe('true');
   }
@@ -148,7 +149,7 @@ it.each(['Changes', 'Before', 'After', 'Calls'])('pages only the active %s data 
   Object.defineProperties(body, { clientHeight: { value: 400 }, scrollHeight: { value: 1350 } });
   const cursor = location.search;
   body.focus();
-  for (const view of ['Details', 'Diagram', 'Domain']) {
+  for (const view of ['Diagram', 'Domain']) {
     await click(view); body.scrollTop = 0; body.focus();
     expect((await press('/')).defaultPrevented).toBe(true);
     expect(body.scrollTop).toBe(400);

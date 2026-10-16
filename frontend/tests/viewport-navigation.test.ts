@@ -3,7 +3,7 @@ import { createApp, nextTick } from 'vue';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { afterEach, expect, it, vi } from 'vitest';
-import fixture from '../../examples/order-lifecycle.json';
+import fixture from './fixtures/legacy-order-lifecycle';
 import App from '../src/App.vue';
 
 class LiveSocket {
@@ -56,6 +56,7 @@ async function mountViewer() {
   await settle();
   document.querySelector<HTMLButtonElement>('[data-explanation-id="first"]')!.click();
   await settle();
+  document.querySelector<HTMLButtonElement>('.scenario-link')!.click(); await settle();
   return app;
 }
 
@@ -113,7 +114,7 @@ it.each(['flow', 'state', 'sequence'])('restores independent Diagram and Domain 
 
     await control('Fit diagram');
     const fitted = state();
-    await click('Details');
+    await click('Domain');
     await click(other!.title);
     await click(source!.title);
     await click('Diagram');

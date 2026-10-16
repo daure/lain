@@ -54,11 +54,16 @@ export type Occurrence = {
   after: Snapshot;
   methodCalls?: MethodCall[];
 };
-export type Scenario = { id: string; title: string; description?: string; diagramId: string; occurrences: Occurrence[] };
+export type Scenario = { id: string; title: string; description?: string; labels?: string[]; diagramId: string; occurrences: Occurrence[] };
+export type ScenarioTopic = { id: string; title: string; description?: string; scenarioIds: string[] };
+export type ScenarioComparison = { id: string; title: string; description?: string; leftScenarioId: string; rightScenarioId: string };
 export type Explanation = {
   schemaVersion: 1;
   title: string;
   description: string;
+  overview?: string;
+  topics?: ScenarioTopic[];
+  comparisons?: ScenarioComparison[];
   links?: ExplanationLink[];
   domain: { entities: Entity[]; relationships: Relationship[]; groups?: DomainGroup[] };
   diagrams: Diagram[];

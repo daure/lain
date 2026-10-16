@@ -6,6 +6,7 @@ use serde_json::Value;
 
 pub use crate::cardinality::Cardinality;
 pub use crate::explanation_links::ExplanationLink;
+pub use crate::explanation_structure::{ScenarioComparison, ScenarioTopic};
 pub use crate::groups::{DiagramGroup, DomainGroup};
 pub use crate::lanes::DiagramLane;
 pub use crate::method_calls::MethodCall;
@@ -25,6 +26,17 @@ pub struct Explanation {
     pub schema_version: u32,
     pub title: String,
     pub description: String,
+    /// Plain-text explanation overview: purpose, scope, and how the topics and comparisons fit together.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub overview: String,
+    /// Ordered reader-facing topics, independent of diagram ownership. Each scenario belongs to at most one topic.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 50))]
+    pub topics: Vec<ScenarioTopic>,
+    /// Ordered explicit scenario pairs. Descriptive contrasts, never inferred step alignment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 100))]
+    pub comparisons: Vec<ScenarioComparison>,
     /// Ordered explanation-wide references displayed beside the viewer title.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(max = 50))]
@@ -266,6 +278,11 @@ pub struct Scenario {
     /// Optional for compatibility; author a description for every new scenario.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Plain-text IDs and short terms such as PAY-101, Retry, or Current; not inferred outcomes.
+    /// Author 1–20 characters per label.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 8), inner(length(min = 1, max = 64)))]
+    pub labels: Vec<String>,
     #[schemars(length(min = 1, max = 64), pattern(r"^[A-Za-z0-9_-]+(?![\s\S])"))]
     pub diagram_id: String,
     #[schemars(length(min = 1, max = 2000))]
@@ -464,6 +481,7 @@ impl Explanation {
         )?;
         let diagrams = index(&self.diagrams, |diagram| &diagram.id, "diagram")?;
         index(&self.scenarios, |scenario| &scenario.id, "scenario")?;
+        self.validate_structure()?;
         let mut entity_attributes = HashMap::new();
         for entity in &self.domain.entities {
             limit(entity.attributes.len(), 200, "entity attributes")?;

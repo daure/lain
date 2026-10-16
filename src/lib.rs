@@ -1,6 +1,7 @@
 mod cardinality;
 pub mod chart_export;
 mod explanation_links;
+mod explanation_structure;
 mod groups;
 pub mod http;
 mod lanes;

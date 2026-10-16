@@ -27,7 +27,7 @@ function open(event: Event) {
     <title>{{ target.count }} other scenario{{ target.count === 1 ? '' : 's' }} · Jump to scenario (?)</title>
     <rect class="scenario-jump-hitbox" :x="-width / 2 - 2" y="-18" :width="width + 4" height="36" fill="transparent" />
     <rect class="scenario-jump-pill" :x="-width / 2" y="-12" :width="width" height="24" rx="12" />
-    <text x="0" y="0" text-anchor="middle" dominant-baseline="central">{{ label }}</text>
+    <text x="0" y="4" text-anchor="middle">{{ label }}</text>
   </g>
 </template>
 

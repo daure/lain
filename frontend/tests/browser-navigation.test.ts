@@ -3,7 +3,7 @@ import { createApp, nextTick } from 'vue';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { afterEach, expect, it, vi } from 'vitest';
-import fixture from '../../examples/order-lifecycle.json';
+import fixture from './fixtures/legacy-order-lifecycle';
 import App from '../src/App.vue';
 
 class LiveSocket {
@@ -68,8 +68,11 @@ it('pushes complete selections and restores Back and Forward without fetching th
   const fetch = await mount();
   await vi.waitFor(() => expect(document.querySelector('.explanation-card')).not.toBeNull());
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click();
-  await vi.waitFor(() => expect(hero()).toContain('1/4'));
+  await vi.waitFor(() => expect(document.querySelector('.explanation-overview')).not.toBeNull());
   expect(push).toHaveBeenCalledTimes(1);
+  document.querySelector<HTMLButtonElement>('.scenario-link')!.click();
+  await vi.waitFor(() => expect(hero()).toContain('1/4'));
+  expect(push).toHaveBeenCalledTimes(2);
   await click('Repeated callback keeps one fulfillment');
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'G', shiftKey: true, bubbles: true, cancelable: true }));
   await vi.waitFor(() => expect(hero()).toContain('5/5'));
@@ -101,7 +104,9 @@ it('canonicalizes missing and stale cursor IDs with replacement and rejects malf
   expect(push).not.toHaveBeenCalled();
   history.replaceState(null, '', '/?explanation=order-lifecycle');
   window.dispatchEvent(new PopStateEvent('popstate'));
-  await vi.waitFor(() => expect(current()).toBe(fixture.scenarios[0]!.occurrences[0]!.id));
+  await vi.waitFor(() => expect(document.querySelector('.explanation-overview')).not.toBeNull());
+  expect(new URLSearchParams(location.search).get('view')).toBe('overview');
+  expect(current()).toBeNull();
   history.replaceState(null, '', route('duplicate-callback', 'stale-occurrence'));
   window.dispatchEvent(new PopStateEvent('popstate'));
   await vi.waitFor(() => expect(hero()).toContain('1/5'));
@@ -449,7 +454,7 @@ it.each([412, 500, 'network'] as const)('reports a %s undo failure without retry
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   await click('Undo');
   await vi.waitFor(() => expect(document.body.textContent).toContain('Undo failed'));
-  expect(document.querySelector('.notification-undo')).toBeNull();
+  await vi.waitFor(() => expect(document.querySelector('.notification-undo')).toBeNull());
   expect(fetch.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(1);
   expect(document.querySelector('.explanation-card')).toBeNull();
 });

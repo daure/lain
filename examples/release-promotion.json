@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "title": "Release approval and deployment",
   "description": "A developer submits a release, the build pipeline checks it, and a reviewer approves deployment. Compare a passing candidate with a failed check and revision. Responsibility lanes expose the handoffs and the return to the developer.",
+  "overview": "These synthetic recordings ask when a release is ready to deploy. Compare the passing candidate with a candidate that fails checks, returns to its developer, and passes after revision. Both use the same diagram because the approval boundary is shared. Responsibility lanes expose the developer, pipeline, and reviewer handoffs.",
+  "topics": [{ "id": "release-readiness", "title": "Release readiness", "description": "Does a failure stop deployment until checks pass and a reviewer approves?", "scenarioIds": ["release-success", "release-retry"] }],
+  "comparisons": [{ "id": "checks-and-revision", "title": "Passing candidate versus failed checks and revision", "description": "Both releases eventually deploy. The retry recording includes a failed check and another build; it is a recovery path, not an immediate success.", "leftScenarioId": "release-success", "rightScenarioId": "release-retry" }],
   "domain": {
     "entities": [{
       "id": "release", "label": "Release",
@@ -44,6 +47,7 @@
   "scenarios": [
     {
       "id": "release-success", "title": "Passing candidate approved and deployed",
+      "labels": ["Happy path"],
       "description": "Synthetic recording. Assume fictional release rel-42, version 1.4.0, passes its first build checks and receives reviewer approval. The developer wants to ship it; the pipeline deploys the approved candidate and the developer announces it. Snapshots capture every Release field, with no relationships.",
       "diagramId": "release-promotion-flow",
       "occurrences": [
@@ -87,6 +91,7 @@
     },
     {
       "id": "release-retry", "title": "Revised candidate approved and deployed",
+      "labels": ["Retry"],
       "description": "Synthetic recording. Assume fictional release rel-43, version 1.4.1, fails its first checks because a test fixture needs correction. The developer revises the same release; the second build passes and receives approval. Deployment and announcement complete the goal. Snapshots capture every Release field, with no relationships.",
       "diagramId": "release-promotion-flow",
       "occurrences": [

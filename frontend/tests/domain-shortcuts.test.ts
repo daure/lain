@@ -3,7 +3,7 @@ import { createApp, nextTick } from 'vue';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { afterEach, expect, it, vi } from 'vitest';
-import fixture from '../../examples/order-lifecycle.json';
+import fixture from './fixtures/legacy-order-lifecycle';
 import App from '../src/App.vue';
 import type { Explanation } from '../src/model';
 
@@ -52,6 +52,7 @@ async function mountDomain(count: number, grouped = false) {
   app.mount(root);
   LiveSocket.current.onopen?.(); await settle();
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+  document.querySelector<HTMLButtonElement>('.scenario-link')!.click(); await settle();
   tab('Domain').click(); await settle();
   const scroller = document.querySelector<HTMLElement>('.domain-scroll')!;
   Object.defineProperties(scroller, {
@@ -219,7 +220,7 @@ it('cancels invalid and interrupted prefixes and respects viewer input guards', 
     await press('1'); window.dispatchEvent(new Event('blur'));
     await vi.advanceTimersByTimeAsync(500); await settle();
     expect(selected()).toBe(10);
-    await press('1'); tab('Details').click(); await settle();
+    await press('1'); tab('Diagram').click(); await settle();
     await vi.advanceTimersByTimeAsync(500); tab('Domain').click(); await settle();
     expect(selected()).toBe(10);
     await press('1');

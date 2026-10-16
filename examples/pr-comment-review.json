@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "title": "Payment callback review comments",
+  "description": "Examine two fictional review comments about repeated payment notices and failed queue writes. Compare the assumed current behavior with proposed receipt checks and retry handling. Each contrast shows what work is queued and when the callback is acknowledged.",
+  "overview": "This is a synthetic review exercise, not evidence about a real pull request. The assumed current handler always tries a queue write and acknowledges the callback, even when it repeats or the queue write fails. Two comments propose checking the handled receipt and waiting for a successful queue write before acknowledgement. Each topic pairs Current and Proposed recordings under the same setup. The proposed retry is an assumed policy, not a verified implementation.",
+  "topics": [
+    { "id": "duplicate-work", "title": "Comment 1 · Repeated callback work", "description": "Should the handler read the saved receipt before queuing work?", "scenarioIds": ["duplicate-current", "duplicate-proposed"] },
+    { "id": "failed-write", "title": "Comment 2 · Failed queue write", "description": "Should a failed queue write still produce a successful acknowledgement?", "scenarioIds": ["queue-current", "queue-proposed"] }
+  ],
+  "comparisons": [
+    { "id": "receipt-check", "title": "Check the receipt before queuing work", "description": "Under the assumed current behavior, a repeated event queues a second job. The suggestion reads the handled receipt and acknowledges the retry while keeping one job. This recording examines a sequential retry; it does not prove safety for concurrent deliveries.", "leftScenarioId": "duplicate-current", "rightScenarioId": "duplicate-proposed" },
+    { "id": "acknowledgement", "title": "Acknowledge only after a successful queue write", "description": "The assumed current handler acknowledges a failed write with no queued job. The proposal retries once after recovery, then acknowledges one queued job. Production retry limits and durable recovery would need separate evidence.", "leftScenarioId": "queue-current", "rightScenarioId": "queue-proposed" }
+  ],
+  "domain": {
+    "entities": [{ "id": "callback", "label": "Callback handling", "attributes": [
+      { "id": "eventId", "label": "Event ID" },
+      { "id": "handled", "label": "Receipt handled" },
+      { "id": "jobs", "label": "Queued jobs" },
+      { "id": "queueState", "label": "Queue write state" },
+      { "id": "response", "label": "Response status" }
+    ] }],
+    "relationships": []
+  },
+  "diagrams": [
+    { "id": "current-handler", "title": "Assumed current callback handling", "kind": "flow", "nodes": [
+      { "id": "receive", "label": "Receive payment callback", "entityIds": ["callback"], "role": "start" },
+      { "id": "enqueue", "label": "Try to queue work", "entityIds": ["callback"] },
+      { "id": "acknowledge", "label": "Acknowledge the callback", "entityIds": ["callback"], "role": "end" }
+    ], "edges": [
+      { "id": "receive-enqueue", "sourceNodeId": "receive", "targetNodeId": "enqueue", "label": "" },
+      { "id": "enqueue-acknowledge", "sourceNodeId": "enqueue", "targetNodeId": "acknowledge", "label": "Write attempted" }
+    ] },
+    { "id": "proposed-handler", "title": "Proposed callback handling", "kind": "flow", "groups": [
+      { "id": "receipt-verification", "label": "Receipt verification", "nodeIds": ["receive", "check"] },
+      { "id": "queue-recovery", "label": "Queue write and recovery", "nodeIds": ["enqueue", "retry"] }
+    ], "nodes": [
+      { "id": "receive", "label": "Receive payment callback", "entityIds": ["callback"], "role": "start" },
+      { "id": "check", "label": "Check the handled receipt", "entityIds": ["callback"], "role": "decision" },
+      { "id": "enqueue", "label": "Try to queue work", "entityIds": ["callback"] },
+      { "id": "retry", "label": "Wait before retrying", "entityIds": ["callback"], "role": "delay" },
+      { "id": "acknowledge", "label": "Acknowledge the callback", "entityIds": ["callback"], "role": "end" }
+    ], "edges": [
+      { "id": "receive-check", "sourceNodeId": "receive", "targetNodeId": "check", "label": "" },
+      { "id": "check-acknowledge", "sourceNodeId": "check", "targetNodeId": "acknowledge", "label": "Already handled" },
+      { "id": "check-enqueue", "sourceNodeId": "check", "targetNodeId": "enqueue", "label": "New event" },
+      { "id": "enqueue-retry", "sourceNodeId": "enqueue", "targetNodeId": "retry", "label": "Write failed" },
+      { "id": "retry-enqueue", "sourceNodeId": "retry", "targetNodeId": "enqueue", "label": "Queue recovered" },
+      { "id": "enqueue-acknowledge", "sourceNodeId": "enqueue", "targetNodeId": "acknowledge", "label": "Write succeeded" }
+    ] }
+  ],
+  "scenarios": [
+    { "id": "duplicate-current", "title": "Repeated callback queues another job", "labels": ["Current", "Failure", "Synthetic"], "diagramId": "current-handler", "description": "Assume a sequential retry of handled event evt-demo arrives after one job was queued. The fictional current handler attempts another queue write and returns HTTP 200. The recording ends with two jobs for the same event.", "occurrences": [
+      { "id": "duplicate-received", "nodeId": "receive", "incomingEdgeId": null, "trigger": "Gateway retries evt-demo", "narration": "The retry arrives with its receipt already handled and one job queued. These values are synthetic assumptions.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": null } }], "links": [] } },
+      { "id": "duplicate-queued", "nodeId": "enqueue", "incomingEdgeId": "receive-enqueue", "trigger": "Queue write succeeds", "narration": "The assumed handler queues work without checking the receipt. A second job is recorded for the same event.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 2, "queueState": "written", "response": null } }], "links": [] } },
+      { "id": "duplicate-acknowledged", "nodeId": "acknowledge", "incomingEdgeId": "enqueue-acknowledge", "trigger": "Return HTTP 200", "narration": "The handler acknowledges the retry. The duplicate job remains queued.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 2, "queueState": "written", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 2, "queueState": "written", "response": 200 } }], "links": [] } }
+    ] },
+    { "id": "duplicate-proposed", "title": "Receipt check keeps one queued job", "labels": ["Proposed", "Retry", "Synthetic"], "diagramId": "proposed-handler", "description": "Assume the same handled event arrives with one queued job. The proposed handler checks the receipt and acknowledges the retry without another write. The recording ends with one job; concurrent delivery is outside this example.", "occurrences": [
+      { "id": "retry-received", "nodeId": "receive", "incomingEdgeId": null, "trigger": "Gateway retries evt-demo", "narration": "The proposal starts from the same synthetic receipt and queue state as the current recording.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": null } }], "links": [] } },
+      { "id": "retry-checked", "nodeId": "check", "incomingEdgeId": "receive-check", "trigger": "Read handled receipt", "narration": "The receipt identifies an event already handled. The recording takes the direct acknowledgement branch.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": null } }], "links": [] } },
+      { "id": "retry-acknowledged", "nodeId": "acknowledge", "incomingEdgeId": "check-acknowledge", "trigger": "Return HTTP 200", "narration": "The retry is acknowledged while its one existing job remains unchanged. This sequential recording does not establish an atomic concurrency guarantee.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-demo", "handled": true, "jobs": 1, "queueState": "idle", "response": 200 } }], "links": [] } }
+    ] },
+    { "id": "queue-current", "title": "Failed write still acknowledges the callback", "labels": ["Current", "Failure", "Synthetic"], "diagramId": "current-handler", "description": "Assume a new event arrives while the queue is unavailable. The fictional current handler attempts a write and still returns HTTP 200. The recording ends with no queued job and an unhandled receipt.", "occurrences": [
+      { "id": "new-received", "nodeId": "receive", "incomingEdgeId": null, "trigger": "Gateway sends evt-new", "narration": "A new synthetic event arrives with no queued work and an unhandled receipt.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "idle", "response": null } }], "links": [] } },
+      { "id": "write-failed", "nodeId": "enqueue", "incomingEdgeId": "receive-enqueue", "trigger": "Queue unavailable", "narration": "The queue write fails. No job is recorded and the receipt remains unhandled.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "failed", "response": null } }], "links": [] } },
+      { "id": "failure-acknowledged", "nodeId": "acknowledge", "incomingEdgeId": "enqueue-acknowledge", "trigger": "Return HTTP 200", "narration": "The assumed handler sends a successful acknowledgement despite the failed write. The recorded outcome is missing work, not successful processing.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "failed", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "failed", "response": 200 } }], "links": [] } }
+    ] },
+    { "id": "queue-proposed", "title": "Recovered queue accepts work before acknowledgement", "labels": ["Proposed", "Retry", "Synthetic"], "diagramId": "proposed-handler", "description": "Assume the same new event encounters one failed queue write and the queue then recovers. Under the proposed policy, the handler retries, records one job, and acknowledges only after success. Retry limits and durable recovery are outside this synthetic recording.", "occurrences": [
+      { "id": "proposed-received", "nodeId": "receive", "incomingEdgeId": null, "trigger": "Gateway sends evt-new", "narration": "The proposal starts from the same synthetic event and empty queue state as the current recording.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "idle", "response": null } }], "links": [] } },
+      { "id": "proposed-checked", "nodeId": "check", "incomingEdgeId": "receive-check", "trigger": "Read unhandled receipt", "narration": "The event is new, so this traversal must queue work before acknowledgement.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "idle", "response": null } }], "links": [] } },
+      { "id": "proposed-write-failed", "nodeId": "enqueue", "incomingEdgeId": "check-enqueue", "trigger": "Queue unavailable", "narration": "The first write fails. The proposal withholds a response and retains the unhandled receipt.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "idle", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "failed", "response": null } }], "links": [] } },
+      { "id": "proposed-wait", "nodeId": "retry", "incomingEdgeId": "enqueue-retry", "trigger": "Retry delay starts", "narration": "The assumed policy waits before another write. Waiting records no queued work and no successful response.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "failed", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "failed", "response": null } }], "links": [] } },
+      { "id": "proposed-write-succeeded", "nodeId": "enqueue", "incomingEdgeId": "retry-enqueue", "trigger": "Queue recovers", "narration": "The second queue visit has its own occurrence ID. This synthetic successful write records one job and marks the receipt handled.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": false, "jobs": 0, "queueState": "failed", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": true, "jobs": 1, "queueState": "written", "response": null } }], "links": [] } },
+      { "id": "proposed-acknowledged", "nodeId": "acknowledge", "incomingEdgeId": "enqueue-acknowledge", "trigger": "Return HTTP 200", "narration": "Only the successful queue write reaches acknowledgement in this recording. The proposed trace ends with one queued job and a handled receipt.",
+        "before": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": true, "jobs": 1, "queueState": "written", "response": null } }], "links": [] },
+        "after": { "instances": [{ "id": "run", "entityId": "callback", "values": { "eventId": "evt-new", "handled": true, "jobs": 1, "queueState": "written", "response": 200 } }], "links": [] } }
+    ] }
+  ]
+}

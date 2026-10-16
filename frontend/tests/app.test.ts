@@ -3,7 +3,7 @@ import { createApp, nextTick } from 'vue';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { afterEach, expect, it, vi } from 'vitest';
-import fixture from '../../examples/order-lifecycle.json';
+import fixture from './fixtures/legacy-order-lifecycle';
 import App from '../src/App.vue';
 import type { Explanation, ExplanationSummary } from '../src/model';
 
@@ -37,9 +37,9 @@ const graphFixture = () => {
   return document;
 };
 
-async function mountFixture(documentFixture: typeof fixture | Explanation = graphFixture(), items?: ExplanationSummary[]) {
+async function mountFixture(documentFixture: typeof fixture | Explanation = graphFixture(), items?: ExplanationSummary[], mobile = false) {
   vi.stubGlobal('WebSocket', LiveSocket);
-  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: mobile && query === '(max-width: 700px)', addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/explanations'
     ? items ?? [{ id: 'order-lifecycle', revision: 1, title: fixture.title, description: fixture.description, updatedAtMs: 1, diagramCount: documentFixture.diagrams.length, scenarioCount: documentFixture.scenarios.length, linkCount: (documentFixture as Explanation).links?.length ?? 0 }]
     : { id: path.split('/').at(-1), revision: 1, updatedAtMs: 1, document: documentFixture })));
@@ -55,7 +55,61 @@ async function closeDialog() {
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
 }
 
+async function openRecording() {
+  const card = document.querySelector<HTMLButtonElement>('.explanation-card')!;
+  card.click(); await settle();
+  document.querySelector<HTMLButtonElement>('.scenario-link')!.click(); await settle();
+}
+
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.removeItem('lain-theme'); document.documentElement.classList.remove('app-dark'); document.body.replaceChildren(); history.replaceState(null, '', originalURL); });
+
+it('opens mobile navigation from the hamburger and dismisses it without changing the recorded cursor', async () => {
+  const app = await mountFixture(graphFixture(), undefined, true);
+  try {
+    await openRecording();
+    const toggle = document.querySelector<HTMLButtonElement>('.mobile-nav-toggle')!;
+    const sidebar = document.querySelector('.focus-sidebar-slot')!;
+    const cursor = location.search;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(sidebar.hasAttribute('inert')).toBe(true);
+    toggle.click(); await settle();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(sidebar.hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).toBe(document.querySelector('.overview-link'));
+    await press('Escape');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle);
+    expect(location.search).toBe(cursor);
+    toggle.click(); await settle();
+    document.querySelector<HTMLElement>('.mobile-nav-backdrop')!.click(); await settle();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle);
+    expect(location.search).toBe(cursor);
+  } finally { app.unmount(); }
+});
+
+it('closes mobile navigation after selecting a scenario or Overview', async () => {
+  const app = await mountFixture(graphFixture(), undefined, true);
+  try {
+    await openRecording();
+    const toggle = document.querySelector<HTMLButtonElement>('.mobile-nav-toggle')!;
+    toggle.click(); await settle();
+    const target = document.querySelectorAll<HTMLButtonElement>('.scenario-link')[1]!;
+    target.click(); await settle();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(currentScenario()).toBe(target.textContent);
+    expect(document.activeElement).toBe(button('Diagram'));
+    toggle.click(); await settle();
+    document.querySelector<HTMLButtonElement>('.overview-link')!.click(); await settle();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(new URLSearchParams(location.search).get('view')).toBe('overview');
+    expect(document.activeElement).toBe(document.querySelector('.overview-intro h2'));
+    toggle.click(); await settle();
+    document.querySelector<HTMLButtonElement>('.overview-link')!.click(); await settle();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle);
+  } finally { app.unmount(); }
+});
 
 it('toggles the root theme and restores the saved choice when the viewer remounts', async () => {
   const toggle = () => document.querySelector<HTMLButtonElement>('[aria-label="Toggle dark mode"]')!;
@@ -73,64 +127,12 @@ it('toggles the root theme and restores the saved choice when the viewer remount
     app = await mountFixture();
     expect(toggle().getAttribute('aria-pressed')).toBe('true');
     expect(document.documentElement.classList.contains('app-dark')).toBe(true);
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     expect(toggle().previousElementSibling?.getAttribute('aria-label')).toBe('Quick actions');
     toggle().click(); await settle();
     expect(toggle().getAttribute('aria-pressed')).toBe('false');
     expect(document.documentElement.classList.contains('app-dark')).toBe(false);
     expect(localStorage.getItem('lain-theme')).toBe('light');
-  } finally { app.unmount(); }
-});
-
-it('keeps agent-authored scenario context stable while showing each visit’s safe prose and recorded calls', async () => {
-  const authored = graphFixture();
-  const scenario = authored.scenarios[1]!;
-  scenario.description = 'A gateway retries a handled callback.\n\n<script>Assumption: the gateway will retry.</script>';
-  scenario.occurrences[1]!.narration = 'The first read checks the receipt.\n\n<img src=x onerror=alert(1)>';
-  scenario.occurrences[3]!.narration = 'The verification read checks the saved receipt. <svg onload=alert(1)>';
-  scenario.occurrences[3]!.methodCalls = [
-    { entityId: 'payment', methodId: 'capture', instanceId: 'pay-72' },
-    { entityId: 'payment', methodId: 'capture' },
-  ];
-  const app = await mountFixture(authored);
-  try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    button(scenario.title).click(); await settle();
-    const overview = document.querySelector('.scenario-overview')!;
-    const description = () => overview.querySelector('.details-prose')!.textContent;
-    await press('l');
-    expect(description()).toBe(scenario.description);
-    expect(document.querySelector('.step-narration')!.textContent).toBe(scenario.occurrences[1]!.narration);
-    const stepDetails = document.querySelector<HTMLElement>('.step-details')!;
-    stepDetails.scrollTop = 240;
-    await press('l'); await press('l');
-    expect(stepDetails.scrollTop).toBe(0);
-    expect(document.querySelector('.scenario-overview')).toBe(overview);
-    expect(description()).toBe(scenario.description);
-    expect(document.querySelector('.step-narration')!.textContent).toBe(scenario.occurrences[3]!.narration);
-    expect([...document.querySelectorAll('.step-calls code')].map(node => node.textContent)).toEqual(['capture(): void', 'capture(): void']);
-    expect([...document.querySelectorAll('.step-calls small')].map(node => node.textContent)).toEqual(['pay-72', 'Receiver not captured']);
-    expect(document.querySelector('.details-panel script, .details-panel img, .details-panel svg')).toBeNull();
-    button('Declined payment stops fulfillment').click(); await settle();
-    expect(description()).toBe(authored.scenarios[2]!.description);
-    expect(document.querySelector('.step-calls')).toBeNull();
-  } finally { app.unmount(); }
-});
-
-it('shows explicit prose gaps for recordings with omitted or blank scenario details', async () => {
-  const authored = graphFixture();
-  delete authored.scenarios[0]!.description;
-  authored.scenarios[1]!.description = '   ';
-  authored.scenarios[0]!.occurrences[0]!.narration = '';
-  const app = await mountFixture(authored);
-  try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    expect(document.querySelector('.scenario-overview')!.textContent).toContain('No scenario description recorded.');
-    expect(document.querySelector('.step-details')!.textContent).toContain('No step explanation recorded.');
-    expect(document.querySelector('.step-calls')).toBeNull();
-    button('Repeated callback keeps one fulfillment').click(); await settle();
-    expect(document.querySelector('.scenario-overview')!.textContent).toContain('No scenario description recorded.');
-    expect(document.querySelector('.step-narration')!.textContent).toBe(authored.scenarios[1]!.occurrences[0]!.narration);
   } finally { app.unmount(); }
 });
 
@@ -147,13 +149,13 @@ it('offers safe explanation-wide references across views without changing the re
   try {
     expect(document.querySelector('.explanation-links-trigger')).toBeNull();
     expect(document.querySelector('.card-bottom')!.textContent).toContain(`${authored.diagrams.length} diagrams · ${authored.scenarios.length} scenarios · 4 links`);
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     const trigger = document.querySelector<HTMLButtonElement>('.explanation-links-trigger')!;
     expect(trigger.closest('.header-identity')).not.toBeNull();
     expect(trigger.textContent).toBe('Links · 2');
     await press('l');
     const cursor = location.search;
-    for (const tab of ['Details', 'Diagram', 'Domain']) {
+    for (const tab of ['Diagram', 'Domain']) {
       button(tab).click(); await settle();
       trigger.click(); await settle();
       await vi.waitFor(() => expect(trigger.getAttribute('aria-expanded')).toBe('true'));
@@ -174,7 +176,7 @@ it('offers safe explanation-wide references across views without changing the re
     document.querySelector<HTMLButtonElement>('.brand')!.click(); await settle();
     expect(document.querySelector('.explanation-links-popover')).toBeNull();
     delete authored.links;
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     expect(document.querySelector('.explanation-links-trigger')).toBeNull();
   } finally { app.unmount(); }
 });
@@ -182,7 +184,7 @@ it('offers safe explanation-wide references across views without changing the re
 it.each(['navigator', 'graph'])('opens detail recordings from the %s icon at their saved occurrence while preserving the source cursor', async surface => {
   const app = await mountFixture(fixture);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button('Authorized payment marks order paid').click(); await settle();
     await press('l');
     button('New payment queues fulfillment').click(); await settle();
@@ -209,7 +211,7 @@ it('keeps detail icons disabled when their diagram has no recorded scenario', as
   documentFixture.scenarios = documentFixture.scenarios.filter(item => item.diagramId !== 'payment-capture-flow');
   const app = await mountFixture(documentFixture);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     await press('l'); await press('l');
     const icon = document.querySelector<HTMLElement>('.step-tile.is-current .drill-link')!;
     expect(icon.dataset.disabled).toBe('true');
@@ -230,7 +232,7 @@ it.each([
   const target = fixture.scenarios.find(item => item.id === targetId)!;
   const app = await mountFixture(fixture);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button(target.title).click(); await settle();
     await press('l');
     button(source.title).click(); await settle();
@@ -270,7 +272,7 @@ it.each(['successful-callback', 'capture-payment-exchange'].flatMap(sourceId => 
   const visit = source.occurrences.find(item => item.nodeId === node.id)!;
   const app = await mountFixture(fixture);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button(source.title).click(); await settle();
     for (let step = 0; step < source.occurrences.findIndex(item => item.id === visit.id); step++) await press('l');
     button('Diagram').click(); await settle();
@@ -292,7 +294,7 @@ it.each(['.quick-actions-trigger', '.scenario-link.selected', '.event-controls b
   try {
     await press('m');
     expect(document.querySelector('.app-header')!.closest('[inert]')).toBeNull();
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button('Domain').click(); await settle();
     const cursor = location.search;
     const origin = document.querySelector<HTMLElement>(selector)!;
@@ -335,7 +337,7 @@ it('guards focus mode in editable controls and overlays and exposes it through q
   const app = await mountFixture();
   const focused = () => document.querySelector('.workspace')!.classList.contains('focus-mode');
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }, { repeat: true }]) await press('m', options);
     for (const [tag, attributes] of [
       ['input', {}], ['textarea', {}], ['select', {}], ['div', { contenteditable: 'true' }],
@@ -359,7 +361,7 @@ it('guards focus mode in editable controls and overlays and exposes it through q
     await press('Enter', {}, search);
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     expect(focused()).toBe(true);
-    expect(document.activeElement).toBe(button('Details'));
+    expect(document.activeElement).toBe(button('Diagram'));
     await press('k', { ctrlKey: true });
     document.querySelector<HTMLElement>('#quick-action-m')!.click(); await settle();
     await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
@@ -372,7 +374,7 @@ it('navigates adjacent occurrence IDs above every tab and reserves empty boundar
   const current = () => document.querySelector<HTMLButtonElement>('.step-tile[aria-current="step"]')!;
   const neighbor = (role: string) => document.querySelector<HTMLButtonElement>(`.step-tile.is-visible[aria-label^="${role} step:"]`);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button('Repeated callback keeps one fulfillment').click(); await settle();
     const recorded = fixture.scenarios.find(item => item.id === 'duplicate-callback')!.occurrences;
     const navigator = document.querySelector('.step-navigator')!;
@@ -421,7 +423,7 @@ it('navigates adjacent occurrence IDs above every tab and reserves empty boundar
 it.each(['.step-tile[aria-current="step"]', '.diagram-panel', '.viewport-scroll', '.graph-node[tabindex="0"]', '.diagram-minimap'].flatMap(selector => ['Escape', '['].map(key => ({ selector, key }))))('blurs $selector on $key while preserving the recorded selection and shortcuts', async ({ selector, key }) => {
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button('Diagram').click(); await settle();
     const focused = document.querySelector<HTMLElement | SVGElement>(selector)!;
     focused.focus();
@@ -453,8 +455,8 @@ it.each(['modal', 'dropdown'].flatMap(kind => ['Escape', '['].map(key => ({ kind
 it.each(['Escape', '['])('opens the overview with %s only when no control has focus', async key => {
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    button('Details').focus();
+    await openRecording();
+    button('Diagram').focus();
     const route = location.search;
     await press(key, { ctrlKey: key === '[' }, document.activeElement!);
     expect(document.activeElement).toBe(document.body);
@@ -619,7 +621,7 @@ it('centers a single recorded occurrence with empty neighbors and an uncaptured 
   single.scenarios[0]!.occurrences[0]!.trigger = null;
   const app = await mountFixture(single);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     const steps = document.querySelectorAll<HTMLButtonElement>('.step-tile');
     expect(steps).toHaveLength(1);
     expect(steps[0]!.getAttribute('aria-current')).toBe('step');
@@ -662,7 +664,7 @@ it('wires traversal and automatically updates the explanation while preserving r
   try {
     LiveSocket.current.onopen?.(); await settle();
     expect(document.querySelector('.app-header [aria-label="Lain explanation library"]')).toBeNull();
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     expect(document.querySelector('.app-header [aria-label="Lain explanation library"] svg')!.getAttribute('aria-hidden')).toBe('true');
     expect(explanationTitle()).toBe(fixture.title);
     expect(document.querySelector('.step-tile[aria-current="step"] .step-number')!.textContent).toBe('1/4');
@@ -691,7 +693,6 @@ it('wires traversal and automatically updates the explanation while preserving r
     expect(currentEvent()).toContain('2/5');
     document.querySelector<SVGGElement>('.diagram-panel [role="button"][data-node-id="capture"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
     expect(document.querySelector('.offpath-note')!.textContent).toContain('current event stays unchanged');
-    button('Details').click(); await settle();
     button('Next event').click(); await settle();
     button('Next event').click(); await settle();
     expect(currentEvent()).toContain('4/5');
@@ -715,7 +716,7 @@ it('wires traversal and automatically updates the explanation while preserving r
 it.each(['existing', 'check', 'capture'])('toggles the %s node inspector without navigating when it closes', async nodeId => {
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button('Repeated callback keeps one fulfillment').click(); await settle();
     button('Diagram').click(); await settle();
     const node = document.querySelector<SVGGElement>(`.diagram-panel [data-node-id="${nodeId}"]`)!;
@@ -741,7 +742,7 @@ it('renders entity methods as safe definitions in the domain compartment and ins
   documentFixture.domain.entities[0]!.methods = [{ id: 'capture-payment', signature, description }];
   const app = await mountFixture(documentFixture);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button('Domain').click(); await settle();
     const order = document.querySelector<SVGGElement>('.domain-entity[data-entity-id="order"]')!;
     expect(order.querySelector('.domain-methods')!.getAttribute('aria-label')).toBe('Order methods');
@@ -764,21 +765,21 @@ it('switches embedded views with bounded tab shortcuts and preserves keyboard fo
   const app = await mountFixture();
   const selected = () => document.querySelector<HTMLButtonElement>('.event-tablist [role="tab"][aria-selected="true"]')!;
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    expect([...document.querySelectorAll('.event-tablist [role="tab"]')].map(tab => tab.textContent)).toEqual(['Details', 'Diagram', 'Domain']);
+    await openRecording();
+    expect([...document.querySelectorAll('.event-tablist [role="tab"]')].map(tab => tab.textContent)).toEqual(['Diagram', 'Domain']);
     await press('[');
-    expect(selected().textContent).toBe('Details');
+    expect(selected().textContent).toBe('Diagram');
     const cursor = new URLSearchParams(location.search).get('occurrence');
-    document.querySelector<HTMLElement>('.event-story')!.focus();
+    selected().focus();
     await press(']', {}, document.activeElement!);
-    expect(selected().textContent).toBe('Diagram');
-    expect(document.activeElement).toBe(selected());
-    expect(document.querySelector('.event-story')!.getAttribute('style')).toContain('display: none');
-    expect(document.querySelector('.diagram-panel .graph')).not.toBeNull();
-    for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) await press(']', options);
-    expect(selected().textContent).toBe('Diagram');
-    await press(']', { repeat: true });
     expect(selected().textContent).toBe('Domain');
+    expect(document.activeElement).toBe(selected());
+    for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) await press(']', options);
+    expect(selected().textContent).toBe('Domain');
+    await press('[', { repeat: true });
+    expect(selected().textContent).toBe('Diagram');
+    expect(document.querySelector('.diagram-panel .graph')).not.toBeNull();
+    await press(']');
     const domainPanel = document.querySelector<HTMLElement>('.domain-panel')!;
     expect(domainPanel.getAttribute('aria-labelledby')).toBe(selected().id);
     await press('l', {}, domainPanel);
@@ -792,7 +793,7 @@ it('switches embedded views with bounded tab shortcuts and preserves keyboard fo
     await press('ArrowLeft', {}, selected());
     expect(selected().textContent).toBe('Diagram');
     await press('Home', {}, selected());
-    expect(selected().textContent).toBe('Details');
+    expect(selected().textContent).toBe('Diagram');
     await press('End', {}, selected());
     expect(selected().textContent).toBe('Domain');
     expect(document.activeElement).toBe(selected());
@@ -812,7 +813,7 @@ it.each(['j', 'ArrowDown', 'k', 'ArrowUp'])('scrolls Scenarios to its boundary w
   const app = await mountFixture(fixture);
   const first = key === 'k' || key === 'ArrowUp';
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     const links = [...document.querySelectorAll<HTMLButtonElement>('.scenario-link')];
     links.at(first ? 1 : -2)!.click(); await settle();
     const region = document.querySelector<HTMLElement>('.scenarios-scroll')!;
@@ -829,8 +830,10 @@ it('bounds keyboard traversal in sidebar group order and preserves each scenario
   interleaved.scenarios = [fixture.scenarios[0]!, fixture.scenarios[3]!, fixture.scenarios[1]!, fixture.scenarios[2]!];
   const app = await mountFixture(interleaved);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     await press('h'); await press('k');
+    expect(document.querySelector('.overview-link')!.getAttribute('aria-current')).toBe('page');
+    await press('j');
     expect(currentEvent()).toContain('1/4');
     expect(currentScenario()).toBe('New payment queues fulfillment');
     for (let count = 0; count < 6; count++) await press('l', { repeat: true });
@@ -865,8 +868,7 @@ it('bounds keyboard traversal in sidebar group order and preserves each scenario
     expect(currentEvent()).toBe(event); expect(currentScenario()).toBe(title);
     const otherModal = document.createElement('div'); otherModal.setAttribute('aria-modal', 'true'); document.body.append(otherModal);
     await press(']');
-    expect(button('Details').getAttribute('aria-selected')).toBe('true'); otherModal.remove();
-    await press(']');
+    expect(button('Diagram').getAttribute('aria-selected')).toBe('true'); otherModal.remove();
     expect(button('Diagram').getAttribute('aria-selected')).toBe('true');
     await press('h');
     expect(currentEvent()).toContain('1/4');
@@ -885,6 +887,8 @@ it('bounds keyboard traversal in sidebar group order and preserves each scenario
     expect(currentEvent()).toContain('2/5');
     expect(document.querySelector('.diagram-panel [aria-label="Ignore the duplicate callback"]')!.classList.contains('on-scenario')).toBe(true);
     await press('k'); await press('k');
+    expect(document.querySelector('.overview-link')!.getAttribute('aria-current')).toBe('page');
+    await press('j');
     expect(currentScenario()).toBe('New payment queues fulfillment');
     expect(currentEvent()).toContain('4/4');
     expect(document.querySelector('.diagram-panel [aria-label="Ignore the duplicate callback"]')!.classList.contains('off-scenario')).toBe(true);
@@ -920,12 +924,13 @@ it('bounds keyboard traversal in sidebar group order and preserves each scenario
 it('uses arrows for event and scenario navigation across embedded views and input boundaries', async () => {
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     await press('ArrowLeft'); await press('ArrowUp');
+    expect(document.querySelector('.overview-link')!.getAttribute('aria-current')).toBe('page');
+    await press('ArrowDown');
     expect(currentEvent()).toContain('1/4'); expect(currentScenario()).toBe('New payment queues fulfillment');
     await press('ArrowRight', { repeat: true }); await press('ArrowDown'); await press('ArrowUp');
     expect(currentEvent()).toContain('2/4'); expect(currentScenario()).toBe('New payment queues fulfillment');
-    await press(']');
     await press('ArrowLeft', {}, document.querySelector('.diagram-panel')!);
     expect(currentEvent()).toContain('1/4');
     await press('ArrowRight', {}, document.querySelector('.diagram-panel')!); await press('ArrowDown', {}, document.querySelector('.diagram-panel')!);
@@ -955,7 +960,7 @@ it('jumps to scenario endpoints with G and gg while preserving shortcut input bo
   const app = await mountFixture(fixture);
   try {
     await press('G', { shiftKey: true });
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     await press('G', { shiftKey: true });
     expect(currentEvent()).toContain('4/4');
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(fixture.scenarios[0]!.occurrences.at(-1)!.id);
@@ -998,27 +1003,28 @@ it('jumps to scenario endpoints with G and gg while preserving shortcut input bo
   } finally { app.unmount(); }
 });
 
-it('resets every scenario and selects the first sidebar scenario from Details with Shift+H', async () => {
+it('resets every scenario and opens the first sidebar scenario in Diagram through Quick actions', async () => {
   const documentFixture = structuredClone(fixture) as Explanation;
   documentFixture.scenarios.unshift(documentFixture.scenarios.pop()!);
   const app = await mountFixture(documentFixture);
   try {
     await press('H', { shiftKey: true });
     expect(document.querySelector('.workspace')).toBeNull();
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     for (const scenario of documentFixture.scenarios) {
       button(scenario.title).click(); await settle();
       await press('G', { shiftKey: true });
     }
-    button('Details').click(); await settle();
+    button('Domain').click(); await settle();
+    await press('k', { ctrlKey: true });
     const push = vi.spyOn(history, 'pushState');
     const fetchCount = vi.mocked(fetch).mock.calls.length;
-    await press('H', { shiftKey: true }, document.querySelector('[role="tabpanel"]:not([style*="display: none"])')!);
+    document.querySelector<HTMLElement>('#quick-action-H')!.click();
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     const firstScenario = fixture.scenarios[0]!;
     expect(currentScenario()).toBe(firstScenario.title);
     expect(currentEvent()).toContain('1/4');
-    expect(button('Details').getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(button('Details'));
+    expect(button('Diagram').getAttribute('aria-selected')).toBe('true');
     expect(new URLSearchParams(location.search).get('scenario')).toBe(firstScenario.id);
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(firstScenario.occurrences[0]!.id);
     expect(push).toHaveBeenCalledTimes(1);
@@ -1030,54 +1036,10 @@ it('resets every scenario and selects the first sidebar scenario from Details wi
   } finally { app.unmount(); }
 });
 
-it('guards Shift+H in inputs and overlays and exposes reset through quick actions', async () => {
-  const app = await mountFixture();
-  try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
-    await press('j'); await press('l');
-    button('Details').click(); await settle();
-    const before = currentEvent();
-    for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { isComposing: true }, { repeat: true }]) {
-      await press('H', { shiftKey: true, ...options });
-    }
-    const canceled = new KeyboardEvent('keydown', { key: 'H', shiftKey: true, bubbles: true, cancelable: true });
-    canceled.preventDefault(); document.dispatchEvent(canceled);
-    const handled = document.createElement('button'); document.body.append(handled);
-    handled.addEventListener('keydown', event => event.preventDefault());
-    await press('H', { shiftKey: true }, handled); handled.remove();
-    for (const [tag, attributes] of [
-      ['input', {}], ['textarea', {}], ['select', {}], ['div', { contenteditable: 'true' }],
-      ['div', { role: 'textbox' }], ['div', { role: 'combobox' }], ['div', { role: 'listbox' }], ['div', { class: 'p-select-overlay' }],
-    ] as const) {
-      const target = document.createElement(tag);
-      for (const [key, value] of Object.entries(attributes)) target.setAttribute(key, value);
-      document.body.append(target);
-      await press('H', { shiftKey: true }, target); target.remove();
-    }
-    const modal = document.createElement('div'); modal.setAttribute('aria-modal', 'true'); document.body.append(modal);
-    await press('H', { shiftKey: true }); modal.remove();
-    await press('k', { ctrlKey: true });
-    const search = document.querySelector<HTMLInputElement>('[aria-label="Search quick actions"]')!;
-    await press('H', { shiftKey: true }, search);
-    expect(currentEvent()).toBe(before);
-    expect(currentScenario()).toBe('Repeated callback keeps one fulfillment');
-    expect(button('Details').getAttribute('aria-selected')).toBe('true');
-    search.value = 'Reset explanation'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle();
-    expect(document.querySelector('#quick-action-H kbd')!.textContent).toBe('Shift+H');
-    await press('Enter', {}, search);
-    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-    expect(currentScenario()).toBe('New payment queues fulfillment');
-    expect(currentEvent()).toContain('1/4');
-    expect(button('Details').getAttribute('aria-selected')).toBe('true');
-    await press('j');
-    expect(currentEvent()).toContain('1/5');
-  } finally { app.unmount(); }
-});
-
 it.each(['Diagram', 'Domain'])('zooms %s and toggles fit / 1:1 through guarded shortcuts and quick actions', async tab => {
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button(tab).click(); await settle();
     const canvas = () => document.querySelector<HTMLElement>('.viewport-enabled')!;
     const zoom = () => Number(canvas().dataset.scale);
@@ -1130,17 +1092,13 @@ it.each(['Diagram', 'Domain'])('zooms %s and toggles fit / 1:1 through guarded s
     expect([scroller.scrollLeft, scroller.scrollTop]).toEqual(fitPosition);
     await press(';'); expect(zoom()).toBe(1);
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(cursor);
-    button('Details').click(); await settle();
-    for (const key of ['=', '-', ';']) await press(key);
-    expect(button('Details').getAttribute('aria-selected')).toBe('true');
-    expect(new URLSearchParams(location.search).get('occurrence')).toBe(cursor);
   } finally { app.unmount(); }
 });
 
 it.each(['Diagram', 'Domain'])('pans %s with shifted navigation keys while preserving the recorded selection', async tab => {
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     await press('j'); await press('l');
     button(tab).click(); await settle();
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
@@ -1178,7 +1136,7 @@ it.each(['Diagram', 'Domain'])('pans %s with shifted navigation keys while prese
 it('starts keyboard panning at the visible position when the frame timestamp precedes setup time', async () => {
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button('Diagram').click(); await settle();
     const scroller = document.querySelector<HTMLElement>('.viewport-enabled .viewport-scroll')!;
     Object.defineProperties(scroller, { clientWidth: { value: 1000 }, clientHeight: { value: 500 }, scrollWidth: { value: 10000 }, scrollHeight: { value: 10000 } });
@@ -1200,7 +1158,7 @@ it('starts keyboard panning at the visible position when the frame timestamp pre
 it.each(['Diagram', 'Domain'])('pans %s continuously while held and stops on release or lost focus', async tab => {
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button(tab).click(); await settle();
     const scroller = document.querySelector<HTMLElement>('.viewport-enabled .viewport-scroll')!;
     Object.defineProperties(scroller, { clientWidth: { value: 1000 }, clientHeight: { value: 500 }, scrollWidth: { value: 10000 }, scrollHeight: { value: 10000 } });
@@ -1249,10 +1207,10 @@ it('searches all quick actions, skips disabled options, executes selection, and 
     await press('k', { ctrlKey: true }, origin);
     const search = () => document.querySelector<HTMLInputElement>('[aria-label="Search quick actions"]')!;
     expect(document.activeElement).toBe(search());
-    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(28);
-    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(28);
+    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(29);
+    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(29);
     await closeDialog();
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     await press('k', { ctrlKey: true });
     expect(search().getAttribute('aria-activedescendant')).toBe('quick-action-l');
     await press('ArrowDown', {}, search());
@@ -1302,10 +1260,10 @@ it('copies explanation paths from the event, diagram, ERD, and quick actions wit
   const yank = async (key: string, target: EventTarget = document) => { await press('y', {}, target); await press(key, {}, target); };
   try {
     await yank('s'); expect(writeText).not.toHaveBeenCalled();
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     const diagramPath = `${fixture.title} → Payment handling`;
     const scenarioPath = `${diagramPath} → New payment queues fulfillment`;
-    await yank('s', document.querySelector('.event-story')!);
+    await yank('s', document.querySelector('.event-content')!);
     expect(writeText).toHaveBeenLastCalledWith(scenarioPath);
     expect(document.querySelector('[role="alert"]')!.textContent).toContain('Scenario path copied to clipboard');
     expect(document.querySelector('[role="alert"]')!.textContent).toContain(scenarioPath);
@@ -1344,7 +1302,7 @@ it('bounds yank key sequences and preserves typing, modifiers, composition, and 
   vi.stubGlobal('navigator', Object.assign(Object.create(navigator), { clipboard: { writeText } }));
   const app = await mountFixture();
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     const clock = vi.spyOn(Date, 'now'); clock.mockReturnValue(1000);
     await press('s'); await press('y'); clock.mockReturnValue(2001); await press('s');
     await press('y'); await press('x'); await press('d');
@@ -1375,7 +1333,7 @@ it('navigates repeated occurrences and shows traversed visit counts from the fir
   selected.occurrences.splice(2, 0, ...repeats);
   const app = await mountFixture(loop);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     await press('l'); await press('l');
     const future = document.querySelector<HTMLButtonElement>('.step-tile.is-visible[aria-label^="Next step:"]')!;
     expect(future.querySelector('.step-trigger code')!.textContent).toBe('receipt.recheck(3)');
@@ -1386,7 +1344,6 @@ it('navigates repeated occurrences and shows traversed visit counts from the fir
     expect(document.querySelector('.step-tile[aria-current="step"] .step-trigger code')!.textContent).toBe('receipt.recheck(3)');
     const lookup = [...document.querySelectorAll('.value-row')].find(node => node.textContent?.includes('Receipt lookups'))!;
     expect([...lookup.querySelectorAll('pre')].map(node => node.textContent)).toEqual(['2', '3']);
-    await press(']');
     expect(document.querySelector('.diagram-panel .graph-node.current')!.getAttribute('aria-label')).toBe('Receipt checked · visited 3 times');
     expect(document.querySelector('.diagram-panel .node-visit-badge text')!.textContent).toBe('3');
     expect(document.querySelector('.diagram-panel .edge-visit-count')!.textContent).toBe('×2');
@@ -1397,12 +1354,10 @@ it('navigates repeated occurrences and shows traversed visit counts from the fir
     await press('h');
     expect(document.querySelector('.diagram-panel .node-visit-badge text')!.textContent).toBe('1');
     expect(document.querySelector('.diagram-panel .graph-node.current')!.getAttribute('aria-label')).toBe('Receipt checked · visited 1 time');
-    button('Details').click(); await settle();
     await press('G', { shiftKey: true });
     button('Replay scenario').click(); await settle();
      expect(currentEvent()).toContain('1/6');
     expect(document.querySelector('.step-tile.is-current .step-number')!.textContent).toBe('1/6');
-    await press(']');
     expect(document.querySelector('.diagram-panel .node-visit-badge, .diagram-panel .edge-visit-count')).toBeNull();
     button('Declined payment stops fulfillment').click(); await settle();
     await press('l');
@@ -1413,9 +1368,8 @@ it('navigates repeated occurrences and shows traversed visit counts from the fir
 it('shares sequence fragments across scenarios and preserves occurrence selection across tabs', async () => {
   const app = await mountFixture(fixture);
   try {
-    document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+    await openRecording();
     button('First delivery closes fulfillment').click(); await settle();
-    await press(']');
     const panel = () => document.querySelector('.diagram-panel')!;
     await press('j');
     expect(currentScenario()).toBe('Retry delivers the parcel');

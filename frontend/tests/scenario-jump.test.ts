@@ -3,7 +3,7 @@ import { createApp, nextTick } from 'vue';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { afterEach, expect, it, vi } from 'vitest';
-import fixture from '../../examples/order-lifecycle.json';
+import fixture from './fixtures/legacy-order-lifecycle';
 import App from '../src/App.vue';
 import type { Explanation } from '../src/model';
 import { captureChart } from '../src/chart-export';
@@ -54,6 +54,7 @@ async function mountFixture(authored: Explanation = structuredClone(fixture) as 
   app.mount(root);
   LiveSocket.current.onopen?.(); await settle();
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+  document.querySelector<HTMLButtonElement>('.scenario-link')!.click(); await settle();
   tab('Diagram').click(); await settle();
   return app;
 }
@@ -117,6 +118,87 @@ it('jumps through numbered nodes and scenarios without focusing a diagram node',
   } finally { app.unmount(); }
 });
 
+it.each(['flow', 'state', 'sequence'] as const)('animates a %s node jump at the destination zoom across fresh, panned, and fitted scenarios', async kind => {
+  const authored = numberedFixture(8);
+  const diagram = authored.diagrams[0]!;
+  diagram.kind = kind;
+  if (kind === 'sequence') diagram.sequence = {
+    participants: [{ id: 'sender', label: 'Sender' }, { id: 'receiver', label: 'Receiver' }],
+    messages: diagram.nodes.map(node => ({ nodeId: node.id, fromParticipantId: 'sender', toParticipantId: 'receiver' })),
+    body: diagram.nodes.map(node => ({ kind: 'message', nodeId: node.id })),
+  };
+  for (const [property, size] of Object.entries({ clientWidth: 1000, clientHeight: 400 })) {
+    vi.spyOn(HTMLElement.prototype, property as 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.matches('.viewport-scroll') ? size : 0;
+    });
+  }
+  for (const [property, dimension] of [['scrollWidth', 'width'], ['scrollHeight', 'height']] as const) {
+    vi.spyOn(HTMLElement.prototype, property, 'get').mockImplementation(function (this: HTMLElement) {
+      return this.matches('.viewport-scroll') ? parseFloat(this.querySelector<HTMLElement>('.viewport-stage')!.style[dimension]) : 0;
+    });
+  }
+  const app = await mountFixture(authored);
+  const canvas = () => document.querySelector<HTMLElement>('.viewport-enabled')!;
+  const scroller = () => canvas().querySelector<HTMLElement>('.viewport-scroll')!;
+  const position = () => kind === 'sequence' ? scroller().scrollTop : scroller().scrollLeft;
+  const openScenario = async (index: number) => {
+    document.querySelectorAll<HTMLButtonElement>('.scenario-link')[index]!.click(); await settle();
+  };
+  const control = async (label: string) => {
+    canvas().querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click(); await settle();
+  };
+  const frames = new Map<number, FrameRequestCallback>();
+  let frameId = 0;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+  const frame = async (now: number) => {
+    const pending = [...frames.values()]; frames.clear();
+    for (const callback of pending) callback(now);
+    await settle();
+  };
+  try {
+    for (const framing of ['fresh', 'panned', 'fitted']) {
+      vi.stubGlobal('matchMedia', () => ({ matches: true }));
+      let destinationScale = '1';
+      if (framing !== 'fresh') {
+        await openScenario(1);
+        await control('Zoom to 100% and focus');
+        await control('Zoom in');
+        if (framing === 'fitted') await control('Fit diagram');
+        else {
+          scroller().scrollLeft = 0; scroller().scrollTop = 0;
+          scroller().dispatchEvent(new Event('scroll')); await settle();
+        }
+        destinationScale = canvas().dataset.scale!;
+        await openScenario(0);
+      }
+      const before = position();
+      vi.stubGlobal('matchMedia', () => ({ matches: false }));
+      badge('node-7').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
+      await press('1');
+      expect(route().get('occurrence')).toBe('visit-1-node-7');
+      expect(canvas().dataset.fitted).toBe('false');
+      expect(canvas().dataset.scale).toBe(destinationScale);
+      expect(position()).toBe(before);
+      expect(frames.size).toBeGreaterThan(0);
+      await frame(1000);
+      expect(position()).toBe(before);
+      await frame(1125);
+      const middle = position();
+      if (framing === 'fitted') expect(middle).toBe(0);
+      else expect(middle).toBeGreaterThan(before);
+      await frame(1250);
+      const target = position();
+      if (framing === 'fitted') expect(target).toBe(0);
+      else expect(target).toBeGreaterThan(middle);
+      vi.stubGlobal('matchMedia', () => ({ matches: true }));
+      await press('h'); await press('l');
+      expect(position()).toBe(target);
+      await openScenario(0);
+    }
+  } finally { app.unmount(); }
+});
+
 it('confirms ambiguous numbers with Enter, longer input, or one second at both stages', async () => {
   const app = await mountFixture(numberedFixture());
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -167,7 +249,7 @@ it.each([{ key: 'Escape', options: {} }, { key: '[', options: { ctrlKey: true } 
     await press('?'); await press('1'); await press('9');
     await vi.advanceTimersByTimeAsync(1000); await settle();
     expect(menu()).toBeNull();
-    for (const interrupt of [() => window.dispatchEvent(new Event('blur')), () => tab('Details').click(), () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))]) {
+    for (const interrupt of [() => window.dispatchEvent(new Event('blur')), () => tab('Domain').click(), () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))]) {
       tab('Diagram').click(); await settle();
       await press('?'); await press('1'); interrupt(); await settle();
       await vi.advanceTimersByTimeAsync(1000); await settle();

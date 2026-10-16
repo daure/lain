@@ -203,7 +203,7 @@ function actualSize() {
 function focusAt(point: { x: number; y: number }) {
   selectedFocusPoint = point;
   fitted.value = false;
-  return centerCurrent(true);
+  if (!restoring) return centerCurrent(true);
 }
 
 async function fit() {
@@ -314,9 +314,9 @@ async function restoreState() {
     if (version !== zoomVersion) return;
     pan(offset.value.x + props.width * scale.value / 2 - view.value.width / 2,
       offset.value.y + props.height * scale.value / 2 - view.value.height / 2);
-  } else if (saved) pan(saved.left, saved.top);
+  } else if (saved && !selectedFocusPoint) pan(saved.left, saved.top);
   restoring = false;
-  if (!saved) await centerCurrent();
+  if (selectedFocusPoint || !saved) await centerCurrent(!!selectedFocusPoint);
 }
 
 watch(() => [props.stateKey, props.sceneKey], () => {

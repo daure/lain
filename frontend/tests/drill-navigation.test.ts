@@ -3,7 +3,7 @@ import { createApp, nextTick } from 'vue';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { afterEach, expect, it, vi } from 'vitest';
-import fixture from '../../examples/order-lifecycle.json';
+import fixture from './fixtures/legacy-order-lifecycle';
 import App from '../src/App.vue';
 import type { Explanation } from '../src/model';
 
@@ -55,6 +55,7 @@ async function mount() {
   app = createApp(App).use(PrimeVue, { unstyled: true }).use(ToastService); app.mount(root);
   LiveSocket.current.onopen?.(); await settle();
   document.querySelector<HTMLButtonElement>('.explanation-card')!.click(); await settle();
+  document.querySelector<HTMLButtonElement>('.scenario-link')!.click(); await settle();
   return { documentFixture, update: async () => {
     LiveSocket.current.onmessage?.({ data: JSON.stringify({ id: 'order-lifecycle', revision: ++revision }) });
     await settle();
@@ -77,7 +78,7 @@ it('traverses only drill-down visits and restores the source and destination ste
   await drill();
   await press('l');
   expectLocation('capture-authorized-payment', 1);
-  button('Details').click(); await settle();
+  button('Domain').click(); await settle();
   await press('i');
   expectLocation('successful-callback', 2);
   expect(button('Diagram').getAttribute('aria-selected')).toBe('true');
@@ -199,8 +200,9 @@ it('clears drill history when leaving the explanation or resetting its cursors',
   await press('i'); await press('o');
   expect(location.search).toBe(first);
   await select('successful-callback', 2); await drill();
-  button('Details').click(); await settle();
-  await press('H', { shiftKey: true });
+  await press('k', { ctrlKey: true });
+  document.querySelector<HTMLElement>('#quick-action-H')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   expectLocation('successful-callback', 0);
   await press('i'); await press('o');
   expectLocation('successful-callback', 0);

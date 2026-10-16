@@ -6,7 +6,7 @@ use lain::{
 };
 use serde_json::json;
 
-const DEMOS: [(&str, &str); 3] = [
+const DEMOS: [(&str, &str); 4] = [
     (
         "order-lifecycle",
         include_str!("../examples/order-lifecycle.json"),
@@ -18,6 +18,10 @@ const DEMOS: [(&str, &str); 3] = [
     (
         "incident-recovery",
         include_str!("../examples/incident-recovery.json"),
+    ),
+    (
+        "pr-comment-review",
+        include_str!("../examples/pr-comment-review.json"),
     ),
 ];
 
