@@ -5,12 +5,13 @@ import { scenarioJumpKey } from '../scenario-jump';
 const props = defineProps<{ nodeId: string; x: number; y: number }>();
 const jump = inject(scenarioJumpKey, undefined);
 const target = computed(() => jump?.targets.value.get(props.nodeId));
-const hintNumber = computed(() => jump?.hintNumbers.value.get(props.nodeId));
+const hintLabel = computed(() => jump?.hintLabels.value.get(props.nodeId));
 const choosingNode = computed(() => jump?.hinting.value && !jump.selectedNodeId.value);
-const showingHint = computed(() => choosingNode.value && hintNumber.value !== undefined);
-const matched = computed(() => showingHint.value && !!jump?.prefix.value && String(hintNumber.value).startsWith(jump.prefix.value));
-const label = computed(() => showingHint.value ? String(hintNumber.value) : `${target.value?.count} path${target.value?.count === 1 ? '' : 's'}`);
-const width = computed(() => showingHint.value ? Math.max(32, label.value.length * 8 + 16) : label.value.length * 6 + 20);
+const showingHint = computed(() => choosingNode.value && hintLabel.value !== undefined);
+const matched = computed(() => showingHint.value && !!jump?.prefix.value && hintLabel.value!.startsWith(jump.prefix.value));
+const scenarioCount = computed(() => `${target.value?.count} scenario${target.value?.count === 1 ? '' : 's'}`);
+const label = computed(() => showingHint.value ? `${hintLabel.value} · ${scenarioCount.value}` : scenarioCount.value);
+const width = computed(() => label.value.length * 6 + 20);
 
 function open(event: Event) {
   if (event instanceof KeyboardEvent && (event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)) return;
@@ -20,8 +21,8 @@ function open(event: Event) {
 
 <template>
   <g v-if="target" :class="['scenario-jump-badge', { hint: showingHint, 'hidden-hint': choosingNode && !showingHint, matched, expanded: jump?.selectedNodeId.value === nodeId }]"
-     :data-jump-node-id="nodeId" :data-jump-number="hintNumber" :transform="`translate(${x},${y})`"
-     role="button" tabindex="0" :aria-label="`Other scenarios for ${target.label}: ${target.count}.${showingHint ? ` Jump hint ${hintNumber}` : ''}`"
+     :data-jump-node-id="nodeId" :data-jump-hint="hintLabel" :transform="`translate(${x},${y})`"
+     role="button" tabindex="0" :aria-label="`Other scenarios for ${target.label}: ${target.count}.${showingHint ? ` Jump hint ${hintLabel}` : ''}`"
      aria-haspopup="menu" :aria-expanded="jump?.selectedNodeId.value === nodeId" :aria-controls="jump?.selectedNodeId.value === nodeId ? jump.menuId : undefined"
      @pointerdown.stop @click.stop="open" @keydown.enter.stop.prevent="open" @keydown.space.stop.prevent="open">
     <title>{{ target.count }} other scenario{{ target.count === 1 ? '' : 's' }} · Jump to scenario (?)</title>

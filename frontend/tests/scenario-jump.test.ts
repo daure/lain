@@ -28,7 +28,7 @@ const press = async (key: string, options: KeyboardEventInit = {}, target: Event
 };
 const tab = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(element => element.textContent === label)!;
 const badge = (id: string) => document.querySelector<SVGElement>(`.scenario-jump-badge[data-jump-node-id="${id}"]`)!;
-const hint = (number: number) => document.querySelector<SVGElement>(`.scenario-jump-badge[data-jump-number="${number}"]`)!;
+const hint = (label: string) => document.querySelector<SVGElement>(`.scenario-jump-badge[data-jump-hint="${label}"]`)!;
 const menu = () => document.querySelector<HTMLElement>('.scenario-jump-menu');
 const choices = () => [...document.querySelectorAll<HTMLButtonElement>('.scenario-jump-menu [role="menuitem"]')];
 const route = () => new URLSearchParams(location.search);
@@ -100,14 +100,19 @@ it.each(['callback', 'decline'])('opens alternatives from the %s badge without a
   } finally { app.unmount(); }
 });
 
-it('jumps through numbered nodes and scenarios without focusing a diagram node', async () => {
-  const app = await mountFixture(numberedFixture(4));
+it.each(['flow', 'state'] as const)('jumps through letter hints with scenario counts in a %s diagram', async kind => {
+  const authored = numberedFixture(4);
+  authored.diagrams[0]!.kind = kind;
+  const app = await mountFixture(authored);
   try {
     tab('Diagram').focus();
     const source = location.search;
     await press('?', { shiftKey: true });
     expect(document.querySelectorAll('.scenario-jump-badge.hint')).toHaveLength(4);
-    await press('3');
+    expect(['a', 'b', 'c', 'd'].map(label => hint(label).querySelector('text')!.textContent))
+      .toEqual(['a · 4 scenarios', 'b · 4 scenarios', 'c · 4 scenarios', 'd · 4 scenarios']);
+    expect(document.querySelector('.scenario-jump-help')!.textContent).toContain('Type a node letter');
+    await press('c');
     expect(menu()?.getAttribute('aria-label')).toBe('Other scenarios for Node 3');
     expect(location.search).toBe(source);
     expect(document.activeElement).toBe(choices()[0]);
@@ -199,13 +204,66 @@ it.each(['flow', 'state', 'sequence'] as const)('animates a %s node jump at the 
   } finally { app.unmount(); }
 });
 
-it('confirms ambiguous numbers with Enter, longer input, or one second at both stages', async () => {
-  const app = await mountFixture(numberedFixture());
+it.each(['flow', 'state', 'sequence'] as const)('pans back to the current %s node when dismissing a scenario picker without choosing', async kind => {
+  const authored = numberedFixture(8);
+  const diagram = authored.diagrams[0]!;
+  diagram.kind = kind;
+  if (kind === 'sequence') diagram.sequence = {
+    participants: [{ id: 'sender', label: 'Sender' }, { id: 'receiver', label: 'Receiver' }],
+    messages: diagram.nodes.map(node => ({ nodeId: node.id, fromParticipantId: 'sender', toParticipantId: 'receiver' })),
+    body: diagram.nodes.map(node => ({ kind: 'message', nodeId: node.id })),
+  };
+  for (const [property, size] of Object.entries({ clientWidth: 1000, clientHeight: 400 })) {
+    vi.spyOn(HTMLElement.prototype, property as 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.matches('.viewport-scroll') ? size : 0;
+    });
+  }
+  for (const [property, dimension] of [['scrollWidth', 'width'], ['scrollHeight', 'height']] as const) {
+    vi.spyOn(HTMLElement.prototype, property, 'get').mockImplementation(function (this: HTMLElement) {
+      return this.matches('.viewport-scroll') ? parseFloat(this.querySelector<HTMLElement>('.viewport-stage')!.style[dimension]) : 0;
+    });
+  }
+  const app = await mountFixture(authored);
+  const canvas = () => document.querySelector<HTMLElement>('.viewport-enabled')!;
+  const position = () => {
+    const scroller = canvas().querySelector<HTMLElement>('.viewport-scroll')!;
+    return kind === 'sequence' ? scroller.scrollTop : scroller.scrollLeft;
+  };
+  try {
+    canvas().querySelector<HTMLButtonElement>('[aria-label="Zoom in"]')!.click(); await settle();
+    await press('l'); await press('l');
+    const origin = position();
+    const scale = canvas().dataset.scale;
+    const source = location.search;
+    const dismissals = [
+      () => press('Escape'),
+      () => press('[', { ctrlKey: true }),
+      () => menu()!.querySelector<HTMLButtonElement>('[aria-label="Close scenario picker"]')!.click(),
+      () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })),
+      () => press('?'),
+    ];
+    for (const dismiss of dismissals) {
+      await press('?'); await press('g');
+      expect(menu()?.getAttribute('aria-label')).toBe('Other scenarios for Node 7');
+      expect(position()).toBeGreaterThan(origin);
+      await dismiss(); await settle();
+      expect(menu()).toBeNull();
+      expect(position()).toBe(origin);
+      expect(canvas().dataset.scale).toBe(scale);
+      expect(location.search).toBe(source);
+    }
+  } finally { app.unmount(); }
+});
+
+it('continues letters after z and confirms ambiguous hints and scenario numbers with Enter, longer input, or one second', async () => {
+  const app = await mountFixture(numberedFixture(28));
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
-    await press('?'); await press('1');
-    expect(hint(1).classList.contains('matched')).toBe(true);
-    expect(hint(12).classList.contains('matched')).toBe(true);
+    await press('?'); await press('a');
+    expect(hint('z').dataset.jumpNodeId).toBe('node-26');
+    expect(hint('aa').querySelector('text')!.textContent).toBe('aa · 28 scenarios');
+    expect(hint('a').classList.contains('matched')).toBe(true);
+    expect(hint('ab').classList.contains('matched')).toBe(true);
     await vi.advanceTimersByTimeAsync(999); await settle();
     expect(menu()).toBeNull();
     await press('Enter');
@@ -216,12 +274,12 @@ it('confirms ambiguous numbers with Enter, longer input, or one second at both s
     await press('2');
     expect(route().get('scenario')).toBe('scenario-12');
     expect(route().get('occurrence')).toBe('visit-12-node-1');
-    await press('?'); await press('1'); await press('2');
-    expect(menu()?.getAttribute('aria-label')).toBe('Other scenarios for Node 12');
+    await press('?'); await press('a'); await press('b');
+    expect(menu()?.getAttribute('aria-label')).toBe('Other scenarios for Node 28');
     await press('1'); await press('Enter');
     expect(route().get('scenario')).toBe('scenario-0');
-    expect(route().get('occurrence')).toBe('visit-0-node-12');
-    await press('?'); await press('1');
+    expect(route().get('occurrence')).toBe('visit-0-node-28');
+    await press('?'); await press('a');
     await vi.advanceTimersByTimeAsync(1000); await settle();
     expect(menu()?.getAttribute('aria-label')).toBe('Other scenarios for Node 1');
     await press('1'); await vi.advanceTimersByTimeAsync(1000); await settle();
@@ -231,12 +289,12 @@ it('confirms ambiguous numbers with Enter, longer input, or one second at both s
 });
 
 it.each([{ key: 'Escape', options: {} }, { key: '[', options: { ctrlKey: true } }])('dismisses the picker and node hints together with $key and cancels pending input on interruption', async ({ key, options }) => {
-  const app = await mountFixture(numberedFixture());
+  const app = await mountFixture(numberedFixture(28));
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
     tab('Diagram').focus();
     const source = location.search;
-    await press('?'); await press('3'); await press('1');
+    await press('?'); await press('c'); await press('1');
     expect(menu()).not.toBeNull();
     await press(key, options);
     expect(menu()).toBeNull();
@@ -246,12 +304,12 @@ it.each([{ key: 'Escape', options: {} }, { key: '[', options: { ctrlKey: true } 
     await vi.advanceTimersByTimeAsync(1000); await settle();
     expect(location.search).toBe(source);
     expect(menu()).toBeNull();
-    await press('?'); await press('1'); await press('9');
+    await press('?'); await press('a'); await press('z');
     await vi.advanceTimersByTimeAsync(1000); await settle();
     expect(menu()).toBeNull();
     for (const interrupt of [() => window.dispatchEvent(new Event('blur')), () => tab('Domain').click(), () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))]) {
       tab('Diagram').click(); await settle();
-      await press('?'); await press('1'); interrupt(); await settle();
+      await press('?'); await press('a'); interrupt(); await settle();
       await vi.advanceTimersByTimeAsync(1000); await settle();
       expect(menu()).toBeNull();
       expect(document.querySelector('.scenario-jump.hinting')).toBeNull();
@@ -260,13 +318,13 @@ it.each([{ key: 'Escape', options: {} }, { key: '[', options: { ctrlKey: true } 
   } finally { app.unmount(); }
 });
 
-it('numbers only visible jump pills from one in screen order and clears pending input when the viewport changes', async () => {
-  const app = await mountFixture(numberedFixture());
+it('labels only visible jump pills from a in screen order and clears pending input when the viewport changes', async () => {
+  const app = await mountFixture(numberedFixture(28));
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   let visible = new Map<string, [number, number]>();
   try {
-    expect(badge('node-5').querySelector('text')!.textContent).toBe('12 paths');
-    await press('?'); await press('1');
+    expect(badge('node-5').querySelector('text')!.textContent).toBe('28 scenarios');
+    await press('?'); await press('a');
     for (const element of document.querySelectorAll<SVGElement>('.scenario-jump-badge')) {
       Object.defineProperty(element, 'getBoundingClientRect', { configurable: true, value: () => {
         const [x, y] = visible.get(element.dataset.jumpNodeId!) ?? [-1000, -1000];
@@ -276,16 +334,16 @@ it('numbers only visible jump pills from one in screen order and clears pending 
     visible = new Map([['node-8', [300, 140]], ['node-11', [90, 220]], ['node-5', [50, 140]]]);
     document.querySelector('.viewport-scroll')!.dispatchEvent(new Event('scroll'));
     await settle();
-    expect([...document.querySelectorAll<SVGElement>('.scenario-jump-badge.hint')].map(element => [element.dataset.jumpNodeId, element.dataset.jumpNumber]))
-      .toEqual([['node-5', '1'], ['node-8', '2'], ['node-11', '3']]);
+    expect([...document.querySelectorAll<SVGElement>('.scenario-jump-badge.hint')].map(element => [element.dataset.jumpNodeId, element.dataset.jumpHint]))
+      .toEqual([['node-5', 'a'], ['node-8', 'b'], ['node-11', 'c']]);
     await vi.advanceTimersByTimeAsync(1000); await settle();
     expect(menu()).toBeNull();
     expect(document.querySelector('.scenario-jump-badge.matched')).toBeNull();
     visible = new Map([['node-8', [300, 140]]]);
     window.dispatchEvent(new Event('resize')); await settle();
-    expect(hint(1).dataset.jumpNodeId).toBe('node-8');
+    expect(hint('a').dataset.jumpNodeId).toBe('node-8');
     expect(document.querySelectorAll('.scenario-jump-badge.hint')).toHaveLength(1);
-    await press('1');
+    await press('a');
     expect(menu()?.getAttribute('aria-label')).toBe('Other scenarios for Node 8');
     await press('1'); await press('Enter');
     expect(route().get('occurrence')).toBe('visit-1-node-8');
@@ -299,7 +357,7 @@ it('anchors a decision jump pill to its top vertex and keeps its pointer hit are
     const width = Number(node.querySelector('polygon')!.getAttribute('points')!.split(' ')[1]!.split(',')[0]);
     expect(badge('check').getAttribute('transform')).toBe(`translate(${width / 2},0)`);
     expect(badge('check').querySelector('.scenario-jump-hitbox')!.getAttribute('height')).toBe('36');
-    expect(badge('check').querySelector('text')!.textContent).toBe('2 paths');
+    expect(badge('check').querySelector('text')!.textContent).toBe('2 scenarios');
     const source = location.search;
     badge('check').querySelector('rect')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
     expect(menu()?.getAttribute('aria-label')).toBe('Other scenarios for Receipt checked');
@@ -308,20 +366,20 @@ it('anchors a decision jump pill to its top vertex and keeps its pointer hit are
 });
 
 it('respects editable, overlay, modifier, composition, and repeat guards', async () => {
-  const app = await mountFixture(numberedFixture());
+  const app = await mountFixture(numberedFixture(28));
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
     const source = location.search;
     for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { isComposing: true }, { repeat: true }]) {
       expect((await press('?', options)).defaultPrevented).toBe(false);
       expect(document.querySelector('.scenario-jump.hinting')).toBeNull();
-      await press('?'); await press('1'); await press('2', options);
+      await press('?'); await press('a'); await press('b', options);
       await vi.advanceTimersByTimeAsync(1000); await settle();
       expect(menu()).toBeNull();
       await press('Escape');
     }
     for (const [tag, attributes] of [['input', {}], ['div', { contenteditable: 'true' }], ['div', { role: 'listbox' }], ['div', { 'aria-modal': 'true' }]] as const) {
-      await press('?'); await press('1');
+      await press('?'); await press('a');
       const target = document.createElement(tag); target.tabIndex = 0;
       for (const [name, value] of Object.entries(attributes)) target.setAttribute(name, value);
       document.body.append(target); target.focus();
@@ -341,7 +399,10 @@ it('offers the same node jump in sequence diagrams and targets its first recorde
   authored.scenarios = [source, target];
   const app = await mountFixture(authored);
   try {
-    badge('check').dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
+    await press('?');
+    const label = badge('check').dataset.jumpHint!;
+    expect(badge('check').querySelector('text')!.textContent).toBe(`${label} · 1 scenario`);
+    await press(label);
     expect(choices()).toHaveLength(1);
     choices()[0]!.click(); await settle();
     expect(route().get('scenario')).toBe(target.id);
@@ -364,7 +425,7 @@ it('starts hints from quick actions after the palette closes and excludes them f
     const chart = captureChart(viewport, 'all', 'Flow', width!, height!);
     const captured = new DOMParser().parseFromString(chart.svg, 'image/svg+xml');
     expect([...captured.querySelectorAll('text')].map(element => element.textContent)).toEqual(['Next', 'Next', 'Next', ...authored.diagrams[0]!.nodes.map(node => node.label)]);
-    await press('3'); await press('1');
+    await press('c'); await press('1');
     expect(route().get('occurrence')).toBe('visit-1-node-3');
   } finally { app.unmount(); }
 });

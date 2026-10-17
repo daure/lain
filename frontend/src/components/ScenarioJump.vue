@@ -8,7 +8,7 @@ const emit = defineEmits<{ jump: [scenarioId: string, occurrenceId: string]; foc
 const root = ref<HTMLElement>();
 const menu = ref<HTMLElement>();
 const hinting = ref(false);
-const hintNumbers = ref(new Map<string, number>());
+const hintLabels = ref(new Map<string, string>());
 const selectedNodeId = ref('');
 const prefix = ref('');
 const position = ref({ left: '16px', top: '16px' });
@@ -37,7 +37,7 @@ const targets = computed(() => new Map(props.diagram.nodes.filter(node => altern
   .map(node => [node.id, { nodeId: node.id, label: node.label, count: alternatives.value.get(node.id)!.length }])));
 const choices = computed(() => alternatives.value.get(selectedNodeId.value) ?? []);
 const selectedNode = computed(() => targets.value.get(selectedNodeId.value));
-provide(scenarioJumpKey, { targets, hintNumbers, hinting, selectedNodeId, prefix, menuId, open });
+provide(scenarioJumpKey, { targets, hintLabels, hinting, selectedNodeId, prefix, menuId, open });
 defineExpose({ handleKeydown, cancel, start });
 
 function clearPrefix() {
@@ -54,9 +54,17 @@ function cancel(restore = false) {
   clearPrefix();
   selectedNodeId.value = '';
   hinting.value = false;
-  hintNumbers.value = new Map();
+  hintLabels.value = new Map();
   anchor = undefined;
   if (restore) restoreFocus();
+}
+
+function dismiss(restore = true) {
+  const wasChoosing = !!selectedNodeId.value;
+  cancel(restore);
+  if (!wasChoosing) return;
+  const occurrence = props.scenarios.find(scenario => scenario.id === props.scenarioId)?.occurrences.find(occurrence => occurrence.id === props.occurrenceId);
+  if (occurrence) emit('focus', occurrence.nodeId);
 }
 
 function start() {
@@ -64,12 +72,20 @@ function start() {
   if (!targets.value.size) return;
   const focused = document.activeElement;
   focusOrigin = focused instanceof HTMLElement || focused instanceof SVGElement ? focused : undefined;
-  updateHintNumbers();
-  if (!hintNumbers.value.size) return;
+  updateHintLabels();
+  if (!hintLabels.value.size) return;
   hinting.value = true;
 }
 
-function updateHintNumbers() {
+function nodeHint(index: number): string {
+  let label = '';
+  for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) {
+    label = String.fromCharCode(97 + (value - 1) % 26) + label;
+  }
+  return label;
+}
+
+function updateHintLabels() {
   const region = root.value?.querySelector<HTMLElement>('.viewport-scroll');
   if (!region) return;
   const bounds = region.getBoundingClientRect();
@@ -81,14 +97,14 @@ function updateHintNumbers() {
     return { id: element.dataset.jumpNodeId!, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   }).filter(node => node.x >= visible.left && node.x < visible.right && node.y >= visible.top && node.y < visible.bottom)
     .sort((a, b) => a.y - b.y || a.x - b.x);
-  const next = new Map(nodes.map((node, index) => [node.id, index + 1]));
-  if (next.size === hintNumbers.value.size && [...next].every(([id, number]) => hintNumbers.value.get(id) === number)) return;
+  const next = new Map(nodes.map((node, index) => [node.id, nodeHint(index)]));
+  if (next.size === hintLabels.value.size && [...next].every(([id, label]) => hintLabels.value.get(id) === label)) return;
   clearPrefix();
-  hintNumbers.value = next;
+  hintLabels.value = next;
 }
 
 function viewportChanged() {
-  if (hinting.value && !selectedNodeId.value) updateHintNumbers();
+  if (hinting.value && !selectedNodeId.value) updateHintLabels();
   placeMenu();
 }
 
@@ -121,18 +137,18 @@ function choose(index: number) {
 }
 
 function confirm() {
-  const number = Number(prefix.value);
+  const label = prefix.value;
   clearPrefix();
-  if (selectedNodeId.value) { choose(number - 1); return; }
-  const nodeId = [...hintNumbers.value].find(([, hint]) => hint === number)?.[0];
+  if (selectedNodeId.value) { choose(Number(label) - 1); return; }
+  const nodeId = [...hintLabels.value].find(([, hint]) => hint === label)?.[0];
   const element = [...root.value!.querySelectorAll<SVGElement>('.scenario-jump-badge')].find(element => element.dataset.jumpNodeId === nodeId);
   if (nodeId && element) { emit('focus', nodeId); open(nodeId, element); }
 }
 
-function typeDigit(digit: string) {
-  const next = prefix.value + digit;
-  const numbers = selectedNodeId.value ? choices.value.map((_, index) => String(index + 1)) : [...hintNumbers.value.values()].map(String);
-  const matches = numbers.filter(number => number.startsWith(next));
+function typeHint(key: string) {
+  const next = prefix.value + key;
+  const labels = selectedNodeId.value ? choices.value.map((_, index) => String(index + 1)) : [...hintLabels.value.values()];
+  const matches = labels.filter(label => label.startsWith(next));
   clearPrefix();
   if (!matches.length) return;
   prefix.value = next;
@@ -155,21 +171,21 @@ function handleKeydown(event: KeyboardEvent, canSelect: () => boolean): boolean 
   }
   selectionAllowed = canSelect;
   if (event.key === '?') {
-    if (hinting.value || selectedNodeId.value) cancel(true);
+    if (hinting.value || selectedNodeId.value) dismiss();
     else start();
     return true;
   }
   if (!hinting.value && !selectedNodeId.value) return false;
   if (escape) {
-    cancel(true);
+    dismiss();
     return true;
   }
-  if (/^[0-9]$/.test(event.key)) { typeDigit(event.key); return true; }
+  if ((selectedNodeId.value ? /^[0-9]$/ : /^[a-z]$/).test(event.key)) { typeHint(event.key); return true; }
   if (event.key === 'Enter' && prefix.value) { confirm(); return true; }
   if (event.key === 'Backspace') {
     const shortened = prefix.value.slice(0, -1);
     clearPrefix();
-    if (shortened) typeDigit(shortened);
+    if (shortened) typeHint(shortened);
     return true;
   }
   if (selectedNodeId.value && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { clearPrefix(); moveMenuFocus(event.key); return true; }
@@ -180,7 +196,7 @@ function handleKeydown(event: KeyboardEvent, canSelect: () => boolean): boolean 
 
 function outside(event: PointerEvent) {
   if (!(event.target instanceof Element) || menu.value?.contains(event.target) || event.target.closest('.scenario-jump-badge')) return;
-  cancel();
+  dismiss(false);
 }
 
 function focusChanged(event: FocusEvent) {
@@ -210,10 +226,10 @@ onUnmounted(() => {
 <template>
   <div ref="root" :class="['scenario-jump', { hinting: hinting && !selectedNodeId }]">
     <slot />
-    <p v-if="hinting && !selectedNodeId" class="scenario-jump-help" role="status">{{ hintNumbers.size ? 'Type a node number · Enter confirms · Esc cancels' : 'No alternative scenarios in view · Pan to reveal nodes · Esc cancels' }}<span v-if="prefix"> · {{ prefix }}</span></p>
+    <p v-if="hinting && !selectedNodeId" class="scenario-jump-help" role="status">{{ hintLabels.size ? 'Type a node letter · Enter confirms · Esc cancels' : 'No alternative scenarios in view · Pan to reveal nodes · Esc cancels' }}<span v-if="prefix"> · {{ prefix }}</span></p>
     <Teleport to="body">
       <div v-if="selectedNode" :id="menuId" ref="menu" class="scenario-jump-menu" :style="position" role="menu" :aria-label="`Other scenarios for ${selectedNode.label}`" @keydown.stop>
-        <div class="scenario-jump-heading"><strong>{{ selectedNode.label }}</strong><button aria-label="Close scenario picker" @click="cancel(true)">×</button></div>
+        <div class="scenario-jump-heading"><strong>{{ selectedNode.label }}</strong><button aria-label="Close scenario picker" @click="dismiss()">×</button></div>
         <p>Jump to this node in another scenario</p>
         <button v-for="(choice, index) in choices" :key="choice.scenario.id" role="menuitem" :class="{ matched: prefix && String(index + 1).startsWith(prefix) }" @click="choose(index)">
           <kbd>{{ index + 1 }}</kbd><span>{{ choice.scenario.title }}</span>

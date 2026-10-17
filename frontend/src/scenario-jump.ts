@@ -4,7 +4,7 @@ export type ScenarioJumpTarget = { nodeId: string; label: string; count: number 
 
 export const scenarioJumpKey: InjectionKey<{
   targets: ComputedRef<Map<string, ScenarioJumpTarget>>;
-  hintNumbers: Ref<Map<string, number>>;
+  hintLabels: Ref<Map<string, string>>;
   hinting: Ref<boolean>;
   selectedNodeId: Ref<string>;
   prefix: Ref<string>;
