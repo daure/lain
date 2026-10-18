@@ -118,7 +118,6 @@ it('opens a reader overview with topic membership, labels, and explicit cross-di
   expect(document.activeElement).toBe(overview()!.querySelector('h2'));
   expect(location.search).toBe('?explanation=review&view=overview');
   expect([...document.querySelectorAll('.sidebar .group-heading h3')].map(node => node.textContent)).toEqual(review.topics.map(topic => topic.title));
-  expect([...document.querySelectorAll('.sidebar .data-count')].map(node => node.textContent)).toEqual(['2', '2']);
   expect(document.querySelector('.sidebar .scenario-link[aria-current]')).toBeNull();
   expect([...document.querySelectorAll('.sidebar .scenario-link')].map(row =>
     [...row.querySelectorAll('.scenario-badge')].map(label => label.textContent),

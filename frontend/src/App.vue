@@ -596,7 +596,7 @@ onUnmounted(() => {
       <div class="path-heading"><span class="eyebrow">{{ active.document.topics?.length ? 'Topics' : 'Scenarios' }}</span></div>
       <nav aria-label="Scenarios">
         <section v-for="group in sections" :key="group.id" :class="['scenario-group', { inactive: showingOverview || !group.scenarios.some(item => item.id === scenarioId) }]" :data-diagram-id="group.kind ? group.id : undefined" :data-topic-id="group.kind ? undefined : group.id">
-          <div class="group-heading"><h3>{{ group.title }}</h3><span v-if="group.kind" class="eyebrow">{{ group.kind }}</span><span v-else class="data-count">{{ group.scenarios.length }}</span></div>
+          <div class="group-heading"><h3>{{ group.title }}</h3><span v-if="group.kind" class="eyebrow">{{ group.kind }}</span></div>
           <button v-for="item in group.scenarios" :key="item.id" :class="['scenario-link', { selected: !showingOverview && item.id === scenarioId }]" :aria-current="!showingOverview && item.id === scenarioId ? 'true' : undefined" :aria-describedby="scenarioPreview?.scenarioId === item.id ? scenarioPreview.id : undefined" :data-scenario-title="item.title" @mouseenter="scenarioPreview?.show($event, item)" @mouseleave="scenarioPreview?.leave()" @focus="scenarioPreview?.show($event, item)" @blur="scenarioPreview?.leave()" @click="openScenario(item.id)"><span class="scenario-name">{{ item.title }}</span><ScenarioLabels :labels="item.labels" /></button>
         </section>
       </nav>
