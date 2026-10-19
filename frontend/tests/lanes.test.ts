@@ -504,7 +504,7 @@ it('keeps unassigned group subtrees separate from explicit responsibilities', ()
   expectClearRoutes(layout);
 });
 
-it('renders safe, neutral, inert headings behind groups and exposes their outlines in the minimap', async () => {
+it('renders safe, neutral, inert headings over chart content and exposes lane outlines in the minimap', async () => {
   const diagram = flow();
   diagram.lanes![0]!.label = '<script>alert("lane")</script>';
   const layout = diagramLayout(diagram);
@@ -515,12 +515,13 @@ it('renders safe, neutral, inert headings behind groups and exposes their outlin
   app.mount(root);
   await nextTick();
   try {
-    const heading = root.querySelector('.graph-lane')!;
-    expect(heading.getAttribute('aria-label')).toBe('Lane: <script>alert("lane")</script>');
-    expect(heading.querySelector('title')!.textContent).toBe(diagram.lanes![0]!.label);
+    const heading = root.querySelector('.lane-heading')!;
+    const firstBand = root.querySelector('[data-lane-id]')!;
+    expect(firstBand.getAttribute('aria-label')).toBe('Lane: <script>alert("lane")</script>');
+    expect(firstBand.querySelector('title')!.textContent).toBe(diagram.lanes![0]!.label);
     expect(heading.querySelectorAll('tspan').length).toBeGreaterThan(1);
     for (const [index, lane] of layout.lanes!.entries()) {
-      const band = root.querySelector(`[data-lane-id="${lane.id}"]`)!;
+      const band = root.querySelector(`[data-lane-heading-id="${lane.id}"]`)!;
       expect(band.classList.contains('alternate')).toBe(index % 2 === 1);
       expect(band.querySelector('text')!.getAttribute('transform')).toBe(`translate(${lane.headingWidth / 2},${lane.height / 2}) rotate(-90)`);
       expect(band.querySelector('.lane-divider')!.getAttribute('d')).toBe(`M${lane.headingWidth},16 V${lane.height - 16}`);

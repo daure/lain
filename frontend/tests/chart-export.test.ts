@@ -85,7 +85,7 @@ it('exports swimlane frames and inert wrapped headings through the shared graph 
     expect(chart.querySelector('parsererror, script')).toBeNull();
     expect(chart.documentElement.getAttribute('viewBox')).toBe(`0 0 ${layout.width} ${layout.height}`);
     expect([...chart.querySelectorAll('text')].map(text => text.textContent)).toContain(layout.lanes![0]!.lines.join(''));
-    expect([...chart.querySelectorAll('rect')].filter(rect => /rgb\(24,\s*24,\s*27\)/.test(rect.style.fill))).toHaveLength(2);
+    expect([...chart.querySelectorAll('rect')].filter(rect => /rgb\(24,\s*24,\s*27\)/.test(rect.style.fill))).toHaveLength(4);
     expect([...chart.querySelectorAll('text')].some(text => /rgb\(161,\s*161,\s*170\)/.test(text.style.fill))).toBe(true);
     expect(chart.querySelector('[data-lane-id], [tabindex], [aria-label]')).toBeNull();
   }

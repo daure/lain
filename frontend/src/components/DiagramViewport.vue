@@ -46,6 +46,7 @@ const contentStyle = computed(() => ({
   width: `${props.width}px`, height: `${props.height}px`,
   left: `${offset.value.x}px`, top: `${offset.value.y}px`, transform: `scale(${scale.value})`,
 }));
+const stickyLeft = computed(() => Math.max(0, (view.value.left + inset - offset.value.x) / scale.value));
 const visible = computed(() => {
   const x = Math.max(0, (view.value.left - offset.value.x) / scale.value);
   const y = Math.max(0, (view.value.top - offset.value.y) / scale.value);
@@ -361,9 +362,9 @@ defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt,
         <div v-if="$slots.sticky" class="viewport-sticky" :style="{ marginLeft: `${offset.x}px` }">
           <div :style="{ width: `${width}px`, transform: `translateY(${Math.max(0, offset.y - view.top)}px) scale(${scale})`, transformOrigin: 'top left' }"><slot name="sticky" /></div>
         </div>
-        <div class="viewport-content" :style="contentStyle"><slot /></div>
+        <div class="viewport-content" :style="contentStyle"><slot :sticky-left="stickyLeft" /></div>
       </div>
-      <template v-else><slot name="sticky" /><slot /></template>
+      <template v-else><slot name="sticky" /><slot :sticky-left="0" /></template>
     </div>
     <div v-if="enabled" class="viewport-tools" @pointerdown.stop>
       <svg class="diagram-minimap" :viewBox="`0 0 ${width} ${height}`" role="group" aria-label="Diagram overview. Drag the viewport to pan; arrow keys pan, Home fits the diagram." tabindex="0"

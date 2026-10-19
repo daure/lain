@@ -179,6 +179,9 @@ kbd{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.75rem;
 :root.app-dark .graph-lane{--lane-surface:#1c1e22;--lane-alternate:#24262b;--lane-separator:#686b72;--lane-text:#d4d4d8}
 .graph-lane .lane-shape{fill:var(--lane-surface);stroke:none}
 .graph-lane.alternate .lane-shape{fill:var(--lane-alternate)}
+.graph-lane .lane-heading-gutter{fill:var(--surface)}
+.lane-heading-shadow{opacity:0;transition:opacity 200ms ease;pointer-events:none}
+.lane-heading.is-sticky .lane-heading-shadow{opacity:1}
 .graph-lane .lane-divider{fill:none;stroke:var(--lane-separator);stroke-width:1}
 .graph-lane text{fill:var(--lane-text);font-family:inherit;font-size:14px;font-weight:600}
 .graph-group .group-shape{fill:var(--soft);stroke:var(--graph-line,#96a7be);stroke-width:1.2}

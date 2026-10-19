@@ -89,10 +89,14 @@ function edgeMarker(id: string) {
 </script>
 
 <template>
-  <DiagramViewport ref="canvas" :state-key="stateKey" :width="layout.width" :height="layout.height" :title="title" :scenario-title="scenarioTitle" :enabled="interactive === true" :focus-point="focusPoint" :focus-key="currentOccurrenceId" scroll-class="graph-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :export-scenario="scenarioNodeIds !== undefined || scenarioEdgeIds !== undefined">
+  <DiagramViewport ref="canvas" v-slot="{ stickyLeft }" :state-key="stateKey" :width="layout.width" :height="layout.height" :title="title" :scenario-title="scenarioTitle" :enabled="interactive === true" :focus-point="focusPoint" :focus-key="currentOccurrenceId" scroll-class="graph-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :export-scenario="scenarioNodeIds !== undefined || scenarioEdgeIds !== undefined">
     <svg :class="['graph', { 'scenario-path': scenarioNodeIds !== undefined || scenarioEdgeIds !== undefined }]" :viewBox="`0 0 ${layout.width} ${layout.height}`" :style="interactive ? { width: `${layout.width}px`, height: `${layout.height}px` } : { minWidth: `${Math.min(layout.width, 1000)}px` }" :role="interactive ? 'group' : 'img'" :aria-label="title">
       <title>{{ title }}</title>
       <defs>
+        <linearGradient :id="`${markerId}-lane-shadow`" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stop-color="#000" stop-opacity=".24" />
+          <stop offset="1" stop-color="#000" stop-opacity="0" />
+        </linearGradient>
         <marker v-for="style in arrowStyles" :id="`${markerId}-${style}`" :key="style" :class="['graph-arrow', style]" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b83a3" />
         </marker>
@@ -102,10 +106,6 @@ function edgeMarker(id: string) {
          role="group" :aria-label="`Lane: ${lane.label}`">
         <title>{{ lane.label }}</title>
         <rect class="lane-shape" :width="lane.width" :height="lane.height" />
-        <path class="lane-divider" :d="`M${lane.headingWidth},16 V${lane.height - 16}`" />
-        <text :transform="`translate(${lane.headingWidth / 2},${lane.height / 2}) rotate(-90)`" x="0" :y="-(lane.lines.length - 1) * 20 / 2" text-anchor="middle" dominant-baseline="central">
-          <tspan v-for="(line, index) in lane.lines" :key="index" x="0" :dy="index ? 20 : 0">{{ line }}</tspan>
-        </text>
       </g>
       <g v-for="group in layout.groups" :key="group.id" :data-group-id="group.id"
          :class="['graph-group', group.kind, { current: group.nodeIds.includes(currentNodeId ?? ''), visited: group.nodeIds.some(id => visitedNodeIds?.includes(id)), 'on-scenario': group.nodeIds.some(id => scenarioNodeIds?.includes(id)), 'off-scenario': scenarioNodeIds !== undefined && !group.nodeIds.some(id => scenarioNodeIds?.includes(id)) }]"
@@ -154,6 +154,17 @@ function edgeMarker(id: string) {
       <DrillLink v-if="interactive && links?.has(node.id)" svg :link="links.get(node.id)!"
                  :x="node.width / 2 - 10" :y="node.height - 28" :class="{ current: node.id === currentNodeId, visited: visitedNodeIds?.includes(node.id) }" @open="emit('open', $event)" />
       <ScenarioJumpBadge v-if="interactive" :node-id="node.id" :x="node.width / 2" :y="0" />
+      </g>
+      <g v-for="(lane, index) in layout.lanes" :key="`heading-${lane.id}`" :data-lane-heading-id="lane.id" :class="['graph-lane', 'lane-heading', { alternate: index % 2 === 1, 'is-sticky': interactive && stickyLeft > lane.x - lane.width / 2 }]"
+         :transform="`translate(${Math.min(lane.x + lane.width / 2 - lane.headingWidth, Math.max(lane.x - lane.width / 2, stickyLeft))},${lane.y - lane.height / 2})`"
+         :data-export-transform="`translate(${lane.x - lane.width / 2},${lane.y - lane.height / 2})`" aria-hidden="true">
+        <rect class="lane-shape" :width="lane.headingWidth" :height="lane.height" />
+        <rect v-if="interactive && stickyLeft > lane.x - lane.width / 2" class="lane-heading-gutter" :x="-20 / (canvas?.scale ?? 1)" :width="20 / (canvas?.scale ?? 1)" :height="lane.height" />
+        <rect v-if="interactive" class="lane-heading-shadow" :x="lane.headingWidth" :width="12 / (canvas?.scale ?? 1)" :height="lane.height" :fill="`url(#${markerId}-lane-shadow)`" />
+        <path class="lane-divider" :d="`M${lane.headingWidth},16 V${lane.height - 16}`" />
+        <text :transform="`translate(${lane.headingWidth / 2},${lane.height / 2}) rotate(-90)`" x="0" :y="-(lane.lines.length - 1) * 20 / 2" text-anchor="middle" dominant-baseline="central">
+          <tspan v-for="(line, index) in lane.lines" :key="index" x="0" :dy="index ? 20 : 0">{{ line }}</tspan>
+        </text>
       </g>
     </svg>
   </DiagramViewport>

@@ -5,7 +5,8 @@ import fixture from '../../examples/order-lifecycle.json';
 import GraphView from '../src/components/GraphView.vue';
 import SequenceView from '../src/components/SequenceView.vue';
 import DiagramViewport from '../src/components/DiagramViewport.vue';
-import type { GraphLayout } from '../src/layout';
+import { diagramLayout, type GraphLayout } from '../src/layout';
+import { captureChart } from '../src/chart-export';
 import type { Explanation } from '../src/model';
 
 const settle = async () => {
@@ -48,6 +49,41 @@ async function mountGraph(width = 2000) {
 }
 
 afterEach(() => { vi.unstubAllGlobals(); document.body.replaceChildren(); });
+
+it('pins swimlane headings with a screen-space left gutter through panning and zoom while exports retain full bands', async () => {
+  const layout = diagramLayout({ id: 'handoff', title: 'Handoff', kind: 'flow', nodes: [
+    { id: 'a', label: 'Request', entityIds: [] }, { id: 'b', label: 'Handle', entityIds: [] },
+  ], edges: [], lanes: [{ id: 'user', label: 'User', nodeIds: ['a'] }, { id: 'service', label: 'Service', nodeIds: ['b'] }] });
+  layout.width = 2000;
+  const view = await mountViewport(() => h(GraphView, { layout, title: 'Handoff', interactive: true }));
+  try {
+    const headings = [...view.canvas.querySelectorAll<SVGGElement>('.lane-heading')];
+    const positions = () => headings.map(heading => heading.getAttribute('transform')!.match(/translate\(([^,]+),([^)]+)\)/)!.slice(1).map(Number));
+    const original = layout.lanes!.map(lane => [lane.x - lane.width / 2, lane.y - lane.height / 2]);
+    view.scroller.scrollLeft = 0;
+    view.scroller.dispatchEvent(new Event('scroll')); await settle();
+    expect(positions()).toEqual(original);
+    expect(headings.every(heading => !heading.classList.contains('is-sticky'))).toBe(true);
+    view.scroller.scrollLeft = 200;
+    view.scroller.scrollTop = 80;
+    view.scroller.dispatchEvent(new Event('scroll')); await settle();
+    expect(positions()).toEqual(original.map(([, y]) => [200, y]));
+    expect(headings.every(heading => heading.classList.contains('is-sticky'))).toBe(true);
+    expect(view.canvas.querySelector('.graph')!.lastElementChild).toBe(headings.at(-1));
+    await view.click('Zoom in');
+    const scale = Number(view.canvas.dataset.scale);
+    for (const [x] of positions()) expect(20 + x! * scale - view.scroller.scrollLeft).toBeCloseTo(20);
+    const before = headings.map(heading => heading.getAttribute('transform'));
+    const chart = captureChart(view.canvas, 'all', 'Handoff', layout.width, layout.height);
+    const exported = new DOMParser().parseFromString(chart.svg, 'image/svg+xml');
+    expect(exported.querySelectorAll('rect')).toHaveLength(layout.lanes!.length * 2 + layout.nodes.length + 1);
+    for (const [x, y] of original) expect(exported.querySelector(`g[transform="translate(${x},${y})"] text`)).not.toBeNull();
+    expect(headings.map(heading => heading.getAttribute('transform'))).toEqual(before);
+    await view.click('Fit diagram');
+    expect(positions()).toEqual(original);
+    expect(headings.every(heading => !heading.classList.contains('is-sticky'))).toBe(true);
+  } finally { view.app.unmount(); }
+});
 
 it('preserves zoom and clamps manual panning when the current layout shrinks', async () => {
   const width = ref(2000);

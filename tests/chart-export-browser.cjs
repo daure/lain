@@ -24,12 +24,19 @@ function swimlaneGeometry({ diagram, svg }) {
   try {
     const chart = host ? host.querySelector('svg') : document.querySelector('.viewport-content > svg.graph');
     const normalize = text => text.replace(/\s/g, '');
-    const headings = [...chart.querySelectorAll('g > text')];
+    const headings = [...chart.querySelectorAll('g > text')].filter(heading => !heading.closest('.scenario-jump-badge, .node-visit-badge'));
     const frame = (label, isLane = false) => {
       const heading = headings.find(text => normalize(text.textContent) === normalize(label));
       if (!heading) throw new Error(`Missing chart heading: ${label}`);
-      const shape = heading.parentElement.querySelector(':scope > rect, :scope > polygon, :scope > path');
+      let shape = heading.parentElement.querySelector(':scope > rect, :scope > polygon, :scope > path');
       if (!shape) throw new Error(`Missing chart shape: ${label}`);
+      if (isLane) {
+        const headingShape = shape;
+        shape = [...chart.querySelectorAll('rect')].find(rect => rect.getBBox().width > headingShape.getBBox().width
+          && rect.getBBox().height === headingShape.getBBox().height
+          && Math.abs(rect.getCTM().f - headingShape.getCTM().f) < .01);
+        if (!shape) throw new Error(`Missing lane band: ${label}`);
+      }
       const box = shape.getBBox();
       const matrix = chart.getCTM().inverse().multiply(shape.getCTM());
       const first = new DOMPoint(box.x, box.y).matrixTransform(matrix);
@@ -388,7 +395,7 @@ async function run() {
     assert.equal(await page.locator('.diagram-minimap').evaluate(map => getComputedStyle(map).visibility), 'hidden', 'export menu hides the minimap');
     await page.getByRole('menuitemradio', { name: scope === 'all' ? 'All scenarios' : 'Scenario only', exact: true }).click();
     const chartTitle = await page.locator('.viewport-scroll').getAttribute('aria-label');
-    const scenarioTitle = (await page.locator('.scenario-link[aria-current="true"]').textContent()).trim();
+    const scenarioTitle = (await page.locator('.scenario-link[aria-current="true"] .scenario-name').textContent()).trim();
     const pending = page.waitForEvent('download');
     const responsePending = page.waitForResponse(response => response.url().includes('/export?'));
     await menu.getByRole('menuitem').filter({ hasText: format.toUpperCase() }).click();
@@ -529,7 +536,7 @@ async function run() {
     assert.deepEqual(concurrent.map(response => response.status).sort(), [200, 200, 503], 'renderer admits two concurrent exports');
     await Promise.all(concurrent.map(response => response.arrayBuffer()));
     assert.deepEqual(await fs.readdir(path.join(home, 'exports')), [], 'renderer profiles are removed');
-    await page.getByRole('button', { name: 'Toggle data inspector', exact: true }).click();
+    if (await page.locator('.inspector-shell.open').count()) await page.getByRole('button', { name: 'Toggle data inspector', exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('button', { name: 'Export chart', exact: true }).click();
     const menuBox = await page.getByRole('menu', { name: 'Export chart' }).boundingBox();

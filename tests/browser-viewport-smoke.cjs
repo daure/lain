@@ -69,7 +69,7 @@ async function assertActualSize(page) {
 async function main() {
   const frontend = path.resolve(__dirname, '../frontend');
   const { preview } = await import(pathToFileURL(require.resolve('vite', { paths: [frontend] })).href);
-  const fixture = JSON.parse(await fs.readFile(path.join(__dirname, '../examples/order-lifecycle.json'), 'utf8'));
+  let fixture = JSON.parse(await fs.readFile(path.join(__dirname, '../examples/order-lifecycle.json'), 'utf8'));
   const server = await preview({ root: frontend, preview: { host: '127.0.0.1', port: 0, open: false } });
   let browser;
   try {
@@ -92,7 +92,7 @@ async function main() {
         const query = new URLSearchParams({ explanation: 'demo', scenario: scenario.id });
         await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/?${query}`);
         await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
-        if (width <= 1000) await page.keyboard.press('n');
+        if (await page.locator('.inspector-shell.open').count()) await page.keyboard.press('n');
         await assertFit(page);
         await assertActualSize(page);
         await assertFit(page);
@@ -127,6 +127,61 @@ async function main() {
       await assertFit(page);
       await page.screenshot({ path: `/tmp/opencode/lain-bounded-viewport-${width}.png` });
       console.log(`PASS ${width}px: fitted charts have no scroll overflow; 1:1 gutters stay bounded; sequence headings align`);
+    }
+    fixture = JSON.parse(await fs.readFile(path.join(__dirname, '../examples/release-promotion.json'), 'utf8'));
+    for (const width of [1547, 390]) {
+      await page.setViewportSize({ width, height: 643 });
+      const query = new URLSearchParams({ explanation: 'demo', scenario: fixture.scenarios[0].id });
+      await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/?${query}`);
+      for (const dark of [false, true]) {
+        const theme = page.getByRole('button', { name: 'Toggle dark mode', exact: true });
+        if ((await theme.getAttribute('aria-pressed') === 'true') !== dark) await theme.click();
+        await page.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
+        for (const zoom of [false, true]) {
+          if (zoom) await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
+          await page.locator('.viewport-scroll').evaluate(region => {
+            region.scrollLeft = (region.scrollWidth - region.clientWidth) / 2;
+            region.scrollTop = Math.min(80, region.scrollHeight - region.clientHeight);
+          });
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const headings = await page.locator('.lane-heading').evaluateAll(elements => elements.map(heading => {
+            const region = heading.closest('.viewport-scroll');
+            const band = region.querySelector(`[data-lane-id="${heading.dataset.laneHeadingId}"] .lane-shape`);
+            const rect = heading.querySelector('rect');
+            const bounds = rect.getBoundingClientRect();
+            const gutter = heading.querySelector('.lane-heading-gutter').getBoundingClientRect();
+            const bandBounds = band.getBoundingClientRect();
+            const hit = document.elementFromPoint(bounds.x + bounds.width / 2, Math.max(region.getBoundingClientRect().top, bounds.top) + 4);
+            return { left: bounds.left - region.getBoundingClientRect().left, gutter: gutter.width, top: bounds.top - bandBounds.top,
+              height: bounds.height - bandBounds.height, fill: getComputedStyle(rect).fill, bandFill: getComputedStyle(band).fill,
+              visible: bounds.bottom > region.getBoundingClientRect().top && bounds.top < region.getBoundingClientRect().bottom,
+              above: hit?.closest('.lane-heading') === heading };
+          }));
+          for (const heading of headings) {
+            assert.ok(Math.abs(heading.left - 20) < 1, `sticky heading retains its left gutter: ${JSON.stringify(heading)}`);
+            assert.ok(Math.abs(heading.gutter - 20) < 1, 'the left gutter masks chart content at every zoom');
+            assert.ok(Math.abs(heading.top) < 1 && Math.abs(heading.height) < 1, 'heading follows its band vertically');
+            assert.equal(heading.fill, heading.bandFill, 'heading masks chart content with its band color');
+            if (heading.visible) assert.equal(heading.above, true, 'heading stays above chart content');
+          }
+        }
+      }
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await page.locator('.viewport-scroll').evaluate(region => { region.scrollLeft = 0; });
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.lane-heading-shadow')).opacity === '0');
+      await page.locator('.viewport-scroll').evaluate(region => { region.scrollLeft = (region.scrollWidth - region.clientWidth) / 2; });
+      await page.waitForFunction(() => document.querySelector('.lane-heading.is-sticky'));
+      const fade = await page.locator('.lane-heading-shadow').first().evaluate(shadow => ({
+        opacity: Number(getComputedStyle(shadow).opacity), duration: getComputedStyle(shadow).transitionDuration,
+      }));
+      assert.equal(fade.duration, '0.2s', 'sticky shadow fades rather than appearing immediately');
+      assert.ok(fade.opacity < 1, 'shadow begins below full opacity');
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.lane-heading-shadow')).opacity === '1');
+      await page.locator('.viewport-scroll').evaluate(region => { region.scrollLeft = 0; });
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.lane-heading-shadow')).opacity === '0');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.screenshot({ path: `/tmp/opencode/lain-sticky-swimlanes-${width}.png` });
+      console.log(`PASS ${width}px: swimlane headings retain a 20px left gutter through panning, zoom, and both themes`);
     }
     assert.deepEqual(errors, []);
   } finally {
