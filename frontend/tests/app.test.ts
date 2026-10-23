@@ -1179,7 +1179,7 @@ it.each(['Diagram', 'Domain'])('pans %s continuously while held and stops on rel
       expect(scroller.scrollLeft).toBe(687.5);
       await frame(400);
       const halfway = scroller.scrollLeft;
-      expect(halfway).toBeGreaterThan(687.5);
+      expect(halfway).toBeCloseTo(687.5 + 187.5 * (150 - 75 * (1 - Math.exp(-2))) / 100);
       const scheduled = request.mock.calls.length;
       for (let repeat = 0; repeat < 4; repeat++) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'L', shiftKey: true, repeat: true, bubbles: true, cancelable: true }));
       await settle();

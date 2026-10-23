@@ -8,7 +8,12 @@ MARKER = '''    ignore rm -rf "$_install_temp" "$_lib_install_temp"
 
     say "everything's installed!"'''
 
+MOVE = '    for _bin_name in $_bins; do\n        ensure mv "$_install_temp/$_bin_name" "$_install_dir"\n'
+ENTRY = 'download_binary_and_run_installer "$@" || exit 1\n'
+
 POST_INSTALL = r'''    ignore rm -rf "$_install_temp" "$_lib_install_temp"
+
+    ensure upgrade_finish
 
     if [ "${LAIN_NO_SETUP:-0}" = "1" ]; then
         say "service setup skipped (LAIN_NO_SETUP=1)"
@@ -23,9 +28,7 @@ POST_INSTALL = r'''    ignore rm -rf "$_install_temp" "$_lib_install_temp"
             _executable="$(cd "$_install_dir" && pwd -P)/lain"
             _executable=$(printf '%s' "$_executable" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g')
             grep -Fq "ExecStart=:\"$_executable\" --home " "$_unit_path" || err "lain.service uses another executable; run the installed lain setup manually with the service's --home and --port"
-            say "restarting the user lain.service"
-            ensure systemctl --user restart lain.service
-            ensure systemctl --user is-active --quiet lain.service
+            say "preserving the existing user lain.service configuration"
         else
             say "setting up the user lain.service"
             ensure "$_install_dir/lain" setup
@@ -39,8 +42,11 @@ def prepare(path: Path) -> None:
     source = path.read_text()
     if POST_INSTALL in source:
         return
-    if source.count(MARKER) != 1:
+    if any(source.count(anchor) != 1 for anchor in (MARKER, MOVE, ENTRY)):
         raise RuntimeError("cargo-dist shell installer layout changed")
+    hooks = (Path(__file__).parent / "upgrade-processes.sh").read_text()
+    source = source.replace(MOVE, '    ensure upgrade_prepare "$_install_dir/lain" "$_install_temp/lain"\n' + MOVE)
+    source = source.replace(ENTRY, hooks + "\n" + ENTRY)
     path.write_text(source.replace(MARKER, POST_INSTALL))
 
 

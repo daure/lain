@@ -120,7 +120,7 @@ function animateHeldPan(left: number, top: number, x: number, y: number, held: H
     let distance: number;
     let done = false;
     if (reduced) {
-      distance = 1 + held.elapsed / 150;
+      distance = 1 + held.elapsed / 100;
       done = held.releasedAt !== undefined;
     } else if (held.elapsed <= 150 || (held.releasedAt !== undefined && held.releasedAt <= 150)) {
       const progress = Math.min(1, held.elapsed / 150);
@@ -128,8 +128,8 @@ function animateHeldPan(left: number, top: number, x: number, y: number, held: H
       done = held.releasedAt !== undefined && progress === 1;
     } else {
       const cruising = Math.max(0, (held.releasedAt ?? held.elapsed) - 150);
-      const speed = (1 - Math.exp(-cruising / 75)) / 150;
-      distance = 1 + (cruising - 75 * (1 - Math.exp(-cruising / 75))) / 150;
+      const speed = (1 - Math.exp(-cruising / 75)) / 100;
+      distance = 1 + (cruising - 75 * (1 - Math.exp(-cruising / 75))) / 100;
       if (held.releasedAt !== undefined) {
         const progress = Math.min(1, (held.elapsed - held.releasedAt) / 150);
         distance += speed * 50 * (1 - (1 - progress) ** 3);

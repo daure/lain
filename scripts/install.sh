@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    printf 'Usage: %s [--binary PATH] [--bin-dir DIR]\nInstall a built Lain executable; does not install or start services.\n' "$0"
+    printf 'Usage: %s [--binary PATH] [--bin-dir DIR]\nInstall a built Lain executable; asks before stopping outdated processes and restarting their services.\n' "$0"
 }
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -30,9 +30,13 @@ if [[ -e $destination ]]; then
     installed_version=$("$destination" --version 2>/dev/null) || { printf 'Destination is not Lain: %s\n' "$destination" >&2; exit 1; }
     [[ $installed_version == 'lain '* ]] || { printf 'Destination is not Lain: %s\n' "$destination" >&2; exit 1; }
 fi
+. "$project_dir/scripts/upgrade-processes.sh"
+upgrade_prepare "$destination" "$binary"
 if [[ ! $binary -ef $destination ]]; then
-    install -m 0755 -- "$binary" "$destination"
+    install -m 0755 -- "$binary" "$destination.new"
+    mv -f -- "$destination.new" "$destination"
 fi
+upgrade_finish
 printf 'Installed %s\nSetup command: ' "$destination"
 printf '%q setup\n' "$destination"
 printf 'Add %s to PATH if needed. Preview setup with --dry-run.\n' "$bin_dir"

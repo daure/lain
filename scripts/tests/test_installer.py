@@ -53,12 +53,12 @@ say() { printf '%s\n' "$*"; }
 err() { printf '%s\n' "$*" >&2; exit 1; }
 ensure() { "$@" || err "command failed: $*"; }
 ignore() { :; }
+upgrade_finish() { :; }
 install() {
-''' + PREPARER.MARKER + '''
+''' + PREPARER.POST_INSTALL + '''
 }
 install
 ''')
-            PREPARER.prepare(installer)
             syntax = subprocess.run(["/bin/sh", "-n", str(installer)], capture_output=True, text=True)
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
             calls = root / "calls"
@@ -81,14 +81,12 @@ install
             "lain setup",
         ])
 
-    def test_upgrade_restarts_the_managed_service_with_its_saved_home_and_port(self):
+    def test_upgrade_preserves_the_managed_service_configuration(self):
         result, calls = self.run_installer("installed")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [
             "systemctl --user show-environment",
             "systemctl --user show --property=FragmentPath --value lain.service",
-            "systemctl --user restart lain.service",
-            "systemctl --user is-active --quiet lain.service",
         ])
 
     def test_unavailable_service_manager_keeps_the_binary_and_prints_manual_instructions(self):
@@ -107,7 +105,7 @@ install
         self.assertIn("LAIN_NO_SETUP=1", result.stdout)
 
     def test_service_failures_do_not_report_success(self):
-        for state in ["inspect-fails", "restart-fails", "inactive", "unrelated", "other-binary"]:
+        for state in ["inspect-fails", "unrelated", "other-binary"]:
             with self.subTest(state=state):
                 result, calls = self.run_installer(state)
                 self.assertNotEqual(result.returncode, 0)
@@ -122,10 +120,14 @@ install
     def test_preparation_is_idempotent_and_rejects_an_unknown_installer_layout(self):
         with tempfile.TemporaryDirectory() as directory:
             installer = Path(directory) / "installer.sh"
-            installer.write_text(PREPARER.MARKER)
+            source = PREPARER.MOVE + '\n' + PREPARER.MARKER + '\n' + PREPARER.ENTRY
+            installer.write_text(source)
             PREPARER.prepare(installer)
+            prepared = installer.read_text()
             PREPARER.prepare(installer)
-            self.assertEqual(installer.read_text(), PREPARER.POST_INSTALL)
+            self.assertEqual(installer.read_text(), prepared)
+            self.assertIn('ensure upgrade_prepare "$_install_dir/lain" "$_install_temp/lain"', prepared)
+            self.assertIn(PREPARER.POST_INSTALL, prepared)
             for source in ["unknown layout", PREPARER.MARKER * 2]:
                 installer.write_text(source)
                 with self.assertRaisesRegex(RuntimeError, "layout changed"):

@@ -16,9 +16,9 @@ lain demo
 lain
 ```
 
-The installer downloads the release executable to `~/.local/bin` and runs `lain setup` on first installation. Upgrades restart the existing Lain-managed user service, preserving its home, port, and unit settings. The service must use the installed executable; an unrelated unit or a different executable requires manual setup. Setup or restart failures make installation fail. Follow the installer's shell PATH instructions for future terminals. `lain demo` publishes the bundled examples; agents publish your own explanations through [MCP](#agent-connection).
+The installer downloads the release executable to `~/.local/bin` and runs `lain setup` on first installation. Upgrades list outdated processes from that installation and ask before stopping them. Declining or lacking an interactive terminal aborts before executable replacement. Approval allows forced termination of unresponsive processes. Associated user services restart with their existing configuration; setup failures, restart failures, or remaining outdated processes fail installation. Separate installations and development checkouts remain independent. Reconnect MCP clients after updating. Follow the installer's shell PATH instructions for future terminals. `lain demo` publishes the bundled examples; agents publish your own explanations through [MCP](#agent-connection).
 
-To upgrade, run the installer again, then `lain status`. Runtime data remains under `LAIN_HOME`. If user systemd is unavailable, installation keeps the binary and prints manual setup instructions. On a machine without systemd, run `lain serve` in a terminal and `lain open --print-url` in another. Set `LAIN_NO_SETUP=1` on the installer process to manage the service yourself:
+To upgrade, run the installer again, then `lain status`. Runtime data remains under `LAIN_HOME`. If user systemd is unavailable, installation prints manual setup instructions. On a machine without systemd, run `lain serve` in a terminal and `lain open --print-url` in another. Set `LAIN_NO_SETUP=1` to skip service creation; existing processes still require approval and associated services restart:
 
 ```sh
 curl -LsSf https://github.com/daure/lain/releases/latest/download/lain-installer.sh | LAIN_NO_SETUP=1 sh
@@ -38,7 +38,7 @@ lain demo
 lain
 ```
 
-The source installer copies one executable to `~/.local/bin` by default. The executable embeds the production Vue frontend.
+The source installer copies one executable to `~/.local/bin` by default and applies the same process approval and restart policy as the release installer. The executable embeds the production Vue frontend.
 
 `lain setup` installs and starts a systemd user service. The service starts at login and restarts after a crash. Setup preserves configuration. Starting before login requires user lingering; setup reports the relevant `loginctl` command without invoking sudo.
 
