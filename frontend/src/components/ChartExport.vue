@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { inject, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue';
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue';
 import { captureChart, chartFilename, downloadChart, encodeChart, type ExportFormat, type ExportScope } from '../chart-export';
 import { chartDownloadKey } from '../chart-download';
 
-const props = defineProps<{ viewport: () => HTMLElement | undefined; title: string; width: number; height: number; scenario: boolean; scenarioTitle?: string }>();
+const props = defineProps<{ viewport: () => HTMLElement | undefined; title: string; width: number; height: number; scenario: boolean; scenarioTitle?: string; step?: boolean; occurrenceId?: string }>();
 const root = ref<HTMLElement>();
 const trigger = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
@@ -12,6 +12,8 @@ const open = ref(false);
 const busy = ref(false);
 const error = ref('');
 const scope = ref<ExportScope>(props.scenario ? 'scenario' : 'all');
+const scopes = computed<ExportScope[]>(() => props.step ? ['scenario', 'step', 'all'] : ['scenario', 'all']);
+const scopeLabels = { step: 'Current step', scenario: 'Scenario only', all: 'All scenarios' };
 const formats: ExportFormat[] = ['svg', 'png', 'pdf'];
 const serverDownload = inject(chartDownloadKey, undefined);
 
@@ -20,7 +22,7 @@ async function toggle() {
   error.value = '';
   if (open.value) {
     await nextTick();
-    menu.value?.querySelector<HTMLButtonElement>('button')?.focus();
+    menu.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
   }
 }
 
@@ -64,7 +66,7 @@ async function exportChart(format: ExportFormat) {
       const viewport = props.viewport();
       if (!viewport) throw new Error('No chart is available to export.');
       const chart = captureChart(viewport, scope.value, props.title, props.width, props.height);
-      const filename = chartFilename(chart.title, format, scope.value === 'scenario' ? props.scenarioTitle : undefined);
+      const filename = chartFilename(chart.title, format, scope.value === 'step' ? `${props.scenarioTitle} - ${props.occurrenceId}` : scope.value === 'scenario' ? props.scenarioTitle : undefined);
       downloadChart(await encodeChart(chart, format), filename);
     }
     close(true);
@@ -74,6 +76,7 @@ async function exportChart(format: ExportFormat) {
 }
 
 watch(() => props.scenario, scenario => { scope.value = scenario ? 'scenario' : 'all'; });
+watch(() => props.occurrenceId, id => { if (!id && scope.value === 'step') scope.value = props.scenario ? 'scenario' : 'all'; });
 onMounted(() => document.addEventListener('pointerdown', outside, true));
 onUnmounted(() => document.removeEventListener('pointerdown', outside, true));
 </script>
@@ -85,8 +88,8 @@ onUnmounted(() => document.removeEventListener('pointerdown', outside, true));
     </button>
     <div v-if="open" :id="menuId" ref="menu" class="export-menu" data-chart-export-menu role="menu" aria-label="Export chart" :aria-busy="busy">
       <div v-if="scenario" class="export-scope" role="group" aria-label="Export scope">
-        <button v-for="choice in (['scenario', 'all'] as const)" :key="choice" role="menuitemradio" :aria-checked="scope === choice" :disabled="busy" @click="scope = choice">
-          <i :class="scope === choice ? 'pi pi-check' : 'empty-check'" aria-hidden="true" />{{ choice === 'scenario' ? 'Scenario only' : 'All scenarios' }}
+        <button v-for="choice in scopes" :key="choice" role="menuitemradio" :aria-checked="scope === choice" :disabled="busy || (choice === 'step' && !occurrenceId)" @click="scope = choice">
+          <i :class="scope === choice ? 'pi pi-check' : 'empty-check'" aria-hidden="true" />{{ scopeLabels[choice] }}
         </button>
       </div>
       <div v-if="scenario" class="export-divider" role="separator" />
@@ -108,7 +111,7 @@ onUnmounted(() => document.removeEventListener('pointerdown', outside, true));
 .export-menu button[aria-checked="true"]{color:var(--blue)}
 .export-menu button:disabled{opacity:.5;cursor:default}
 .export-scope .pi,.empty-check{width:14px;font-size:12px}
-.export-divider{height:1px;background:var(--line);margin:6px 0}
+.export-divider{height:1px;background:var(--line);margin:6px -6px}
 .export-format{justify-content:space-between}
 .export-format small{color:var(--muted);font-size:.72rem}
 .export-error{margin:6px 10px;font-size:.78rem;line-height:1.4;overflow-wrap:anywhere;color:var(--danger,#ad3549)}

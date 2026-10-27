@@ -366,11 +366,11 @@ async function run() {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  const cases = ['flow', 'capture-flow', 'dispatch-flow', 'state', 'sequence', 'domain'].map(kind => ({
+  const cases = ['flow', 'capture-flow', 'dispatch-flow', 'state', 'sequence', 'domain', 'wiring'].map(kind => ({
     explanationID: 'test', document: fixture, kind,
     diagram: kind === 'capture-flow' ? fixture.diagrams.find(item => item.id === 'payment-capture-flow')
       : kind === 'dispatch-flow' ? fixture.diagrams.find(item => item.id === 'dispatch-preparation-flow')
-      : fixture.diagrams.find(item => item.kind === (kind === 'domain' ? 'flow' : kind)),
+      : fixture.diagrams.find(item => item.kind === (['domain', 'wiring'].includes(kind) ? 'flow' : kind)),
   }));
   cases.push({ explanationID: 'test', document: fixture, kind: 'dispatch-sequence', diagram: fixture.diagrams.find(item => item.id === 'dispatch-request-sequence') },
     { explanationID: 'release-promotion', document: releasePromotion, kind: 'release-promotion-flow', diagram: releasePromotion.diagrams.find(item => item.id === 'release-promotion-flow') },
@@ -386,15 +386,17 @@ async function run() {
   async function exportFile(format, scope, name) {
     const trigger = page.getByRole('button', { name: 'Export chart', exact: true });
     await trigger.hover();
-    assert.equal(await page.locator('.diagram-minimap').evaluate(map => getComputedStyle(map).visibility), 'visible');
+    assert.equal(await page.locator('.event-tabpanel:not([aria-hidden="true"]) .diagram-minimap').evaluate(map => getComputedStyle(map).visibility), 'visible');
     await trigger.click();
     const menu = page.getByRole('menu', { name: 'Export chart' });
     const triggerBox = await trigger.boundingBox();
     const menuBox = await menu.boundingBox();
+    const dividerBox = await menu.getByRole('separator').boundingBox();
+    assert.ok(Math.abs(dividerBox.x - menuBox.x - 1) < 1 && Math.abs(dividerBox.x + dividerBox.width - menuBox.x - menuBox.width + 1) < 1, 'The download divider reaches both inner menu borders');
     assert.ok(menuBox.y + menuBox.height < triggerBox.y, 'export menu opens above its trigger');
-    assert.equal(await page.locator('.diagram-minimap').evaluate(map => getComputedStyle(map).visibility), 'hidden', 'export menu hides the minimap');
-    await page.getByRole('menuitemradio', { name: scope === 'all' ? 'All scenarios' : 'Scenario only', exact: true }).click();
-    const chartTitle = await page.locator('.viewport-scroll').getAttribute('aria-label');
+    assert.equal(await page.locator('.event-tabpanel:not([aria-hidden="true"]) .diagram-minimap').evaluate(map => getComputedStyle(map).visibility), 'hidden', 'export menu hides the minimap');
+    await page.getByRole('menuitemradio', { name: { all: 'All scenarios', scenario: 'Scenario only', step: 'Current step' }[scope], exact: true }).click();
+    const chartTitle = await page.locator('.viewport-scroll:visible').getAttribute('aria-label');
     const scenarioTitle = (await page.locator('.scenario-link[aria-current="true"] .scenario-name').textContent()).trim();
     const pending = page.waitForEvent('download');
     const responsePending = page.waitForResponse(response => response.url().includes('/export?'));
@@ -403,11 +405,13 @@ async function run() {
     assert.equal(response.status(), 200, response.ok() ? undefined : await response.text());
     const query = new URL(response.url()).searchParams;
     assert.equal(query.get('format'), format);
-    assert.equal(query.has('scenarioId'), scope === 'scenario');
+    assert.equal(query.has('scenarioId'), scope !== 'all');
+    assert.equal(query.has('occurrenceId'), scope === 'step');
+    if (scope === 'step') assert.equal(query.get('occurrenceId'), new URL(page.url()).searchParams.get('occurrence'));
     assert.equal(response.headers()['cache-control'], 'no-store');
     assert.match(response.headers()['content-disposition'], /^attachment;/);
     const download = await pending;
-    assert.equal(download.suggestedFilename(), `${chartTitle}${scope === 'scenario' ? ` - ${scenarioTitle}` : ''}.${format}`);
+    assert.equal(download.suggestedFilename(), `${chartTitle}${scope !== 'all' ? ` - ${scenarioTitle}` : ''}${scope === 'step' ? ` - ${query.get('occurrenceId')}` : ''}.${format}`);
     const file = path.join(artifacts, `${name}.${format}`);
     await download.saveAs(file);
     assert.equal(await download.failure(), null);
@@ -423,7 +427,7 @@ async function run() {
       for (const { explanationID, document, kind, diagram } of cases) {
         const scenario = document.scenarios.find(item => item.diagramId === diagram.id);
         await page.goto(viewerURL(explanationID, scenario));
-        await page.getByRole('tab', { name: kind === 'domain' ? 'Domain' : 'Diagram', exact: true }).click();
+        await page.getByRole('tab', { name: kind === 'wiring' ? 'Wiring' : kind === 'domain' ? 'Domain' : 'Diagram', exact: true }).click();
         if (explanationID !== 'test') {
           await page.locator('.viewport-content > svg.graph .graph-lane').first().waitFor();
           await page.keyboard.press('g');
@@ -486,8 +490,60 @@ async function run() {
         assert.equal(inspected.hasVariables, false);
         assert.equal(inspected.titles, 1);
         assert.ok(!svg.includes('data-occurrence-id') && !svg.includes('aria-current'));
+        if (kind === 'wiring') {
+          const wiring = await page.evaluate(svg => {
+            const exported = new DOMParser().parseFromString(svg, 'image/svg+xml');
+             return { paths: [...exported.querySelectorAll('svg > g > path[marker-end]')].map(path => path.getAttribute('d')),
+               arrowColors: [...exported.querySelectorAll('path[marker-end]')].map(path => ({ line: path.style.stroke,
+                 head: exported.querySelector(`marker[id="${path.getAttribute('marker-end').slice(5, -1)}"] path`).style.fill })),
+              live: [...window.document.querySelectorAll('.wiring-map .connection-line')].map(path => path.getAttribute('d')),
+              icons: [...exported.querySelectorAll('image')].map(image => image.getAttribute('href')) };
+          }, svg);
+           assert.equal(wiring.paths.length, document.wiring.connections.length);
+           assert.ok(wiring.arrowColors.every(colors => colors.line === colors.head), 'Exported Wiring arrowheads match their connection colors');
+          assert.deepEqual(wiring.paths, wiring.live, 'Wiring exports await exactly the same geometry as the viewport');
+          assert.equal(wiring.icons.length, document.wiring.components.length);
+          assert.ok(wiring.icons.every(icon => icon.startsWith('data:image/svg+xml')));
+          assert.doesNotMatch(inspected.text, /[●✓◇○◆]/, 'Wiring exports omit playback and work markers');
+          await page.keyboard.press('l');
+          const expected = await page.locator('.wiring-map').evaluate(svg => ({
+            paths: [...svg.querySelectorAll('.wiring-connection.current .connection-line')].map(path => path.getAttribute('d')),
+            cards: svg.querySelectorAll('.wiring-card.current').length,
+            rows: [...svg.querySelectorAll('.wiring-card.current .wiring-row')].map(row => row.querySelector('text').textContent),
+          }));
+          const stepSvg = (await exportFile('svg', 'step', `${theme}-wiring-step`)).toString();
+          const step = await page.evaluate(svg => {
+            const document = new DOMParser().parseFromString(svg, 'image/svg+xml');
+            const chart = window.document.importNode(document.documentElement, true);
+            const host = window.document.createElement('div');
+            host.style.cssText = 'position:fixed;left:-100000px;top:0';
+            host.append(chart); window.document.body.append(host);
+            try {
+              chart.querySelector(':scope > rect').remove();
+              const box = chart.getBBox(), view = chart.viewBox.baseVal;
+              return { paths: [...chart.querySelectorAll('path[marker-end]')].map(path => path.getAttribute('d')),
+                cards: chart.querySelectorAll('image').length, text: [...chart.querySelectorAll('text')].map(text => text.textContent),
+                width: view.width, height: view.height,
+                padding: [box.x - view.x, box.y - view.y, view.x + view.width - box.x - box.width, view.y + view.height - box.y - box.height] };
+            } finally { host.remove(); }
+          }, stepSvg);
+          assert.deepEqual(step.paths, expected.paths, 'Current-step export selects the requested occurrence independently of the first visit');
+          assert.equal(step.cards, expected.cards, 'Current-step export retains only participating cards');
+          for (const row of expected.rows) assert.ok(step.text.includes(row), 'Every row in a participating card remains in the export');
+          assert.ok(step.padding.every(value => value >= 19.9 && value < 21), 'Current-step downloads crop to the artwork with 20px padding on every side');
+          const stepPng = await exportFile('png', 'step', `${theme}-wiring-step`);
+          assert.equal(stepPng.subarray(1, 4).toString(), 'PNG');
+          const scale = Math.min(2, 8192 / Math.max(step.width, step.height), Math.sqrt(16_000_000 / (step.width * step.height)));
+          assert.equal(stepPng.readUInt32BE(16), Math.floor(step.width * scale), 'PNG uses the cropped width');
+          assert.equal(stepPng.readUInt32BE(20), Math.floor(step.height * scale), 'PNG uses the cropped height');
+          const stepPdf = await PDFDocument.load(await exportFile('pdf', 'step', `${theme}-wiring-step`));
+          assert.equal(stepPdf.getPageCount(), 1);
+          assert.equal(stepPdf.getPage(0).getWidth(), step.width * .75, 'PDF uses the cropped width');
+          assert.equal(stepPdf.getPage(0).getHeight(), step.height * .75, 'PDF uses the cropped height');
+          await page.keyboard.press('h');
+        }
         if (explanationID !== 'test') assertSwimlanes(diagram, await page.evaluate(swimlaneGeometry, { diagram, svg }));
-        if (kind !== 'domain' && diagram.kind === 'flow') {
+        if (!['domain', 'wiring'].includes(kind) && diagram.kind === 'flow') {
           const centered = await page.evaluate(svg => {
             const document = new DOMParser().parseFromString(svg, 'image/svg+xml');
             const source = [...window.document.querySelectorAll('.graph-node > text[data-export-y]')];
@@ -551,7 +607,7 @@ async function run() {
     assert.equal((await failed).status(), 503);
     await page.getByRole('alert').filter({ hasText: 'export directory must be a private directory with mode 0700' }).waitFor();
     assert.deepEqual(await fs.readdir(rejectedTarget), [], 'export refuses symlink directories without writing to their targets');
-    console.log(`Chart export browser checks passed: SVG, PNG, PDF; nine dispatch shapes, release promotion and incident recovery swimlanes and routes, legacy flows, state, sequence, domain; both themes; mobile menu. Artifacts: ${artifacts}`);
+    console.log(`Chart export browser checks passed: SVG, PNG, PDF; nine dispatch shapes, release promotion and incident recovery swimlanes and routes, legacy flows, state, sequence, domain, wiring; both themes; mobile menu. Artifacts: ${artifacts}`);
   } finally { await browser.close(); }
 }
 

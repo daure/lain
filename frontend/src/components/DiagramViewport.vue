@@ -4,6 +4,7 @@ import ChartExport from './ChartExport.vue';
 import { viewportStatesKey } from '../viewport-state';
 
 type OverviewNode = { x: number; y: number; width: number; height: number; active?: boolean };
+type FocusBounds = { left: number; right: number; top: number; bottom: number };
 const props = withDefaults(defineProps<{
   width: number;
   height: number;
@@ -13,18 +14,25 @@ const props = withDefaults(defineProps<{
   overviewNodes?: OverviewNode[];
   overviewEdges?: string[];
   focusPoint?: { x: number; y: number };
+  focusBounds?: FocusBounds | null;
   focusKey?: string;
   sceneKey?: string;
   stateKey?: string;
   focusInset?: (top: number) => number;
   exportScenario?: boolean;
+  exportStep?: boolean;
+  exportOccurrenceId?: string;
   scenarioTitle?: string;
-}>(), { enabled: true, overviewNodes: () => [], overviewEdges: () => [] });
+  exportEnabled?: boolean;
+  initialFit?: boolean;
+  autoFollow?: boolean;
+}>(), { enabled: true, overviewNodes: () => [], overviewEdges: () => [], exportEnabled: true, initialFit: false, autoFollow: true });
 const emit = defineEmits<{ change: [] }>();
 const root = ref<HTMLElement>();
 const region = ref<HTMLElement>();
 const scale = ref(1);
 const fitted = ref(false);
+const boundsFocused = ref(false);
 const states = inject(viewportStatesKey, undefined);
 let activeStateKey = props.stateKey;
 let restoring = false;
@@ -61,6 +69,11 @@ type HeldPan = { key: string; elapsed: number; releasedAt?: number };
 let heldPan: HeldPan | undefined;
 let canvasDrag: { id: number; x: number; y: number; left: number; top: number } | undefined;
 let mapDrag: { id: number; x: number; y: number } | undefined;
+type Point = { x: number; y: number };
+const touches = new Map<number, Point>();
+let pinch: { distance: number; scale: number; anchor: Point } | undefined;
+let suppressPinchClick = false;
+let pendingZoomPan: { left: number; top: number } | undefined;
 
 function track() {
   const element = region.value;
@@ -85,12 +98,13 @@ function pan(left: number, top: number) {
 
 function cancelMotion() {
   zoomVersion++;
+  pendingZoomPan = undefined;
   if (animation !== undefined) cancelAnimationFrame(animation);
   animation = undefined;
   heldPan = undefined;
 }
 
-function interact() { fitted.value = false; following = false; cancelMotion(); }
+function interact() { fitted.value = false; boundsFocused.value = false; following = false; cancelMotion(); }
 
 function animatePan(left: number, top: number, animated: boolean, duration: number, easing: 'out' | 'in-out' = 'out') {
   const element = region.value!;
@@ -158,7 +172,7 @@ async function centerCurrent(animated = false, point = selectedFocusPoint ?? pro
   if (!props.enabled || fitted.value) return;
   cancelMotion();
   const version = zoomVersion;
-  following = true;
+  following = props.autoFollow;
   track();
   await nextTick();
   track();
@@ -195,6 +209,7 @@ async function panBy(x: number, y: number, key?: string) {
 }
 
 function actualSize() {
+  if (props.focusBounds !== undefined) return props.focusBounds ? focusBounds(props.focusBounds) : undefined;
   selectedFocusPoint = undefined;
   fitted.value = false;
   scale.value = 1;
@@ -218,30 +233,100 @@ async function fit() {
     offset.value.y + props.height * scale.value / 2 - view.value.height / 2);
 }
 
-function toggleFit() { return fitted.value ? actualSize() : fit(); }
-
-async function zoom(factor: number) {
+async function focusBounds(bounds: FocusBounds) {
+  if (!props.enabled || !view.value.width || !view.value.height) return;
   interact();
-  const center = { x: (view.value.left + view.value.width / 2 - offset.value.x) / scale.value,
-    y: (view.value.top + view.value.height / 2 - offset.value.y) / scale.value };
-  const version = ++zoomVersion;
-  fitted.value = false;
-  scale.value = Math.max(minScale.value, Math.min(8, scale.value * factor));
+  const version = zoomVersion;
+  scale.value = Math.min(8, (view.value.width - inset * 2) / Math.max(1, bounds.right - bounds.left),
+    (view.value.height - inset * 2) / Math.max(1, bounds.bottom - bounds.top));
+  if (props.width * scale.value <= view.value.width) scale.value = Math.min(scale.value, (view.value.width - inset * 2) / props.width);
+  if (props.height * scale.value <= view.value.height) scale.value = Math.min(scale.value, (view.value.height - inset * 2) / props.height);
   await nextTick();
   if (version !== zoomVersion) return;
-  pan(center.x * scale.value + offset.value.x - view.value.width / 2,
-    center.y * scale.value + offset.value.y - view.value.height / 2);
+  boundsFocused.value = true;
+  pan(offset.value.x + (bounds.left + bounds.right) * scale.value / 2 - view.value.width / 2,
+    offset.value.y + (bounds.top + bounds.bottom) * scale.value / 2 - view.value.height / 2);
+}
+
+function toggleFit() { return fitted.value ? actualSize() : fit(); }
+
+function chartPoint(point: Point): Point {
+  const position = pendingZoomPan ?? view.value;
+  return { x: (position.left + point.x - offset.value.x) / scale.value,
+    y: (position.top + point.y - offset.value.y) / scale.value };
+}
+
+async function zoomTo(value: number, point: Point, anchor = chartPoint(point)) {
+  interact();
+  const version = ++zoomVersion;
+  scale.value = Math.max(minScale.value, Math.min(8, value));
+  const left = Math.max(0, Math.min(anchor.x * scale.value + offset.value.x - point.x,
+    props.width * scale.value + offset.value.x * 2 - view.value.width));
+  const top = Math.max(0, Math.min(anchor.y * scale.value + offset.value.y - point.y,
+    props.height * scale.value + offset.value.y * 2 - view.value.height));
+  pendingZoomPan = { left, top };
+  await nextTick();
+  if (version !== zoomVersion) return;
+  pendingZoomPan = undefined;
+  pan(left, top);
+}
+
+function zoom(factor: number) {
+  return zoomTo(scale.value * factor, { x: view.value.width / 2, y: view.value.height / 2 });
+}
+
+function viewportPoint(point: Point): Point {
+  const bounds = region.value!.getBoundingClientRect();
+  return { x: point.x - bounds.left, y: point.y - bounds.top };
+}
+
+function onWheel(event: WheelEvent) {
+  if (!props.enabled) return;
+  if (!event.ctrlKey) { interact(); return; }
+  event.preventDefault();
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? view.value.height : 1;
+  void zoomTo(scale.value * Math.exp(-event.deltaY * unit * .01), viewportPoint({ x: event.clientX, y: event.clientY }));
+}
+
+function onDoubleClick(event: MouseEvent) {
+  if (!props.enabled || event.defaultPrevented) return;
+  if (event.target instanceof Element && event.target.closest('[role="button"], button, a')) return;
+  event.preventDefault();
+  void zoomTo(scale.value * 2, viewportPoint({ x: event.clientX, y: event.clientY }));
+}
+
+function touchGeometry() {
+  const [first, second] = [...touches.values()] as [Point, Point];
+  return { point: viewportPoint({ x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 }),
+    distance: Math.hypot(second.x - first.x, second.y - first.y) };
 }
 
 function resize() {
   if (restoring) { void restoreState(); return; }
   track();
   if (fitted.value) void fit();
+  else if (boundsFocused.value && props.focusBounds) void focusBounds(props.focusBounds);
   else if (following) void centerCurrent(animation !== undefined);
 }
 
 function startCanvasDrag(event: PointerEvent) {
-  if (!props.enabled || event.button !== 0 || (event.target instanceof Element && event.target.closest('[role="button"], button'))) return;
+  if (!props.enabled || event.button !== 0) return;
+  if (!touches.size) suppressPinchClick = false;
+  if (event.pointerType === 'touch') {
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (touches.size >= 2) {
+      if (touches.size === 2) {
+        const { point, distance } = touchGeometry();
+        pinch = { distance: Math.max(1, distance), scale: scale.value, anchor: chartPoint(point) };
+      }
+      suppressPinchClick = true;
+      canvasDrag = undefined;
+      interact();
+      event.preventDefault();
+      return;
+    }
+  }
+  if (event.target instanceof Element && event.target.closest('[role="button"], button')) return;
   interact();
   canvasDrag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: view.value.left, top: view.value.top };
   region.value?.setPointerCapture(event.pointerId);
@@ -249,8 +334,31 @@ function startCanvasDrag(event: PointerEvent) {
 }
 
 function moveCanvas(event: PointerEvent) {
+  if (touches.has(event.pointerId)) {
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pinch) {
+      event.preventDefault();
+      if (touches.size >= 2) {
+        const { point, distance } = touchGeometry();
+        void zoomTo(pinch.scale * distance / pinch.distance, point, pinch.anchor);
+      }
+      return;
+    }
+  }
   if (canvasDrag?.id !== event.pointerId) return;
   pan(canvasDrag.left + canvasDrag.x - event.clientX, canvasDrag.top + canvasDrag.y - event.clientY);
+}
+
+function endCanvasDrag(event: PointerEvent) {
+  touches.delete(event.pointerId);
+  if (!touches.size) pinch = undefined;
+  if (canvasDrag?.id === event.pointerId) canvasDrag = undefined;
+}
+
+function onCanvasClick(event: MouseEvent) {
+  if (!suppressPinchClick || event.detail === 0) return;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function mapPoint(event: PointerEvent) {
@@ -277,12 +385,12 @@ function moveMap(event: PointerEvent) {
   pan((point.x - mapDrag.x) * scale.value + offset.value.x, (point.y - mapDrag.y) * scale.value + offset.value.y);
 }
 
-function endDrag() { canvasDrag = undefined; mapDrag = undefined; }
+function endDrag() { canvasDrag = undefined; mapDrag = undefined; touches.clear(); pinch = undefined; suppressPinchClick = false; }
 
 function onMapKeydown(event: KeyboardEvent) {
   if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
   const step = event.shiftKey ? 120 : 40;
-  const delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+  const delta = { ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
   if (!delta && !['Home', '+', '=', '-'].includes(event.key)) return;
   event.preventDefault(); event.stopPropagation(); interact();
   if (delta) pan(view.value.left + delta[0]!, view.value.top + delta[1]!);
@@ -299,11 +407,12 @@ async function restoreState() {
   cancelMotion();
   endDrag();
   following = false;
+  boundsFocused.value = false;
   selectedFocusPoint = undefined;
   restoring = true;
   const version = zoomVersion;
   const saved = activeStateKey ? states?.get(activeStateKey) : undefined;
-  fitted.value = saved?.fitted ?? false;
+  fitted.value = saved?.fitted ?? props.initialFit;
   scale.value = saved?.scale ?? 1;
   await nextTick();
   track();
@@ -335,10 +444,11 @@ watch(() => [props.width, props.height], () => {
     else pan(view.value.left, view.value.top);
   });
 }, { flush: 'post' });
-watch(() => [props.focusKey, props.focusPoint?.x, props.focusPoint?.y], () => {
-  if (restoring) return;
+watch(() => [props.focusKey, props.focusBounds, props.focusPoint?.x, props.focusPoint?.y], () => {
+  if (restoring || !props.autoFollow) return;
   selectedFocusPoint = undefined;
-  void centerCurrent(true);
+  if (props.focusBounds) void focusBounds(props.focusBounds);
+  else if (props.focusBounds === undefined) void centerCurrent(true);
 }, { flush: 'post' });
 onMounted(() => {
   if (typeof ResizeObserver !== 'undefined') {
@@ -350,14 +460,14 @@ onMounted(() => {
   void restoreState();
 });
 onUnmounted(() => { saveState(); observer?.disconnect(); window.removeEventListener('resize', resize); cancelMotion(); });
-defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt, panBy, releasePan, cancelPan });
+defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt, focusBounds, panBy, releasePan, cancelPan });
 </script>
 
 <template>
   <div ref="root" :class="['diagram-viewport', { 'viewport-enabled': enabled }]" :data-scale="scale" :data-fitted="fitted">
     <div ref="region" :class="['viewport-scroll', scrollClass]" role="region" :aria-label="title" tabindex="0"
-         @scroll.passive="onScroll" @wheel.passive="interact" @touchmove.passive="interact" @keydown="['PageUp', 'PageDown', 'Home', 'End', ' '].includes($event.key) && interact()"
-         @pointerdown="startCanvasDrag" @pointermove="moveCanvas" @pointerup="endDrag" @pointercancel="endDrag" @lostpointercapture="endDrag">
+         @scroll.passive="onScroll" @wheel="onWheel" @dblclick="onDoubleClick" @keydown="['PageUp', 'PageDown', 'Home', 'End', ' '].includes($event.key) && interact()"
+         @pointerdown="startCanvasDrag" @pointermove="moveCanvas" @pointerup="endCanvasDrag" @pointercancel="endCanvasDrag" @lostpointercapture="endCanvasDrag" @click.capture="onCanvasClick">
       <div v-if="enabled" class="viewport-stage" :style="stageStyle">
         <div v-if="$slots.sticky" class="viewport-sticky" :style="{ marginLeft: `${offset.x}px` }">
           <div :style="{ width: `${width}px`, transform: `translateY(${Math.max(0, offset.y - view.top)}px) scale(${scale})`, transformOrigin: 'top left' }"><slot name="sticky" /></div>
@@ -367,7 +477,7 @@ defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt,
       <template v-else><slot name="sticky" /><slot :sticky-left="0" /></template>
     </div>
     <div v-if="enabled" class="viewport-tools" @pointerdown.stop>
-      <svg class="diagram-minimap" :viewBox="`0 0 ${width} ${height}`" role="group" aria-label="Diagram overview. Drag the viewport to pan; arrow keys pan, Home fits the diagram." tabindex="0"
+      <svg class="diagram-minimap" :viewBox="`0 0 ${width} ${height}`" role="group" aria-label="Diagram overview. Drag the viewport to pan; Up/Down pan, Home fits the diagram." tabindex="0"
            @pointerdown="startMapDrag" @pointermove="moveMap" @pointerup="endDrag" @pointercancel="endDrag" @lostpointercapture="endDrag" @keydown="onMapKeydown">
         <path v-for="(path, index) in overviewEdges" :key="index" class="minimap-edge" :d="path" />
         <rect v-for="(node, index) in overviewNodes" :key="index" :class="['minimap-node', { active: node.active }]" :x="node.x" :y="node.y" :width="node.width" :height="node.height" rx="3" />
@@ -377,9 +487,10 @@ defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt,
         <button aria-label="Zoom out" title="Zoom out (-)" :disabled="scale <= minScale" @click="zoom(.8)"><i class="pi pi-minus" aria-hidden="true" /></button>
         <output aria-label="Zoom level">{{ Math.round(scale * 100) }}%</output>
         <button aria-label="Zoom in" title="Zoom in (=)" :disabled="scale >= 8" @click="zoom(1.25)"><i class="pi pi-plus" aria-hidden="true" /></button>
-        <button aria-label="Fit diagram" title="Fit diagram" :aria-pressed="fitted" @click="fit()"><i class="pi pi-expand" aria-hidden="true" /></button>
-        <button class="actual-size" aria-label="Zoom to 100% and focus" title="100% and focus" :aria-pressed="!fitted && scale === 1" @click="actualSize()">1:1</button>
-        <ChartExport :viewport="() => root" :title="title" :width="width" :height="height" :scenario="exportScenario === true" :scenario-title="scenarioTitle" />
+        <slot name="controls" />
+        <button aria-label="Fit diagram" :title="props.focusBounds !== undefined ? 'Fit diagram (;)' : 'Fit diagram'" :aria-pressed="fitted" @click="fit()"><i class="pi pi-expand" aria-hidden="true" /></button>
+        <button class="actual-size" :aria-label="props.focusBounds !== undefined ? 'Fit current step' : 'Zoom to 100% and focus'" :title="props.focusBounds !== undefined ? 'Fit current step (;)' : '100% and focus'" :disabled="props.focusBounds === null" :aria-pressed="props.focusBounds !== undefined ? boundsFocused : !fitted && scale === 1" @click="actualSize()"><i v-if="props.focusBounds !== undefined" class="pi pi-bullseye" aria-hidden="true" /><template v-else>1:1</template></button>
+         <ChartExport v-if="exportEnabled" :viewport="() => root" :title="title" :width="width" :height="height" :scenario="exportScenario === true" :scenario-title="scenarioTitle" :step="exportStep" :occurrence-id="exportOccurrenceId" />
       </div>
     </div>
   </div>
@@ -401,11 +512,12 @@ defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt,
 .minimap-node.active{fill:var(--blue);stroke:var(--blue)}
 .minimap-window{fill:var(--blue);fill-opacity:.12;stroke:var(--blue);stroke-width:2;vector-effect:non-scaling-stroke}
 .viewport-buttons{position:relative;display:flex;align-items:center;border:1px solid var(--line);border-radius:6px;background:var(--surface);box-shadow:0 2px 8px #0002;padding:3px;gap:2px}
-.viewport-buttons button{display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:4px;background:transparent;color:var(--text)}
-.viewport-buttons button:hover{background:var(--soft)}
-.viewport-buttons button[aria-pressed="true"]{color:var(--blue);background:color-mix(in srgb,var(--blue) 12%,transparent)}
+.viewport-buttons button,.viewport-buttons :slotted(button){display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:4px;background:transparent;color:var(--text)}
+.viewport-buttons button:hover,.viewport-buttons :slotted(button:hover){background:var(--soft)}
+.viewport-buttons :deep(button:focus-visible){outline:none}
+.viewport-buttons button[aria-pressed="true"],.viewport-buttons :slotted(button[aria-pressed="true"]){color:var(--blue);background:color-mix(in srgb,var(--blue) 12%,transparent)}
 .viewport-buttons button:disabled{opacity:.4;cursor:default}
 .viewport-buttons .actual-size{font-size:.75rem;font-weight:600}
 .viewport-buttons output{min-width:46px;text-align:center;font-size:.75rem;color:var(--muted);font-variant-numeric:tabular-nums}
-@media(max-width:700px){.viewport-tools{right:10px;bottom:10px;gap:6px}.diagram-minimap{height:80px}.viewport-buttons button{width:30px;height:30px}}
+@media(max-width:700px){.viewport-tools{right:10px;bottom:10px;gap:6px}.diagram-minimap{height:80px}.viewport-buttons button,.viewport-buttons :slotted(button){width:30px;height:30px}}
 </style>

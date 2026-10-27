@@ -2,10 +2,10 @@
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { domainLayout, scenarioDomain } from '../domain';
 import { domainActivity } from '../domain-activity';
-import type { Cardinality, Diagram, Explanation, Occurrence, Scenario } from '../model';
+import type { Cardinality, Diagram, Domain, Occurrence, Scenario } from '../model';
 import DiagramViewport from './DiagramViewport.vue';
 
-const props = defineProps<{ domain: Explanation['domain']; diagram: Diagram; scenario: Scenario; selectedEntityId: string; occurrence?: Occurrence; stateKey?: string }>();
+const props = defineProps<{ domain: Domain; diagram: Diagram; scenario: Scenario; selectedEntityId: string; occurrence?: Occurrence; stateKey?: string }>();
 const emit = defineEmits<{ select: [id: string]; inspect: [entityId: string, attributeId: string] }>();
 const canvas = ref<InstanceType<typeof DiagramViewport>>();
 const svg = ref<SVGSVGElement>();
@@ -221,6 +221,7 @@ onUnmounted(cancelNumberShortcut);
           </g>
         </g>
         <rect class="domain-entity-outline" :width="entity.width" :height="entity.height" rx="4" />
+        <rect v-if="entity.id === selectedEntityId" class="inspection-ring" x="-4" y="-4" :width="entity.width + 8" :height="entity.height + 8" rx="7" />
       </g>
     </svg>
     <p v-if="!layout.entities.length" class="muted domain-empty">No entity definitions in this domain.</p>
@@ -271,8 +272,11 @@ onUnmounted(cancelNumberShortcut);
 .domain-entity.unrelated .domain-entity-surface{fill:var(--offpath-surface,#f3f5f8)}
 .domain-entity.unrelated .domain-entity-name,.domain-entity.unrelated .domain-shortcut-number,.domain-entity.unrelated .domain-property-label,.domain-entity.unrelated .domain-property-id,.domain-entity.unrelated .domain-type-label,.domain-entity.unrelated .domain-method-signature{fill:var(--offpath-text,#8a96a8)}
 .domain-entity.unrelated .domain-entity-outline{stroke:var(--offpath-line,#d4dce6);stroke-dasharray:var(--offpath-dash)}
-.domain-entity.selected .domain-entity-heading{fill:var(--accent-surface,#e8f0ff)}
-.domain-entity.selected .domain-entity-name,.domain-entity.selected .domain-shortcut-number{fill:var(--blue)}
-.domain-entity.selected .domain-entity-outline,.domain-entity:hover .domain-entity-outline,.domain-entity:focus-visible .domain-entity-outline{stroke:var(--blue);stroke-width:2.5;stroke-dasharray:none}
+.domain-entity:hover .domain-entity-outline,.domain-entity:focus-visible .domain-entity-outline{stroke:var(--blue);stroke-width:2.5}
+.domain-entity.selected{opacity:1}
+.domain-entity.selected .domain-entity-outline{stroke:var(--inspection)}
+.domain-entity.selected .domain-entity-surface,.domain-entity.selected .domain-entity-heading{fill:var(--inspection-surface)}
+.domain-entity.selected .domain-entity-name,.domain-entity.selected .domain-shortcut-number{fill:var(--inspection)}
+.inspection-ring{fill:none;stroke:var(--inspection);stroke-width:2.5;pointer-events:none}
 .domain-empty{margin:0;padding:24px;text-align:center}
 </style>

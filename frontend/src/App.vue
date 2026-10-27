@@ -5,6 +5,7 @@ import Select from 'primevue/select';
 import { useToast } from 'primevue/usetoast';
 import GraphView from './components/GraphView.vue';
 import DomainView from './components/DomainView.vue';
+import WiringView from './components/WiringView.vue';
 import SequenceView from './components/SequenceView.vue';
 import ScenarioJump from './components/ScenarioJump.vue';
 import StepInspector from './components/StepInspector.vue';
@@ -15,7 +16,6 @@ import FocusBreadcrumb from './components/FocusBreadcrumb.vue';
 import ExplanationLibrary from './components/ExplanationLibrary.vue';
 import ExplanationLinks from './components/ExplanationLinks.vue';
 import ExplanationOverview from './components/ExplanationOverview.vue';
-import ScenarioContext from './components/ScenarioContext.vue';
 import ScenarioLabels from './components/ScenarioLabels.vue';
 import ScenarioPreview from './components/ScenarioPreview.vue';
 import Notifications from './components/Notifications.vue';
@@ -28,7 +28,7 @@ import { diagramLayout } from './layout';
 import { activateDiagramNode, diagramLinks } from './diagram-links';
 import { useTheme } from './theme';
 import { chartDownloadKey, chartExportUrl, downloadChartUrl } from './chart-download';
-import { viewportStatesKey } from './viewport-state';
+import { viewportStatesKey, type ViewportState } from './viewport-state';
 import { scenarioSections } from './explanation-structure';
 import { useMobileSidebar } from './mobile-sidebar';
 
@@ -43,26 +43,36 @@ const navigation = useNavigation();
 const routes = useBrowserNavigation(library, navigation);
 const { overview: showingOverview } = routes;
 const { scenario, diagram, occurrence, index, history: walkedHistory, scenarioId } = navigation;
-provide(viewportStatesKey, new Map());
+const viewportStates = new Map<string, ViewportState>();
+provide(viewportStatesKey, viewportStates);
 const canvasStateKey = computed(() => `${active.value?.id}/${diagram.value?.id}/${scenario.value?.id}`);
-const tabs = ['Diagram', 'Domain'] as const;
-const selectedTab = ref(0);
+type ViewId = 'diagram' | 'domain' | 'wiring';
+const tabs = computed(() => [
+  { id: 'diagram' as const, label: 'Diagram' },
+  ...(active.value?.document.domain ? [{ id: 'domain' as const, label: 'Domain' }] : []),
+  ...(active.value?.document.wiring ? [{ id: 'wiring' as const, label: 'Wiring' }] : []),
+]);
+const selectedView = ref<ViewId>('diagram');
+const selectedTabPosition = computed(() => tabs.value.findIndex(tab => tab.id === selectedView.value));
 provide(chartDownloadKey, async (format, scope) => {
   if (!active.value || !diagram.value) throw new Error('No chart is available to export.');
-  const url = chartExportUrl(active.value.id, selectedTab.value === 1 ? undefined : diagram.value.id,
-    format, dark.value ? 'dark' : 'light', scope === 'scenario' ? scenarioId.value : undefined);
+  const url = chartExportUrl(active.value.id, selectedView.value === 'diagram' ? diagram.value.id : undefined,
+    format, dark.value ? 'dark' : 'light', scope !== 'all' ? scenarioId.value : undefined, selectedView.value === 'wiring' ? 'wiring' : 'domain', scope === 'step' ? occurrence.value?.id : undefined);
   await downloadChartUrl(url);
 });
 const dataOpen = ref(false);
 const dataInspector = ref<InstanceType<typeof StepInspector>>();
 const dataToggleButton = ref<HTMLButtonElement>();
+const wiringToggleButton = ref<HTMLButtonElement>();
 const focusMode = ref(false);
 const { mobile, open: mobileSidebarOpen, close: closeMobileSidebar, toggle: toggleMobileSidebar } = useMobileSidebar(focusMode);
 const sidebarHidden = computed(() => focusMode.value || (mobile.value && !mobileSidebarOpen.value));
 const diagramView = ref<{ canvas?: InstanceType<typeof DiagramViewport>; focusNode: (nodeId: string) => void }>();
 const scenarioJump = ref<InstanceType<typeof ScenarioJump>>();
 const domainView = ref<InstanceType<typeof DomainView>>();
-const activeCanvas = computed(() => selectedTab.value === 0 ? diagramView.value?.canvas : domainView.value?.canvas);
+const wiringView = ref<InstanceType<typeof WiringView>>();
+const activeCanvas = computed(() => ({ diagram: diagramView.value?.canvas, domain: domainView.value?.canvas,
+  wiring: wiringView.value?.canvas })[selectedView.value]);
 const quickDialog = ref(false);
 const quickActionsDialog = ref<InstanceType<typeof QuickActionsDialog>>();
 const libraryView = ref<InstanceType<typeof ExplanationLibrary>>();
@@ -90,15 +100,16 @@ const actions = computed(() => quickActions.map(action => ({ ...action, ...(acti
    i: !navigation.canDrillBack.value, o: !navigation.canDrillForward.value,
   H: false,
    m: false,
-   n: false,
+    n: false,
+    w: selectedView.value !== 'wiring' || !active.value?.document.wiring,
    ',': !dataOpen.value || !dataInspector.value?.canPrevious,
     '.': !dataOpen.value || !dataInspector.value?.canNext,
    "'": !dataOpen.value, '/': !dataOpen.value,
-  '[': selectedTab.value === 0, ']': selectedTab.value === tabs.length - 1,
+  '[': selectedTabPosition.value === 0, ']': selectedTabPosition.value === tabs.value.length - 1,
   ys: !scenario.value, yp: !occurrence.value, yd: !diagram.value,
   '=': !activeCanvas.value, '-': !activeCanvas.value, ';': !activeCanvas.value,
   'pan-left': !activeCanvas.value, 'pan-down': !activeCanvas.value, 'pan-up': !activeCanvas.value, 'pan-right': !activeCanvas.value,
-  '?': selectedTab.value !== 0 || !active.value?.document.scenarios.some(item => item.diagramId === diagram.value?.id && item.id !== scenarioId.value),
+  '?': selectedView.value !== 'diagram' || !active.value?.document.scenarios.some(item => item.diagramId === diagram.value?.id && item.id !== scenarioId.value),
 })[action.id] })));
 watch(quickDialog, (next, previous) => {
   if (next) { domainView.value?.cancelNumberShortcut(); scenarioJump.value?.cancel(); }
@@ -118,7 +129,7 @@ const yankPaths = computed(() => {
   return { yd: diagramPath, ys: scenarioPath, yp: `${scenarioPath} → ${currentLocation.value}` };
 });
 const inspectedNode = computed(() => diagram.value?.nodes.find(node => node.id === inspectedNodeId.value));
-const inspectedEntity = computed(() => active.value?.document.domain.entities.find(entity => entity.id === inspectedEntityId.value));
+const inspectedEntity = computed(() => active.value?.document.domain?.entities.find(entity => entity.id === inspectedEntityId.value));
 const nodeOccurrences = computed(() => navigation.occurrencesAtNode(inspectedNodeId.value).map(item => ({
   id: item.id,
   label: `Occurrence ${(scenario.value?.occurrences.findIndex(occurrence => occurrence.id === item.id) ?? 0) + 1} · ${item.trigger ?? 'No trigger captured'} · ${item.id}`,
@@ -130,10 +141,23 @@ const scenarioEdges = computed(() => scenario.value?.occurrences.flatMap(item =>
 const connectionLabel = computed(() => ({ connected: 'Connected', connecting: 'Connecting', reconnecting: 'Reconnecting', offline: 'Not connected' })[connection.value]);
 
 watch(active, (next, previous) => {
+  if (next?.id === previous?.id && previous?.document.domain && !next?.document.domain) {
+    if (selectedView.value === 'domain') selectTab('diagram');
+    inspectedEntityId.value = '';
+    void nextTick(() => {
+      for (const key of viewportStates.keys()) {
+        if (key.startsWith(`${previous.id}/`) && key.endsWith('/domain')) viewportStates.delete(key);
+      }
+    });
+  }
+  if (next?.id === previous?.id && previous?.document.wiring && !next?.document.wiring) {
+    if (selectedView.value === 'wiring') selectTab('diagram');
+    void nextTick(() => viewportStates.delete(`${previous.id}/wiring`));
+  }
   if (!next || next.id !== previous?.id) {
     closeMobileSidebar(false);
     navigation.clearDrillHistory();
-    selectedTab.value = 0;
+    selectedView.value = 'diagram';
     inspectedNodeId.value = ''; inspectedDiagramId.value = ''; pickedOccurrenceId.value = null; inspectedEntityId.value = '';
     if (!next) focusMode.value = false;
     return;
@@ -149,7 +173,7 @@ watch(active, (next, previous) => {
     toast.add({ severity: 'info', summary: 'Explanation updated', detail, life: detail ? 6000 : 3000 });
   }
   void nextTick(() => {
-    if (focused && focused !== document.body && !focused.isConnected) selectTab(selectedTab.value, true);
+    if (focused && focused !== document.body && !focused.isConnected) selectTab(selectedView.value, true);
   });
 });
 watch(selectionError, message => {
@@ -188,7 +212,7 @@ function restoreFocus() {
     origin.focus({ preventScroll: true });
     if (document.activeElement === origin) return;
   }
-  if (focusMode.value) selectTab(selectedTab.value, true);
+  if (focusMode.value) selectTab(selectedView.value, true);
   else quickButton.value?.focus({ preventScroll: true });
 }
 
@@ -218,22 +242,24 @@ function afterDialogHide() {
   pendingJumpHints = false;
 }
 
-function selectTab(position: number, focus = false) {
-  if (position < 0 || position >= tabs.length) return;
+function selectTab(view: ViewId, focus = false) {
+  if (!tabs.value.some(tab => tab.id === view)) return;
   const focusedInTabs = document.activeElement?.closest('.event-tabs');
-  selectedTab.value = position;
+  activeCanvas.value?.cancelPan();
+  selectedView.value = view;
   if (focus || focusedInTabs) void nextTick(() => document.querySelector<HTMLButtonElement>('.event-tabs [role="tab"][aria-selected="true"]')?.focus({ preventScroll: true }));
+}
+
+function selectTabAt(position: number, focus = false) {
+  const tab = tabs.value[position];
+  if (tab) selectTab(tab.id, focus);
 }
 
 function openScenario(id: string) {
   closeMobileSidebar(false);
   scenarioPreview.value?.dismiss();
   routes.openScenario(id);
-  void nextTick(() => {
-    const heading = document.querySelector<HTMLElement>('.scenario-context h2');
-    if (heading) heading.focus({ preventScroll: true });
-    else if (mobile.value) selectTab(selectedTab.value, true);
-  });
+  selectTab(selectedView.value, true);
 }
 
 function showOverview() {
@@ -247,8 +273,14 @@ function showOverview() {
 function toggleData() {
   const focusedInInspector = document.activeElement?.closest('#step-inspector');
   dataOpen.value = !dataOpen.value;
+  if (dataOpen.value && window.matchMedia('(max-width: 1000px)').matches) wiringView.value?.closeDetails(false);
   if (!dataOpen.value && focusedInInspector) void nextTick(() => dataToggleButton.value?.focus({ preventScroll: true }));
 }
+
+function onWiringDetailsOpen() {
+  if (window.matchMedia('(max-width: 1000px)').matches) dataOpen.value = false;
+}
+function toggleWiring() { wiringView.value?.toggleDetails(wiringToggleButton.value); }
 
 function selectDataEntity(id: string) {
   inspectedEntityId.value = id;
@@ -258,28 +290,34 @@ function selectDataEntity(id: string) {
 function inspectProperty(entityId: string, attributeId: string) {
   inspectedEntityId.value = entityId;
   dataOpen.value = true;
+  if (window.matchMedia('(max-width: 1000px)').matches) wiringView.value?.closeDetails(false);
   void dataInspector.value?.focusProperty(entityId, attributeId);
 }
 
 function openDetail(targetScenarioId: string) {
-  if (navigation.openDetail(targetScenarioId)) selectTab(0, true);
+  if (navigation.openDetail(targetScenarioId)) selectTab('diagram', true);
 }
 
 function jumpToOccurrence(targetScenarioId: string, occurrenceId: string) {
   routes.jumpToOccurrence(targetScenarioId, occurrenceId);
-  selectTab(0, true);
+  selectTab('diagram', true);
   void nextTick(() => diagramView.value?.focusNode(occurrence.value!.nodeId));
 }
 
 function onTabKeydown(event: KeyboardEvent) {
-  const position = { ArrowLeft: selectedTab.value - 1, ArrowRight: selectedTab.value + 1, Home: 0, End: tabs.length - 1 }[event.key];
+  const position = { Home: 0, End: tabs.value.length - 1 }[event.key];
   if (position === undefined || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
   event.preventDefault(); event.stopPropagation();
-  selectTab(position, true);
+  selectTabAt(position, true);
 }
 
 function executeAction(id: QuickActionId, heldKey?: string) {
   if (actions.value.find(action => action.id === id)?.disabled !== false) return;
+  if (id === 'w') {
+    toggleWiring();
+    if (quickDialog.value) quickDialog.value = false;
+    return;
+  }
   if (id === 'd') {
     if (quickDialog.value) { pendingPreview = true; quickDialog.value = false; return; }
     const anchor = sidebarHidden.value ? undefined : scenariosRegion.value?.querySelector<HTMLElement>('.scenario-link.selected');
@@ -315,7 +353,7 @@ function executeAction(id: QuickActionId, heldKey?: string) {
     scenarioPreview.value?.dismiss();
     const focusedChrome = document.activeElement?.closest('.app-header, .sidebar, .event-controls');
     focusMode.value = !focusMode.value;
-    if (focusMode.value && focusedChrome) selectTab(selectedTab.value, true);
+    if (focusMode.value && focusedChrome) selectTab(selectedView.value, true);
     if (quickDialog.value) quickDialog.value = false;
     return;
   }
@@ -337,18 +375,18 @@ function executeAction(id: QuickActionId, heldKey?: string) {
     return;
   }
   if (id === '[' || id === ']') {
-    selectTab(selectedTab.value + (id === '[' ? -1 : 1));
+    selectTabAt(selectedTabPosition.value + (id === '[' ? -1 : 1));
     if (quickDialog.value) quickDialog.value = false;
     return;
   }
   if (id === 'i' || id === 'o') {
-    if (routes.traverseDrill(id === 'i' ? -1 : 1)) selectTab(0, true);
+    if (routes.traverseDrill(id === 'i' ? -1 : 1)) selectTab('diagram', true);
     if (quickDialog.value) { modalClosing = true; quickDialog.value = false; }
     return;
   }
   if (id === 'H') {
     routes.reset(visualScenarios.value[0]!.id);
-    selectTab(0, true);
+    selectTab('diagram', true);
   }
   else if (id === 'h' || id === 'l') navigation.step(id === 'h' ? -1 : 1);
   else if (id === 'gg' || id === 'G') navigation.selectOccurrence(scenario.value!.occurrences[id === 'gg' ? 0 : scenario.value!.occurrences.length - 1]!.id);
@@ -394,13 +432,13 @@ function isSelectionOverlayTarget(target: EventTarget | null) {
 
 function canUseDomainNumbers(target: EventTarget | null) {
   const leavingTarget = isLeavingDialogTarget(target);
-  return !showingOverview.value && selectedTab.value === 1 && !!active.value && !!scenario.value && !quickDialog.value && !pendingDialog && !hasUnknownModal()
+  return !showingOverview.value && selectedView.value === 'domain' && !!active.value && !!scenario.value && !quickDialog.value && !pendingDialog && !hasUnknownModal()
     && (!isEditableTarget(target) || leavingTarget) && (!isSelectionOverlayTarget(target) || leavingTarget)
     && !document.querySelector('.p-select-overlay');
 }
 
 function canUseScenarioJump(target: EventTarget | null) {
-  return !showingOverview.value && selectedTab.value === 0 && !!active.value && !!scenario.value && !quickDialog.value && !pendingDialog && !hasUnknownModal()
+  return !showingOverview.value && selectedView.value === 'diagram' && !!active.value && !!scenario.value && !quickDialog.value && !pendingDialog && !hasUnknownModal()
     && !isEditableTarget(target) && !isSelectionOverlayTarget(target) && !document.querySelector('.p-select-overlay, [data-chart-export-menu]');
 }
 
@@ -428,6 +466,11 @@ function onOwnedKeydown(event: KeyboardEvent) {
   const escapeKey = event.key === 'Escape' || (event.key === '[' && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey);
   if (escapeKey) {
     if (event.repeat) return;
+    if (selectedView.value === 'wiring' && event.target instanceof Element && event.target.closest('.wiring-details')) {
+      wiringView.value?.closeDetails();
+      event.preventDefault(); event.stopPropagation();
+      return;
+    }
     const quickTarget = event.target instanceof Element && event.target.closest('.quick-actions-dialog');
     if (hasUnknownModal() || (isSelectionOverlayTarget(event.target) && !quickTarget)
       || document.querySelector('.p-select-overlay')) return;
@@ -457,7 +500,7 @@ function onOwnedKeydown(event: KeyboardEvent) {
   }
   const ownedTarget = event.target instanceof Element && event.target.closest(ownedDialogSelector);
   const key = arrowKeyActions[event.key] ?? event.key;
-  if (ownedTarget && ['h', 'j', 'k', 'l', 'i', 'o', '[', ']', 'g', 'G', 'H', 'J', 'K', 'L', 'd', 'm', 'n', ',', '.', "'", '/', '=', '-', ';'].includes(key)) {
+  if (ownedTarget && ['h', 'j', 'k', 'l', 'i', 'o', '[', ']', 'g', 'G', 'H', 'J', 'K', 'L', 'd', 'm', 'n', 'w', ',', '.', "'", '/', '=', '-', ';'].includes(key)) {
     onGlobalKeydown(event);
     if (event.defaultPrevented) event.stopPropagation();
     return;
@@ -479,7 +522,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
     return;
   }
   if (showingOverview.value && key !== 'j' && key !== 'k') { overviewView.value?.handleKeydown(event); return; }
-  if (event.key === 'Enter' && selectedTab.value === 0 && occurrence.value) {
+  if (event.key === 'Enter' && selectedView.value === 'diagram' && occurrence.value) {
     const target = event.target;
     const diagramSurface = target === document || target === document.body || target === document.documentElement
       || (target instanceof Element && (target.matches('.event-content, .event-tablist [role="tab"][aria-selected="true"]')
@@ -511,7 +554,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
       drillRepeatSkipped[action.id] = event.repeat && !drillRepeatSkipped[action.id];
       if (drillRepeatSkipped[action.id]) return;
     }
-    if (!event.repeat || !['G', 'H', 'd', 'm', 'n', ';'].includes(action.id)) executeAction(action.id);
+    if (!event.repeat || !['G', 'H', 'd', 'm', 'n', 'w', ';'].includes(action.id)) executeAction(action.id);
   }
 }
 
@@ -611,32 +654,37 @@ onUnmounted(() => {
       <div v-if="selectionError || error" class="event-notices" tabindex="0" role="region" aria-label="Connection errors">
       <div class="inline-error" role="alert">{{ selectionError || error }} <Button label="Retry" size="small" text @click="library.resync" /></div>
       </div>
-        <ScenarioContext v-if="active.document.topics?.length || active.document.overview || active.document.comparisons?.length" :document="active.document" :scenario="scenario" @overview="showOverview" @select="openScenario" />
         <StepNavigator :key="`${active.id}/${scenario.id}`" :diagram="diagram" :scenario="scenario" :index="index" :links="detailLinks" @select="navigation.selectOccurrence" @open="openDetail" @navigate-scenario="executeAction($event > 0 ? 'j' : 'k')" />
         <section class="event-tabs" aria-label="Event views">
-          <div class="event-tabbar">
+          <div :class="['event-tabbar', { 'has-wiring': active.document.wiring }]">
           <div class="event-tablist" role="tablist" aria-label="Event views" @keydown="onTabKeydown">
-            <button v-for="(tab, position) in tabs" :id="`event-tab-${position}`" :key="tab" role="tab" :aria-selected="selectedTab === position" :aria-controls="`event-panel-${position}`" :tabindex="selectedTab === position ? 0 : -1" @click="selectTab(position)">{{ tab }}</button>
+            <button v-for="tab in tabs" :id="`event-tab-${tab.id}`" :key="tab.id" role="tab" :aria-selected="selectedView === tab.id" :aria-controls="`event-panel-${tab.id}`" :tabindex="selectedView === tab.id ? 0 : -1" @click="selectTab(tab.id)">{{ tab.label }}</button>
           </div>
+          <div class="event-tab-actions">
           <button ref="dataToggleButton" type="button" class="data-toggle" aria-label="Toggle data inspector" aria-controls="step-inspector" aria-describedby="data-toggle-tooltip" aria-keyshortcuts="n" :aria-expanded="dataOpen" @click="toggleData">
             <i class="pi pi-table" aria-hidden="true" /><span v-if="!focusMode">{{ dataOpen ? 'Hide data' : 'Show data' }}</span>
             <span id="data-toggle-tooltip" class="data-toggle-tooltip" role="tooltip">Toggle data panel <span class="data-toggle-shortcut">N</span></span>
           </button>
+          <button v-if="selectedView === 'wiring' && active.document.wiring" ref="wiringToggleButton" type="button" class="data-toggle wiring-toggle" :aria-label="wiringView?.detailsOpen ? 'Hide wiring' : 'Show wiring'" aria-controls="wiring-inspector" aria-describedby="wiring-toggle-tooltip" aria-keyshortcuts="w" :aria-expanded="wiringView?.detailsOpen ?? false" @click="toggleWiring">
+            <i class="pi pi-sitemap" aria-hidden="true" /><span v-if="!focusMode">{{ wiringView?.detailsOpen ? 'Hide wiring' : 'Show wiring' }}</span>
+            <span id="wiring-toggle-tooltip" class="data-toggle-tooltip" role="tooltip">Toggle wiring panel <span class="data-toggle-shortcut">W</span></span>
+          </button>
+          </div>
           </div>
           <div class="event-workspace">
           <div class="event-panels">
-          <div v-if="selectedTab === 0" id="event-panel-0" class="diagram-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-0" tabindex="0">
+          <div v-if="selectedView === 'diagram'" id="event-panel-diagram" class="diagram-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-diagram" tabindex="0">
             <ScenarioJump ref="scenarioJump" :diagram="diagram" :scenarios="active.document.scenarios" :scenario-id="scenario.id" :occurrence-id="occurrence.id" @jump="jumpToOccurrence" @focus="diagramView?.focusNode($event)">
-            <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :state-key="`${canvasStateKey}/diagram`" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" :links="detailLinks" @inspect="inspectNode" @open="openDetail" />
-            <GraphView v-else-if="graph" ref="diagramView" :key="diagram.id" :state-key="`${canvasStateKey}/diagram`" :layout="graph" :title="diagram.title" :scenario-title="scenario.title" :current-node-id="occurrence.nodeId" :current-occurrence-id="`${scenario.id}/${occurrence.id}`" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" :links="detailLinks" interactive @select="inspectNode" @open="openDetail" />
+            <SequenceView v-if="diagram.kind === 'sequence'" ref="diagramView" :state-key="`${canvasStateKey}/diagram`" :diagram="diagram" :scenario="scenario" :current-occurrence-id="occurrence.id" :inspected-node-id="inspectedNodeId" :links="detailLinks" @inspect="inspectNode" @open="openDetail" />
+            <GraphView v-else-if="graph" ref="diagramView" :key="diagram.id" :state-key="`${canvasStateKey}/diagram`" :layout="graph" :title="diagram.title" :scenario-title="scenario.title" :current-node-id="occurrence.nodeId" :current-occurrence-id="`${scenario.id}/${occurrence.id}`" :inspected-node-id="inspectedNodeId" :visited-node-ids="visitedNodes" :visited-edge-ids="visitedEdges" :scenario-node-ids="scenarioNodes" :scenario-edge-ids="scenarioEdges" :links="detailLinks" interactive @select="inspectNode" @open="openDetail" />
             </ScenarioJump>
-            <div v-if="inspectedNode" class="node-inspector"><h3>{{ inspectedNode.label }}</h3><p class="muted">Entities: {{ inspectedNode.entityIds.map(id => active?.document.domain.entities.find(entity => entity.id === id)?.label).join(', ') || 'None linked' }}</p>
+            <div v-if="inspectedNode" class="node-inspector"><h3>{{ inspectedNode.label }}</h3><p class="muted">Entities: {{ inspectedNode.entityIds.map(id => active?.document.domain?.entities.find(entity => entity.id === id)?.label).join(', ') || 'None linked' }}</p>
               <p v-if="!nodeOccurrences.length" class="offpath-note">Off this scenario’s path. You can inspect this node, but it has no captured occurrence here. The current event stays unchanged.</p>
               <div v-else-if="nodeOccurrences.length > 1" class="occurrence-picker"><p>This node appears {{ nodeOccurrences.length }} times. Choose an occurrence; each visit has its own snapshots.</p><Select v-model="pickedOccurrenceId" :options="nodeOccurrences" option-label="label" option-value="id" placeholder="Choose a recorded occurrence" aria-label="Recorded occurrence" /><Button label="Go to occurrence" :disabled="!pickedOccurrenceId" @click="pickedOccurrenceId && navigation.selectOccurrence(pickedOccurrenceId)" /></div>
               <p v-else class="muted">Showing this node’s recorded occurrence.</p>
             </div>
           </div>
-          <div v-if="selectedTab === 1" id="event-panel-1" class="domain-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-1" tabindex="0">
+          <div v-if="selectedView === 'domain' && active.document.domain" id="event-panel-domain" class="domain-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-domain" tabindex="0">
             <DomainView ref="domainView" :state-key="`${canvasStateKey}/domain`" :domain="active.document.domain" :diagram="diagram" :scenario="scenario" :occurrence="occurrence" :selected-entity-id="inspectedEntityId" @select="id => inspectedEntityId = id" @inspect="inspectProperty" />
             <div v-if="inspectedEntity" class="node-inspector"><h3>{{ inspectedEntity.label }}</h3><p class="eyebrow">{{ inspectedEntity.id }}</p><dl class="entity-attributes"><template v-for="attribute in inspectedEntity.attributes" :key="attribute.id"><dt>{{ attribute.label }}</dt><dd>{{ attribute.id }}</dd></template></dl>
               <section v-if="inspectedEntity.methods?.length" class="entity-methods" aria-label="Entity methods">
@@ -646,6 +694,9 @@ onUnmounted(() => {
                 </div>
               </section>
             </div>
+          </div>
+          <div v-if="active.document.wiring" v-show="selectedView === 'wiring'" id="event-panel-wiring" class="wiring-panel event-tabpanel" role="tabpanel" aria-labelledby="event-tab-wiring" tabindex="0" :inert="selectedView !== 'wiring' ? true : undefined" :aria-hidden="selectedView !== 'wiring' || undefined">
+             <WiringView :key="active.id" ref="wiringView" :wiring="active.document.wiring" :scenarios="active.document.scenarios" :scenario="scenario" :occurrence="occurrence" :state-key="`${active.id}/wiring`" :details-visible="selectedView === 'wiring' && !showingOverview" @details-open="onWiringDetailsOpen" @focus-toggle="wiringToggleButton?.focus({ preventScroll: true })" @jump="jumpToOccurrence" />
           </div>
           </div>
           <div :class="['inspector-shell', { open: dataOpen }]" :inert="dataOpen ? undefined : true" :aria-hidden="!dataOpen">

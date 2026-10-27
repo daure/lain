@@ -6,7 +6,7 @@ use lain::{
 };
 use serde_json::json;
 
-const DEMOS: [(&str, &str); 4] = [
+const DEMOS: [(&str, &str); 5] = [
     (
         "order-lifecycle",
         include_str!("../examples/order-lifecycle.json"),
@@ -23,10 +23,476 @@ const DEMOS: [(&str, &str); 4] = [
         "pr-comment-review",
         include_str!("../examples/pr-comment-review.json"),
     ),
+    (
+        "shopping-cart",
+        include_str!("../examples/shopping-cart.json"),
+    ),
 ];
 
 fn document(index: usize) -> Explanation {
     serde_json::from_str(DEMOS[index].1).unwrap()
+}
+
+#[test]
+fn shopping_cart_records_explicit_scopes_and_independent_payment_retry_visits() {
+    let authored = document(4);
+    authored.validate().unwrap();
+    let wiring = authored.wiring.as_ref().unwrap();
+    let storefront = wiring
+        .components
+        .iter()
+        .find(|item| item.id == "storefront")
+        .unwrap();
+    assert_eq!(storefront.technology.as_ref().unwrap().name, "Angular");
+    let retry = authored
+        .scenarios
+        .iter()
+        .find(|item| item.id == "cart-payment-retry")
+        .unwrap();
+    let mapped: Vec<_> = retry
+        .occurrences
+        .iter()
+        .filter(|item| item.wiring_refs.is_some())
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(mapped.len(), 11);
+    assert!(!mapped.contains(&"retry-second-review"));
+    let payment_visits: Vec<_> = retry
+        .occurrences
+        .iter()
+        .filter(|item| item.node_id == "pay")
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(
+        payment_visits,
+        ["retry-first-payment", "retry-second-payment"]
+    );
+    let success = authored
+        .scenarios
+        .iter()
+        .find(|item| item.id == "cart-checkout-success")
+        .unwrap();
+    let empty = success
+        .occurrences
+        .iter()
+        .find(|item| item.id == "success-local-review")
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(empty.wiring_refs.as_ref().unwrap()).unwrap(),
+        json!({})
+    );
+    let rejected = authored
+        .scenarios
+        .iter()
+        .find(|item| item.id == "cart-stock-rejected")
+        .unwrap();
+    assert!(rejected.occurrences.iter().all(|item| {
+        !item
+            .wiring_refs
+            .as_ref()
+            .unwrap()
+            .connection_ids
+            .iter()
+            .any(|id| {
+                ["authorize-payment", "publish-order", "consume-order"].contains(&id.as_str())
+            })
+    }));
+}
+
+#[test]
+fn order_lifecycle_maps_every_visit_without_snapshot_inferred_queue_activity() {
+    let authored = document(0);
+    authored.validate().unwrap();
+    assert!(
+        authored
+            .scenarios
+            .iter()
+            .flat_map(|item| &item.occurrences)
+            .all(|item| item.wiring_refs.is_some())
+    );
+    for id in [
+        "duplicate-callback",
+        "sequence-duplicate-callback",
+        "declined-payment",
+        "sequence-declined-payment",
+    ] {
+        let scenario = authored
+            .scenarios
+            .iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert!(scenario.occurrences.iter().all(|item| {
+            !item
+                .wiring_refs
+                .as_ref()
+                .unwrap()
+                .connection_ids
+                .contains(&"fulfillment-publication".into())
+        }));
+    }
+}
+
+#[test]
+fn shopping_cart_records_individual_sql_operations_and_distinct_inventory_reads_and_writes() {
+    use lain::wiring::WiringOperationKind::{Query, Write};
+    let authored = document(4);
+    let wiring = authored.wiring.as_ref().unwrap();
+    for (wire_id, component_id, operation_id, kind, verb) in [
+        (
+            "persist-cart",
+            "commerce-store",
+            "read-cart",
+            Query,
+            "SELECT",
+        ),
+        (
+            "write-cart",
+            "commerce-store",
+            "update-cart",
+            Write,
+            "UPDATE",
+        ),
+        (
+            "write-cart-total",
+            "commerce-store",
+            "update-total",
+            Write,
+            "UPDATE",
+        ),
+        (
+            "record-order",
+            "commerce-store",
+            "insert-order",
+            Write,
+            "INSERT",
+        ),
+        (
+            "read-stock",
+            "inventory-store",
+            "read-balance",
+            Query,
+            "SELECT",
+        ),
+        (
+            "increment-reserved-stock",
+            "inventory-store",
+            "increment-reserved",
+            Write,
+            "UPDATE",
+        ),
+        (
+            "insert-stock-hold",
+            "inventory-store",
+            "insert-hold",
+            Write,
+            "INSERT",
+        ),
+        (
+            "read-stock-hold",
+            "inventory-store",
+            "read-hold",
+            Query,
+            "SELECT",
+        ),
+    ] {
+        let wire = wiring
+            .connections
+            .iter()
+            .find(|item| item.id == wire_id)
+            .unwrap();
+        assert_eq!(wire.kind, Some(kind), "{wire_id}");
+        assert_eq!(wire.target.component_id, component_id, "{wire_id}");
+        assert_eq!(
+            wire.target.operation_id.as_deref(),
+            Some(operation_id),
+            "{wire_id}"
+        );
+        let owner = wiring
+            .components
+            .iter()
+            .find(|item| item.id == component_id)
+            .unwrap();
+        let operation = owner
+            .operations
+            .iter()
+            .find(|item| item.id == operation_id)
+            .unwrap();
+        assert_eq!(operation.kind, kind, "{wire_id}");
+        assert_eq!(
+            operation.statement.split_whitespace().next(),
+            Some(verb),
+            "{wire_id}"
+        );
+    }
+    let retry = authored
+        .scenarios
+        .iter()
+        .find(|item| item.id == "cart-payment-retry")
+        .unwrap();
+    let check = retry
+        .occurrences
+        .iter()
+        .find(|item| item.id == "retry-check-existing-hold")
+        .unwrap();
+    assert_eq!(
+        check.wiring_refs.as_ref().unwrap().connection_ids,
+        [
+            "submit-retry",
+            "check-reservation",
+            "read-stock-hold",
+            "trace-retry"
+        ]
+    );
+    let rejected = authored
+        .scenarios
+        .iter()
+        .find(|item| item.id == "cart-stock-rejected")
+        .unwrap();
+    let rejected_calls: BTreeSet<_> = rejected
+        .occurrences
+        .iter()
+        .flat_map(|item| &item.wiring_refs.as_ref().unwrap().connection_ids)
+        .map(String::as_str)
+        .collect();
+    assert!(rejected_calls.contains("read-stock"));
+    for write in [
+        "increment-reserved-stock",
+        "insert-stock-hold",
+        "consume-reservation",
+    ] {
+        assert!(!rejected_calls.contains(write), "{write}");
+    }
+}
+
+#[test]
+fn shopping_cart_separates_topic_publication_queue_delivery_and_worker_consumption() {
+    use lain::wiring::{
+        WiringComponentKind,
+        WiringOperationKind::{Consume, Publish, Telemetry},
+    };
+    let authored = document(4);
+    let wiring = authored.wiring.as_ref().unwrap();
+    for (id, kind) in [
+        ("order-topic", WiringComponentKind::Topic),
+        ("checkout-events", WiringComponentKind::Queue),
+    ] {
+        assert_eq!(
+            wiring
+                .components
+                .iter()
+                .find(|item| item.id == id)
+                .unwrap()
+                .kind,
+            kind
+        );
+    }
+    for (id, source, target, kind) in [
+        ("publish-order", "checkout-api", "order-topic", Publish),
+        ("fanout-order", "order-topic", "checkout-events", Publish),
+        (
+            "consume-order",
+            "checkout-events",
+            "receipt-worker",
+            Consume,
+        ),
+        ("trace-receipt", "receipt-worker", "datadog", Telemetry),
+    ] {
+        let wire = wiring
+            .connections
+            .iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(
+            (
+                wire.source.component_id.as_str(),
+                wire.target.component_id.as_str(),
+                wire.kind
+            ),
+            (source, target, Some(kind))
+        );
+    }
+    for (scenario_id, publish_id, receipt_id) in [
+        (
+            "cart-checkout-success",
+            "success-publish",
+            "success-receipt",
+        ),
+        ("cart-payment-retry", "retry-publish", "retry-receipt"),
+    ] {
+        let scenario = authored
+            .scenarios
+            .iter()
+            .find(|item| item.id == scenario_id)
+            .unwrap();
+        let publish = scenario
+            .occurrences
+            .iter()
+            .find(|item| item.id == publish_id)
+            .unwrap();
+        assert_eq!(
+            publish.wiring_refs.as_ref().unwrap().connection_ids,
+            ["publish-order", "fanout-order"]
+        );
+        let receipt = scenario
+            .occurrences
+            .iter()
+            .find(|item| item.id == receipt_id)
+            .unwrap();
+        assert_eq!(
+            receipt.wiring_refs.as_ref().unwrap().connection_ids,
+            [
+                "consume-order",
+                "send-receipt",
+                "record-receipt",
+                "trace-receipt"
+            ]
+        );
+    }
+}
+
+#[test]
+fn shopping_cart_contrasts_authored_versions_and_exposes_unexplored_contract_gaps() {
+    use lain::wiring::{WiringFieldSection, WiringStatus};
+    let authored = document(4);
+    let current = authored
+        .scenarios
+        .iter()
+        .find(|item| item.id == "cart-current-no-hold")
+        .unwrap();
+    assert!(current.labels.contains(&"Current".into()));
+    assert_eq!(
+        current
+            .occurrences
+            .iter()
+            .map(|item| item.node_id.as_str())
+            .collect::<Vec<_>>(),
+        ["review", "update", "consider", "pay"]
+    );
+    assert_eq!(
+        current.occurrences.last().unwrap().after.instances[0].values["reservation"],
+        json!(null)
+    );
+    let proposed = authored
+        .scenarios
+        .iter()
+        .find(|item| item.id == "cart-checkout-success")
+        .unwrap();
+    assert!(proposed.labels.contains(&"Proposed".into()));
+    let reserve = proposed
+        .occurrences
+        .iter()
+        .find(|item| item.id == "success-reserve")
+        .unwrap();
+    for id in [
+        "reserve-stock",
+        "read-stock",
+        "increment-reserved-stock",
+        "insert-stock-hold",
+    ] {
+        assert!(
+            reserve
+                .wiring_refs
+                .as_ref()
+                .unwrap()
+                .connection_ids
+                .contains(&id.into())
+        );
+        assert!(!current.occurrences.iter().any(|item| {
+            item.wiring_refs
+                .as_ref()
+                .unwrap()
+                .connection_ids
+                .contains(&id.into())
+        }));
+    }
+    let wiring = authored.wiring.as_ref().unwrap();
+    let inventory = wiring
+        .components
+        .iter()
+        .find(|item| item.id == "inventory-api")
+        .unwrap();
+    let release = inventory
+        .operations
+        .iter()
+        .find(|item| item.id == "release")
+        .unwrap();
+    assert_eq!(release.status, WiringStatus::Missing);
+    assert_eq!(release.http.as_ref().unwrap().method, "DELETE");
+    assert!(
+        !authored
+            .scenarios
+            .iter()
+            .flat_map(|item| &item.occurrences)
+            .filter_map(|item| item.wiring_refs.as_ref())
+            .any(|item| item.connection_ids.contains(&"release-stock".into()))
+    );
+    let checkout = wiring
+        .components
+        .iter()
+        .find(|item| item.id == "checkout-api")
+        .unwrap();
+    let submit = checkout
+        .operations
+        .iter()
+        .find(|item| item.id == "submit")
+        .unwrap();
+    for (section, path) in [
+        (WiringFieldSection::Header, "Idempotency-Key"),
+        (WiringFieldSection::Error, "code"),
+    ] {
+        let field = submit
+            .fields
+            .iter()
+            .chain(
+                submit
+                    .returns
+                    .iter()
+                    .flat_map(|result| result.fields.iter().flatten()),
+            )
+            .find(|field| field.section == section && field.path == path)
+            .unwrap();
+        assert_eq!(field.status, WiringStatus::Missing);
+    }
+    let hold = inventory
+        .operations
+        .iter()
+        .find(|item| item.id == "reserve")
+        .unwrap();
+    let expiry = hold
+        .returns
+        .iter()
+        .flat_map(|result| result.fields.iter().flatten())
+        .find(|field| field.section == WiringFieldSection::Response && field.path == "expiresAt")
+        .unwrap();
+    assert_eq!(expiry.status, WiringStatus::Missing);
+    let complete = checkout
+        .operations
+        .iter()
+        .find(|item| item.id == "complete")
+        .unwrap();
+    assert_eq!(
+        complete.request_type.as_deref(),
+        Some("CompleteCheckoutCommand")
+    );
+    assert_eq!(
+        complete
+            .fields
+            .iter()
+            .map(|field| field.path.as_str())
+            .collect::<Vec<_>>(),
+        ["cartId", "reservationId", "authorizedPaymentAttemptId"]
+    );
+    assert_eq!(complete.returns[0].return_type, "PaidOrder");
+    assert_eq!(
+        complete.returns[0]
+            .fields
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|field| field.path.as_str())
+            .collect::<Vec<_>>(),
+        ["orderId", "status"]
+    );
 }
 
 #[tokio::test]
@@ -90,8 +556,8 @@ fn standalone_demos_record_three_responsibilities_and_identity_preserving_retrie
         authored.validate().unwrap();
         assert_eq!(authored.schema_version, 1);
         assert!(authored.description.split_whitespace().count() <= 75);
-        assert_eq!(authored.domain.entities.len(), 1);
-        assert!(authored.domain.relationships.is_empty());
+        assert_eq!(authored.domain.as_ref().unwrap().entities.len(), 1);
+        assert!(authored.domain.as_ref().unwrap().relationships.is_empty());
         assert_eq!(authored.diagrams.len(), 1);
         assert_eq!(authored.scenarios.len(), 2);
         let diagram = &authored.diagrams[0];
@@ -113,7 +579,7 @@ fn standalone_demos_record_three_responsibilities_and_identity_preserving_retrie
             })
             .collect();
         assert_eq!(lane_by_node.len(), diagram.nodes.len());
-        let entity = &authored.domain.entities[0];
+        let entity = &authored.domain.as_ref().unwrap().entities[0];
         let fields: BTreeSet<_> = entity.attributes.iter().map(|field| &field.id).collect();
         for (scenario_index, scenario) in authored.scenarios.iter().enumerate() {
             assert!(

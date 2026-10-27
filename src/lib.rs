@@ -13,3 +13,4 @@ mod sequence;
 pub mod service;
 mod state_diagrams;
 pub mod store;
+pub mod wiring;

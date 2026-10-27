@@ -14,16 +14,17 @@ const showUnchanged = ref(false);
 const focusedProperty = ref('');
 const canPrevious = computed(() => selectedTab.value > 0);
 const canNext = computed(() => selectedTab.value < tabs.length - 1);
-const instances = computed(() => compareInstances(props.document.domain.entities, props.occurrence.before, props.occurrence.after));
+const entities = computed(() => props.document.domain?.entities ?? []);
+const instances = computed(() => compareInstances(entities.value, props.occurrence.before, props.occurrence.after));
 const links = computed(() => compareLinks(props.document, props.occurrence.before, props.occurrence.after));
 const propertyCount = computed(() => instances.value.reduce((count, instance) => count + instance.attributes.filter(attribute => attribute.change !== 'unchanged').length, 0));
 const changedLinks = computed(() => links.value.filter(link => link.change !== 'unchanged'));
 const visibleLinks = computed(() => selectedTab.value === 0 ? showUnchanged.value ? links.value : changedLinks.value : links.value.filter(link => selectedTab.value === 1 ? link.change !== 'created' : link.change !== 'removed'));
-const groups = computed(() => props.document.domain.entities.map(entity => ({ ...entity, instances: instances.value.filter(instance => instance.entityId === entity.id
+const groups = computed(() => entities.value.map(entity => ({ ...entity, instances: instances.value.filter(instance => instance.entityId === entity.id
   && (selectedTab.value === 0 ? showUnchanged.value || instance.change !== 'unchanged' : selectedTab.value === 1 ? instance.change !== 'created' : instance.change !== 'removed')) }))
   .filter(group => group.instances.length));
 const calls = computed(() => (props.occurrence.methodCalls ?? []).map(call => {
-  const entity = props.document.domain.entities.find(entity => entity.id === call.entityId);
+  const entity = entities.value.find(entity => entity.id === call.entityId);
   return { ...call, entityLabel: entity?.label ?? call.entityId, signature: entity?.methods?.find(method => method.id === call.methodId)?.signature ?? call.methodId };
 }));
 
@@ -58,7 +59,7 @@ async function focusProperty(entityId: string, attributeId: string) {
 }
 
 function onTabKeydown(event: KeyboardEvent) {
-  const position = { ArrowLeft: selectedTab.value - 1, ArrowRight: selectedTab.value + 1, Home: 0, End: tabs.length - 1 }[event.key];
+  const position = { Home: 0, End: tabs.length - 1 }[event.key];
   if (position === undefined || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
   event.preventDefault(); event.stopPropagation();
   selectTab(position, true);

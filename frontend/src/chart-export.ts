@@ -1,9 +1,9 @@
-export type ExportScope = 'scenario' | 'all';
+export type ExportScope = 'step' | 'scenario' | 'all';
 export type ExportFormat = 'svg' | 'png' | 'pdf';
 export type ChartImage = { svg: string; width: number; height: number; title: string };
 
 const svgNamespace = 'http://www.w3.org/2000/svg';
-const stateClasses = ['current', 'visited', 'walked', 'step-active', 'highlighted', 'called', 'changed', 'created', 'removed', 'matched', 'interactive'];
+const stateClasses = ['current', 'visited', 'walked', 'step-active', 'highlighted', 'called', 'changed', 'created', 'removed', 'matched', 'interactive', 'inspected'];
 const presentationProperties = [
   'color', 'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity',
   'stroke-dasharray', 'stroke-dashoffset', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit',
@@ -12,9 +12,18 @@ const presentationProperties = [
 ];
 
 function cleanChart(svg: SVGSVGElement, scope: ExportScope) {
+  if (svg.classList.contains('wiring-map')) {
+    if (scope === 'step') svg.querySelectorAll(':scope > g:not(.current)').forEach(element => element.remove());
+    svg.querySelectorAll('.connection-hit, .heading-selection').forEach(element => element.remove());
+    svg.querySelectorAll<SVGElement>('[data-export-text]').forEach(element => element.textContent = element.dataset.exportText!);
+    for (const element of svg.querySelectorAll<SVGElement>('*')) {
+      element.classList.remove('inspected');
+      if (scope === 'all') element.classList.remove('outside');
+    }
+  }
   svg.querySelectorAll<SVGElement>('[data-export-transform]').forEach(element => element.setAttribute('transform', element.dataset.exportTransform!));
   svg.querySelectorAll<SVGTextElement>('text[data-export-y]').forEach(label => label.setAttribute('y', label.dataset.exportY!));
-  svg.querySelectorAll('title, .lane-heading-gutter, .lane-heading-shadow, .node-visit-badge, .edge-visit-count, .sequence-visit-badge, .sequence-row-highlight, .domain-instance-count, .domain-activity-surface, .domain-call-marker, .domain-shortcut-number, .domain-shortcut-divider, .drill-link, .scenario-jump-badge').forEach(element => element.remove());
+  svg.querySelectorAll('title, .inspection-ring, .lane-heading-gutter, .lane-heading-shadow, .node-visit-badge, .edge-visit-count, .sequence-visit-badge, .sequence-row-highlight, .domain-instance-count, .domain-activity-surface, .domain-call-marker, .domain-shortcut-number, .domain-shortcut-divider, .drill-link, .scenario-jump-badge').forEach(element => element.remove());
   for (const element of [svg, ...svg.querySelectorAll<SVGElement>('*')]) {
     element.classList.remove(...stateClasses);
     if (!element.matches('.sequence-fragment, .sequence-operand, .fragment-heading, .sequence-operand-heading, .operand-surface')) element.classList.remove('selected');
@@ -46,15 +55,6 @@ export function captureChart(viewport: HTMLElement, scope: ExportScope, title: s
   const heading = document.createElementNS(svgNamespace, 'title');
   heading.textContent = title;
   svg.prepend(heading);
-  const background = document.createElementNS(svgNamespace, 'rect');
-  background.setAttribute('width', String(width));
-  background.setAttribute('height', String(height));
-  background.setAttribute('fill', getComputedStyle(viewport).getPropertyValue('--surface').trim() || '#fff');
-  svg.prepend(background);
-  svg.setAttribute('width', String(width));
-  svg.setAttribute('height', String(height));
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  svg.style.cssText = `width:${width}px;height:${height}px;max-width:none;max-height:none`;
   const host = document.createElement('div');
   host.setAttribute('aria-hidden', 'true');
   host.inert = true;
@@ -62,6 +62,26 @@ export function captureChart(viewport: HTMLElement, scope: ExportScope, title: s
   host.append(svg);
   viewport.append(host);
   try {
+    let left = 0, top = 0;
+    if (scope === 'step' && svg.classList.contains('wiring-map')) {
+      const bounds = svg.getBBox();
+      const padding = 20;
+      left = Math.floor(bounds.x - padding);
+      top = Math.floor(bounds.y - padding);
+      width = Math.ceil(bounds.x + bounds.width + padding) - left;
+      height = Math.ceil(bounds.y + bounds.height + padding) - top;
+    }
+    const background = document.createElementNS(svgNamespace, 'rect');
+    background.setAttribute('x', String(left));
+    background.setAttribute('y', String(top));
+    background.setAttribute('width', String(width));
+    background.setAttribute('height', String(height));
+    background.setAttribute('fill', getComputedStyle(viewport).getPropertyValue('--surface').trim() || '#fff');
+    svg.prepend(background);
+    svg.setAttribute('width', String(width));
+    svg.setAttribute('height', String(height));
+    svg.setAttribute('viewBox', `${left} ${top} ${width} ${height}`);
+    svg.style.cssText = `width:${width}px;height:${height}px;max-width:none;max-height:none`;
     const elements = [svg, ...svg.querySelectorAll<SVGElement>('*')];
     const styles = elements.map(element => {
       const computed = getComputedStyle(element);

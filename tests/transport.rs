@@ -142,6 +142,8 @@ async fn chart_exports_validate_scope_and_options() {
         "/api/explanations/missing/diagrams/flow/export",
         "/api/explanations/export-test/diagrams/missing/export",
         "/api/explanations/export-test/domain/export?scenarioId=missing",
+        "/api/explanations/export-test/wiring/export",
+        "/api/explanations/export-test/wiring/export?scenarioId=missing",
     ] {
         let response = server.client.get(server.url(path)).send().await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
@@ -169,6 +171,38 @@ async fn chart_exports_validate_scope_and_options() {
         response.json::<Value>().await.unwrap()["error"],
         "scenarioId must belong to the requested diagram"
     );
+}
+
+#[tokio::test]
+async fn domain_free_documents_publish_over_rest_and_domain_exports_return_not_found() {
+    let server = Server::start().await;
+    let mut authored = document();
+    authored.as_object_mut().unwrap().remove("domain");
+    let response = server
+        .client
+        .put(server.url("/api/explanations/flow-only"))
+        .json(&json!({"document": authored}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let stored = response.json::<Value>().await.unwrap();
+    assert_eq!(stored["document"], authored);
+    for suffix in ["", "?scenarioId=run"] {
+        let response = server
+            .client
+            .get(server.url(&format!(
+                "/api/explanations/flow-only/domain/export{suffix}"
+            )))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"error": "domain not found"})
+        );
+    }
 }
 
 async fn rpc_response(mut response: Response) -> Value {
@@ -726,6 +760,34 @@ async fn streamable_http_initializes_discovers_schema_and_calls_shared_service_t
     assert!(publish["inputSchema"].to_string().contains("occurrences"));
     let schema = &publish["inputSchema"];
     let definitions = &publish["inputSchema"]["$defs"];
+    for (definition, field) in [("Explanation", "wiring"), ("Occurrence", "wiringRefs")] {
+        assert!(definitions[definition]["properties"][field].is_object());
+        assert!(
+            !definitions[definition]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field))
+        );
+    }
+    for (definition, field, maximum) in [
+        ("Wiring", "components", 200),
+        ("Wiring", "connections", 500),
+        ("Wiring", "groups", 100),
+        ("Wiring", "references", 100),
+        ("WiringComponent", "operations", 200),
+        ("WiringComponent", "screens", 200),
+        ("WiringComponent", "referenceIds", 50),
+        ("WiringConnection", "referenceIds", 50),
+        ("WiringRelevance", "componentIds", 500),
+        ("WiringRelevance", "connectionIds", 500),
+        ("WiringRelevance", "operationRefs", 500),
+        ("WiringRelevance", "screenRefs", 500),
+    ] {
+        assert_eq!(
+            definitions[definition]["properties"][field]["maxItems"], maximum,
+            "{definition}.{field}"
+        );
+    }
     assert_eq!(
         definitions["Explanation"]["properties"]["links"]["maxItems"],
         50
@@ -1303,7 +1365,13 @@ async fn rest_and_mcp_reject_traces_outside_the_shared_sequence_without_replacin
     assert_eq!(tool_value(&published)["document"], document);
     assert_eq!(tool_value(&published)["document"], document);
     let mut invalid = document.clone();
-    invalid["diagrams"][2]["sequence"]["body"][2]["operands"][0]["body"]
+    let sequence = invalid["diagrams"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|diagram| diagram["id"] == "payment-sequence")
+        .unwrap();
+    sequence["sequence"]["body"][2]["operands"][0]["body"]
         .as_array_mut()
         .unwrap()
         .reverse();

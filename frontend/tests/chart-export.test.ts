@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick } from 'vue';
 import { readFileSync } from 'node:fs';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import fixture from '../../examples/order-lifecycle.json';
 import GraphView from '../src/components/GraphView.vue';
 import DomainView from '../src/components/DomainView.vue';
 import SequenceView from '../src/components/SequenceView.vue';
-import { captureChart, chartFilename, rasterDimensions } from '../src/chart-export';
+import WiringView from '../src/components/WiringView.vue';
+import { wiringFixture, wiringScenario } from './fixtures/wiring';
+import { captureChart, chartFilename, rasterDimensions, type ExportScope } from '../src/chart-export';
 import type { Explanation } from '../src/model';
 import { diagramLayout, type GraphLayout } from '../src/layout';
 
@@ -27,10 +29,11 @@ async function mount(render: () => ReturnType<typeof h>) {
   apps.push(app);
   app.mount(root);
   await nextTick();
+  if (root.querySelector('.wiring-body > [role="status"]')) await vi.waitFor(() => expect(root.querySelector('.wiring-map')).not.toBeNull());
   return root;
 }
 
-function exported(root: HTMLElement, scope: 'scenario' | 'all') {
+function exported(root: HTMLElement, scope: ExportScope) {
   const viewport = root.querySelector<HTMLElement>('.diagram-viewport')!;
   const source = viewport.querySelector<SVGSVGElement>('.viewport-content > svg')!;
   const [, , width, height] = source.getAttribute('viewBox')!.split(' ').map(Number);
@@ -39,6 +42,7 @@ function exported(root: HTMLElement, scope: 'scenario' | 'all') {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   apps.splice(0).forEach(app => app.unmount());
   document.body.replaceChildren();
   document.documentElement.classList.remove('app-dark');
@@ -46,13 +50,14 @@ afterEach(() => {
 
 it('exports the whole graph with scenario muting but without playback state or live-view mutations', async () => {
   const style = document.createElement('style');
-  style.textContent = '.graph-node.off-scenario{opacity:.8}.graph-edge.off-scenario path{stroke-dasharray:8 4}';
+  style.textContent = '.graph-node.off-scenario{opacity:.8}.graph-edge.off-scenario path{stroke-dasharray:8 4}.graph-node.inspected .node-shape{stroke:rgb(124,58,237)}';
   document.body.append(style);
   const layout: GraphLayout = { width: 900, height: 300, nodes: [
     { id: 'a', label: 'Start', lines: ['Start'], x: 150, y: 150, width: 240, height: 72 },
     { id: 'b', label: 'Other', lines: ['Other'], x: 750, y: 150, width: 240, height: 72 },
   ], edges: [{ id: 'edge', source: 'a', target: 'b', label: 'Route', lines: ['Route'], path: 'M270,150 H630', x: 450, y: 140 }] };
-  const root = await mount(() => h(GraphView, { layout, title: 'Flow', interactive: true, currentNodeId: 'a', visitedNodeIds: ['a', 'a'], visitedEdgeIds: ['edge', 'edge'], scenarioNodeIds: ['a', 'a'], scenarioEdgeIds: [] }));
+  const root = await mount(() => h(GraphView, { layout, title: 'Flow', interactive: true, currentNodeId: 'a', inspectedNodeId: 'b', visitedNodeIds: ['a', 'a'], visitedEdgeIds: ['edge', 'edge'], scenarioNodeIds: ['a', 'a'], scenarioEdgeIds: [] }));
+  expect(getComputedStyle(root.querySelector('[data-node-id="b"] .node-shape')!).stroke).toBe('rgb(124,58,237)');
   const source = root.querySelector('.graph')!.outerHTML;
   const scoped = exported(root, 'scenario');
   expect(scoped.querySelector('parsererror')).toBeNull();
@@ -62,10 +67,61 @@ it('exports the whole graph with scenario muting but without playback state or l
   expect(scoped.querySelector('path[marker-end]')?.getAttribute('marker-end')).toMatch(/-off-scenario\)$/);
   expect(scoped.querySelector('path[marker-end]')?.getAttribute('style')).toContain('stroke-dasharray: 8 4');
   expect(scoped.querySelector('[class], [tabindex], [aria-label], [data-node-id]')).toBeNull();
+  expect([...scoped.querySelectorAll('rect')].some(rect => /124,\s*58,\s*237/.test(rect.style.stroke))).toBe(false);
   const all = exported(root, 'all');
   expect(all.querySelector('path[marker-end]')?.getAttribute('marker-end')).toMatch(/-default\)$/);
   expect(all.querySelector('path[marker-end]')?.getAttribute('style')).not.toContain('stroke-dasharray: 8 4');
   expect(root.querySelector('.graph')!.outerHTML).toBe(source);
+});
+
+it('exports shared wiring with scoped membership and inert contracts independently of playback', async () => {
+  const wiring = wiringFixture(), scenario = wiringScenario();
+  const style = document.createElement('style');
+  style.textContent = '.wiring-connection.outside{opacity:.38}'; document.body.append(style);
+  const root = await mount(() => h(WiringView, { wiring, scenarios: [scenario], scenario, occurrence: scenario.occurrences[1]!, stateKey: 'export/wiring' }));
+  root.querySelector<SVGGElement>('.wiring-heading')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await nextTick();
+  expect(root.querySelectorAll('.heading-selection')).toHaveLength(1);
+  const source = root.querySelector('.wiring-map')!.outerHTML;
+  for (const scope of ['scenario', 'all'] as const) {
+    const capture = exported(root, scope);
+    expect(capture.querySelectorAll('image')).toHaveLength(wiring.components.length);
+    expect(capture.documentElement.textContent).toContain('Submits checkout');
+    expect(capture.documentElement.textContent).toContain('POST /carts/{id}/checkout');
+    expect(capture.documentElement.textContent).not.toMatch(/[●✓◇○◆]/);
+    expect([...capture.querySelectorAll('g')].filter(element => element.style.opacity === '0.38')).toHaveLength(scope === 'scenario' ? 2 : 0);
+    expect(capture.querySelector('script, foreignObject, [tabindex], [data-wiring-component-id]')).toBeNull();
+    expect(capture.querySelector('rect[x="1.25"][y="1.25"]')).toBeNull();
+  }
+  expect(root.querySelector('.wiring-map')!.outerHTML).toBe(source);
+});
+
+it('exports only the current step’s Wiring cards and connections while keeping all interfaces in those cards', async () => {
+  const wiring = wiringFixture(), scenario = wiringScenario();
+  const root = await mount(() => h(WiringView, { wiring, scenarios: [scenario], scenario, occurrence: scenario.occurrences[1]!, stateKey: 'step-export/wiring' }));
+  const source = root.querySelector('.wiring-map')!.outerHTML;
+  const path = root.querySelector('[data-wiring-connection-id="submit"] .connection-line')!.getAttribute('d');
+  const map = root.querySelector<SVGSVGElement>('.wiring-map')!;
+  const clone = map.cloneNode(true) as SVGSVGElement;
+  clone.getBBox = () => new DOMRect(80, 120, 900, 260);
+  vi.spyOn(map, 'cloneNode').mockReturnValue(clone);
+  const chart = exported(root, 'step');
+  expect(chart.documentElement.getAttribute('viewBox')).toBe('60 100 940 300');
+  expect(chart.documentElement.getAttribute('width')).toBe('940');
+  expect(chart.documentElement.getAttribute('height')).toBe('300');
+  expect(chart.querySelector('svg > rect')!.getAttribute('x')).toBe('60');
+  expect(chart.querySelector('svg > rect')!.getAttribute('y')).toBe('100');
+  expect(chart.querySelectorAll('image')).toHaveLength(2);
+  expect([...chart.querySelectorAll('path[marker-end]')].map(edge => edge.getAttribute('d'))).toEqual([path]);
+  const text = [...chart.querySelectorAll('text')].map(element => element.textContent);
+  expect(text).toContain('Shop');
+  expect(text).toContain('Cart API');
+  expect(text).toContain('POST /carts/{id}/checkoutContract change · 1 field gaps');
+  expect(text).toContain('GET /carts/{id}Operation');
+  expect(text).not.toContain('Cart store');
+  expect(chart.documentElement.textContent).not.toMatch(/[●✓◇○◆]/);
+  expect(chart.querySelector('[class], [tabindex], [data-wiring-component-id]')).toBeNull();
+  expect(root.querySelector('.wiring-map')!.outerHTML).toBe(source);
 });
 
 it('exports swimlane frames and inert wrapped headings through the shared graph renderer', async () => {
@@ -139,7 +195,7 @@ it.each([false, true])('exports semantic sequence arrows and every fragment head
   document.body.append(style);
   const diagram = explanation.diagrams.find(item => item.kind === 'sequence')!;
   const scenario = explanation.scenarios.find(item => item.diagramId === diagram.id)!;
-  const root = await mount(() => h(SequenceView, { diagram, scenario, currentOccurrenceId: scenario.occurrences.at(-1)!.id }));
+  const root = await mount(() => h(SequenceView, { diagram, scenario, currentOccurrenceId: scenario.occurrences.at(-1)!.id, inspectedNodeId: diagram.nodes[0]!.id }));
   const source = root.querySelector('.sequence')!;
   source.querySelectorAll<SVGElement>('.fragment-heading, .sequence-operand-heading').forEach(heading => heading.style.display = 'none');
   const kinds = [...source.querySelectorAll('.sequence-message')].map(row => diagram.sequence!.messages.find(message => message.nodeId === row.getAttribute('data-node-id'))!.kind ?? 'call');
@@ -193,7 +249,7 @@ it('exports domain definitions without snapshot tooltips, instance counts, selec
   const scenario = explanation.scenarios.find(item => item.diagramId === diagram.id)!;
   const occurrence = structuredClone(scenario.occurrences[0]!);
   occurrence.after.instances[0]!.values[Object.keys(occurrence.after.instances[0]!.values)[0]!] = 'private-snapshot-value';
-  const root = await mount(() => h(DomainView, { domain: explanation.domain, diagram, scenario, occurrence, selectedEntityId: explanation.domain.entities[0]!.id }));
+  const root = await mount(() => h(DomainView, { domain: explanation.domain!, diagram, scenario, occurrence, selectedEntityId: explanation.domain!.entities[0]!.id }));
   const surface = root.querySelector('.domain-entity-surface')!;
   const scopeAttribute = surface.getAttributeNames().find(name => name.startsWith('data-v-'))!;
   expect(scopeAttribute).toBeDefined();
@@ -204,8 +260,10 @@ it('exports domain definitions without snapshot tooltips, instance counts, selec
   expect([...captured.querySelectorAll('rect')].some(rect => /rgb\(12,\s*34,\s*56\)/.test(rect.style.fill))).toBe(true);
   expect(captured.documentElement.textContent).not.toContain('private-snapshot-value');
   expect(captured.querySelectorAll('title')).toHaveLength(1);
-  for (const entity of explanation.domain.entities) expect(captured.documentElement.textContent).toContain(entity.label);
+  for (const entity of explanation.domain!.entities) expect(captured.documentElement.textContent).toContain(entity.label);
   expect(captured.querySelectorAll('[data-entity-id], [data-attribute-id], [aria-pressed]')).toHaveLength(0);
+  expect(root.querySelectorAll('.inspection-ring')).toHaveLength(1);
+  expect(captured.querySelectorAll('rect[x="-4"]')).toHaveLength(0);
 });
 
 it('offers scope selection and keyboard dismissal in the export menu', async () => {

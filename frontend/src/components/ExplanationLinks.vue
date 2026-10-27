@@ -2,18 +2,15 @@
 import { computed, ref, useId, watch } from 'vue';
 import Popover from 'primevue/popover';
 import type { ExplanationLink } from '../model';
+import { safeLink } from '../safe-link';
 
 const props = defineProps<{ links?: ExplanationLink[]; hidden?: boolean }>();
 const popover = ref<InstanceType<typeof Popover>>();
 const open = ref(false);
 const popupId = useId();
 const references = computed(() => (props.links ?? []).flatMap(link => {
-  if (!/^https?:\/\/[^/]/i.test(link.url) || /[\s\u0000-\u001f\u007f-\u009f\\]/u.test(link.url)) return [];
-  try {
-    const url = new URL(link.url);
-    if (!url.hostname || url.username || url.password) return [];
-    return [{ label: link.label, url: url.href, hostname: url.hostname }];
-  } catch { return []; }
+  const destination = safeLink(link.url);
+  return destination ? [{ label: link.label, ...destination }] : [];
 }));
 watch(() => [props.links, props.hidden], () => popover.value?.hide());
 </script>

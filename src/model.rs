@@ -13,6 +13,7 @@ pub use crate::method_calls::MethodCall;
 pub use crate::sequence::{
     SequenceMessageKind, SequenceOperand, SequenceParticipantKind, SequenceStep,
 };
+pub use crate::wiring::{Wiring, WiringRelevance};
 
 pub const MAX_DOCUMENT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 32 * 1024;
@@ -41,14 +42,18 @@ pub struct Explanation {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(max = 50))]
     pub links: Vec<ExplanationLink>,
-    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<Domain>,
+    /// Shared software and infrastructure definitions, independent of the domain model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wiring: Option<Wiring>,
     #[schemars(length(min = 1, max = 50))]
     pub diagrams: Vec<Diagram>,
     #[schemars(length(min = 1, max = 100))]
     pub scenarios: Vec<Scenario>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Domain {
     #[schemars(length(max = 200))]
@@ -316,6 +321,9 @@ pub struct Occurrence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(length(max = 500))]
     pub method_calls: Vec<MethodCall>,
+    /// Explicit participation for this visit. Omission is unrecorded; an empty object is a recorded empty mapping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wiring_refs: Option<WiringRelevance>,
 }
 
 #[derive(JsonSchema)]
@@ -466,16 +474,19 @@ impl Explanation {
             return Err("schemaVersion must be 1".into());
         }
         self.validate_links()?;
-        limit(self.domain.entities.len(), 200, "entities")?;
-        limit(self.domain.relationships.len(), 500, "relationships")?;
+        self.validate_wiring()?;
+        let empty_domain = Domain::default();
+        let domain = self.domain.as_ref().unwrap_or(&empty_domain);
+        limit(domain.entities.len(), 200, "entities")?;
+        limit(domain.relationships.len(), 500, "relationships")?;
         limit(self.diagrams.len(), 50, "diagrams")?;
         limit(self.scenarios.len(), 100, "scenarios")?;
         if self.diagrams.is_empty() || self.scenarios.is_empty() {
             return Err("at least one diagram and scenario are required".into());
         }
-        let entities = index(&self.domain.entities, |entity| &entity.id, "entity")?;
+        let entities = index(&domain.entities, |entity| &entity.id, "entity")?;
         let relationships = index(
-            &self.domain.relationships,
+            &domain.relationships,
             |relationship| &relationship.id,
             "relationship",
         )?;
@@ -483,7 +494,7 @@ impl Explanation {
         index(&self.scenarios, |scenario| &scenario.id, "scenario")?;
         self.validate_structure()?;
         let mut entity_attributes = HashMap::new();
-        for entity in &self.domain.entities {
+        for entity in &domain.entities {
             limit(entity.attributes.len(), 200, "entity attributes")?;
             limit(entity.methods.len(), 200, "entity methods")?;
             index(&entity.methods, |method| &method.id, "entity method")?;
@@ -498,8 +509,8 @@ impl Explanation {
             let attributes = index(&entity.attributes, |attribute| &attribute.id, "attribute")?;
             entity_attributes.insert(entity.id.as_str(), attributes);
         }
-        self.domain.validate_groups(&entities)?;
-        for relationship in &self.domain.relationships {
+        domain.validate_groups(&entities)?;
+        for relationship in &domain.relationships {
             require(&entities, &relationship.source_entity_id, "source entity")?;
             require(&entities, &relationship.target_entity_id, "target entity")?;
             for (endpoint, cardinality) in [

@@ -95,7 +95,7 @@ it('keeps the inspector and its bounded tab selection across views, scenarios, r
 
 it('counts multiple instances and expandable nested collections while rendering captured text safely', async () => {
   const authored = structuredClone(fixture) as Explanation;
-  authored.domain.entities[0]!.attributes.push({ id: 'payload', label: 'Payload' });
+  authored.domain!.entities[0]!.attributes.push({ id: 'payload', label: 'Payload' });
   const visit = authored.scenarios[0]!.occurrences[0]!;
   const payload = '<img src=x onerror=alert(1)><script>unsafe</script>';
   visit.before = { instances: [{ id: 'a', entityId: 'order', values: { payload: [] } }, { id: 'removed', entityId: 'order', values: { total: 0 } }], links: [] };
@@ -191,7 +191,7 @@ it('guards data shortcuts in editing controls and overlays and exposes them thro
   expect(toggle().getAttribute('aria-expanded')).toBe('true');
   expect(selectedDataTab().textContent).toBe('Changes');
   expect(body.scrollTop).toBe(300);
-  expect([...document.querySelectorAll('[role="group"][aria-label="Data"] kbd')].map(key => key.textContent)).toEqual(['n', ',', '.', "'", '/']);
+  expect([...document.querySelectorAll('[role="group"][aria-label="Data"] kbd')].map(key => key.textContent)).toEqual(['n', 'w', ',', '.', "'", '/']);
   search.value = 'Toggle data inspector'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle();
   await press('Enter', {}, search);
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());

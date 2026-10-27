@@ -144,6 +144,10 @@ async fn demo(runtime: &Runtime) -> Result<()> {
             "pr-comment-review",
             include_str!("../examples/pr-comment-review.json"),
         ),
+        (
+            "shopping-cart",
+            include_str!("../examples/shopping-cart.json"),
+        ),
     ] {
         let document: serde_json::Value =
             serde_json::from_str(source).with_context(|| format!("invalid demo document {id}"))?;

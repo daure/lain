@@ -1,0 +1,694 @@
+{
+  "schemaVersion": 1,
+  "title": "Shopping cart: stock, payment, and receipts",
+  "description": "A synthetic reusable-bottle shop contrasts current checkout without a stock hold with a proposed reservation path, stock rejection, and payment retry. Wiring separates Angular actions, Spring endpoints, individual SQL operations, payment, SNS/SQS receipt delivery, and Datadog traces.",
+  "overview": "All actors, identifiers, endpoints, products, providers, SQL, telemetry, and work references are synthetic assumptions. The shared Wiring inventory describes interface ownership, not verified infrastructure, IAM, network access, or deployment boundaries. Amounts are integer euro cents; bottles cost 2450 cents and the examples assume tax is included and delivery is free.\n\nCompare Current: authorization without a hold with the Proposed successful checkout. Current stops at payment authorization without checking stock. The proposal reserves stock first and assumes a five-minute hold remains valid during payment retry. Proposed recordings assume the target contracts work; missing/changed markers identify contract decisions still requiring work, not measured production availability. The DELETE release endpoint is an unexplored missing definition.\n\nEach SQL SELECT, UPDATE, and INSERT has its own wire and database-owned port. Inventory hold creation assumes one transaction across the stock read, counter update, and hold insert; cross-store completion atomicity and crash recovery are outside this recording. After an order commit, SNS publication and SNS-to-SQS fan-out are recorded separately from later Lambda consumption. Assume raw SNS message delivery to SQS, at-least-once transport, and worker deduplication by eventId; this example does not establish those operational guarantees. Datadog receives synthetic OTLP traces through an assumed compatible ingestion boundary. No tokens, credentials, signed URLs, or personal payloads appear in telemetry.\n\nWiring relevance belongs to occurrence IDs, including revisits. Connections include only their endpoint owners and named ports; adjacent calls are never inferred. Local human review uses an explicit empty mapping. The retry's second review intentionally has no mapping recorded. Fictional CART-DEMO references describe work scope, not dependencies or progress.",
+  "topics": [
+    { "id": "buying-bottles", "title": "Can the shopper complete checkout?", "description": "Contrast current authorization without a hold with the proposed successful, stock-limited, and payment-retry recordings.", "scenarioIds": ["cart-current-no-hold", "cart-checkout-success", "cart-stock-rejected", "cart-payment-retry"] }
+  ],
+  "comparisons": [
+    { "id": "success-versus-stock", "title": "Available stock versus a stale basket", "description": "The stock rejection stops before payment or receipt work. A visible payment capability on the shared map does not make it part of that recording.", "leftScenarioId": "cart-checkout-success", "rightScenarioId": "cart-stock-rejected" },
+    { "id": "success-versus-retry", "title": "First authorization versus a new payment attempt", "description": "The retry revisits reservation inspection and payment with distinct occurrence IDs. The accepted reservation is reused; the declined payment record remains captured beside the authorized attempt.", "leftScenarioId": "cart-checkout-success", "rightScenarioId": "cart-payment-retry" },
+    { "id": "current-versus-stock-hold", "title": "Authorize immediately or hold stock first?", "description": "Synthetic Current authorizes a two-bottle basket without a stock hold and stops at authorization. Proposed assumes Inventory accepts a hold before authorization and continues through receipt acceptance. These are authored recordings, not computed diffs or aligned steps.", "leftScenarioId": "cart-current-no-hold", "rightScenarioId": "cart-checkout-success" }
+  ],
+  "links": [
+    { "label": "Illustrative shop documentation", "url": "https://example.com/shopping-cart" }
+  ],
+  "domain": {
+    "entities": [
+      { "id": "cart", "label": "Cart", "attributes": [
+        { "id": "sku", "label": "Bottle SKU" },
+        { "id": "quantity", "label": "Quantity" },
+        { "id": "totalMinor", "label": "Total in euro cents" },
+        { "id": "currency", "label": "Currency" },
+        { "id": "status", "label": "Checkout status" },
+        { "id": "reservation", "label": "Stock reservation" }
+      ], "methods": [
+        { "id": "set-quantity", "signature": "setQuantity(quantity): Cart", "description": "Records the quantity and the server-priced total before a stock hold is requested." }
+      ] },
+      { "id": "payment", "label": "Payment attempt", "attributes": [
+        { "id": "status", "label": "Authorization status" },
+        { "id": "amountMinor", "label": "Amount in euro cents" },
+        { "id": "declineCode", "label": "Decline reason" }
+      ] },
+      { "id": "order", "label": "Order", "attributes": [
+        { "id": "status", "label": "Order status" },
+        { "id": "receipt", "label": "Receipt delivery" }
+      ] }
+    ],
+    "relationships": [
+      { "id": "cart-payments", "label": "records attempts", "sourceEntityId": "cart", "targetEntityId": "payment", "sourceCardinality": "exactlyOne", "targetCardinality": "zeroOrMore" },
+      { "id": "cart-order", "label": "becomes", "sourceEntityId": "cart", "targetEntityId": "order", "sourceCardinality": "exactlyOne", "targetCardinality": "zeroOrOne" }
+    ],
+    "groups": [
+      { "id": "purchase-data", "label": "Purchase records", "entityIds": ["cart", "payment", "order"] }
+    ]
+  },
+  "wiring": {
+    "components": [
+      {
+        "id": "storefront", "label": "Shop storefront", "kind": "uiApp",
+        "description": "Illustrative browser application. The cart, checkout, and confirmation screens share one UI owner; screen routes are descriptive text.",
+         "technology": { "name": "Angular", "provider": "Illustrative self-hosted shop", "icon": "angular" },
+        "screens": [
+          { "id": "cart", "label": "Your basket", "route": "/cart", "description": "Shows the server-priced basket and lets the shopper edit quantity." },
+          { "id": "checkout", "label": "Checkout and payment", "route": "/checkout/{cartId}", "description": "Shows stock feedback and lets the shopper choose another tokenized payment method after a decline." },
+          { "id": "confirmation", "label": "Order confirmation", "route": "/orders/{orderId}/confirmation", "description": "Displays the accepted order. Visiting this screen alone establishes no API connection mapping." }
+        ],
+        "referenceIds": ["cart-experience", "payment-retry"]
+      },
+      {
+        "id": "cart-api", "label": "Cart API", "kind": "service",
+        "description": "Illustrative owner of basket reads, quantity changes, and authoritative pricing. It does not reserve stock while editing a basket.",
+        "technology": { "name": "Spring Boot", "provider": "Illustrative self-hosted shop", "icon": "spring" },
+        "operations": [
+          { "id": "get", "label": "Read basket", "kind": "http", "status": "changed", "http": { "method": "GET", "path": "/carts/{cartId}" }, "description": "Returns the server-priced basket and the proposed hold summary.", "requestType": "ReadCartRequest", "fields": [
+            { "id": "cart-id", "section": "path", "path": "cartId", "type": "string", "required": true, "nullable": false, "example": "cart-201" }
+          ], "returns": [{ "status": 200, "type": "CartView", "fields": [
+            { "id": "total", "section": "response", "path": "totalMinor", "type": "int64 euro cents", "required": true, "nullable": false, "example": 4900 },
+            { "id": "reservation", "section": "response", "path": "reservation", "type": "StockHold", "required": true, "nullable": true, "status": "missing", "example": null, "description": "Null describes an unreserved basket; an omitted field is a contract gap." },
+            { "id": "expiry", "section": "response", "path": "reservation.expiresAt", "type": "RFC3339 timestamp", "required": false, "nullable": false, "status": "missing", "example": "2026-10-26T14:05:00Z", "description": "Present inside a non-null hold; absolute UTC time is assumed." }
+          ] }, { "status": 404, "type": "CartNotFound" }], "responses": "200 CartView; 404 CART_NOT_FOUND" },
+          { "id": "update", "label": "Set bottle quantity", "kind": "http", "http": { "method": "PATCH", "path": "/carts/{cartId}/items/{sku}" }, "description": "Prices the requested quantity and persists the updated basket.", "requestType": "SetQuantityRequest", "fields": [
+            { "id": "cart-id", "section": "path", "path": "cartId", "type": "string", "required": true, "example": "cart-201" },
+            { "id": "sku", "section": "path", "path": "sku", "type": "string", "required": true, "example": "bottle-01" },
+            { "id": "quantity", "section": "request", "path": "quantity", "type": "integer >= 1", "required": true, "nullable": false, "example": 2 },
+            { "id": "version", "section": "request", "path": "expectedVersion", "type": "integer", "required": true, "nullable": false, "status": "missing", "example": 7 }
+          ], "returns": [
+            { "status": 200, "type": "CartView", "fields": [
+              { "id": "cart-id", "section": "response", "path": "cartId", "type": "string", "required": true, "example": "cart-201" },
+              { "id": "total", "section": "response", "path": "totalMinor", "type": "int64 euro cents", "required": true, "example": 4900 },
+              { "id": "version", "section": "response", "path": "version", "type": "integer", "required": true, "example": 8 }
+            ] },
+            { "status": 409, "type": "CartVersionConflict", "fields": [
+              { "id": "code", "section": "error", "path": "code", "type": "string", "required": true, "example": "CART_VERSION_CONFLICT" },
+              { "id": "version", "section": "error", "path": "currentVersion", "type": "integer", "required": true, "example": 8 }
+            ] }
+          ], "responses": "200 CartView; 409 CART_VERSION_CONFLICT" }
+        ],
+        "referenceIds": ["cart-experience"]
+      },
+      {
+        "id": "pricing-rules", "label": "Bottle pricing rules", "kind": "other",
+        "description": "Illustrative in-process library used by the Cart API. Its separate box names a feature responsibility, not a network service or deployment boundary.",
+        "technology": { "name": "Java pricing library", "provider": "Illustrative in-house rules" },
+        "operations": [
+          { "id": "quote", "label": "Quote basket total", "kind": "rpc", "description": "Multiplies the current unit price by quantity using integer minor units." }
+        ],
+        "referenceIds": ["cart-experience"]
+      },
+      {
+        "id": "checkout-api", "label": "Checkout API", "kind": "service",
+        "description": "Illustrative orchestration responsibility for stock holds, payment attempts, order commitment, and receipt publication. Retry requests use a new attempt key while preserving the cart's live hold.",
+        "technology": { "name": "Spring Boot", "provider": "Illustrative self-hosted shop", "icon": "spring" },
+        "operations": [
+          { "id": "submit", "label": "Start checkout", "kind": "http", "status": "changed", "http": { "method": "POST", "path": "/carts/{cartId}/checkout" }, "description": "Current authorizes immediately; Proposed checks a hold before authorization. Scenario mappings name the actual recorded calls.", "requestType": "StartCheckoutRequest", "fields": [
+            { "id": "idempotency", "section": "header", "path": "Idempotency-Key", "type": "string", "required": true, "nullable": false, "status": "missing", "example": "checkout:cart-201:v8" },
+            { "id": "version", "section": "request", "path": "expectedCartVersion", "type": "integer", "required": true, "nullable": false, "status": "missing", "example": 8 },
+            { "id": "payment-token", "section": "request", "path": "paymentMethodToken", "type": "opaque string", "required": true, "nullable": false, "example": "pm_synthetic_201", "description": "Synthetic token placeholder; never a real credential." }
+          ], "returns": [{ "status": 201, "type": "Order", "fields": [
+            { "id": "order-id", "section": "response", "path": "orderId", "type": "string", "required": true, "example": "order-201" }
+          ] }, { "status": 409, "type": "CheckoutConflict", "fields": [
+            { "id": "error-code", "section": "error", "path": "code", "type": "enum(STOCK_CHANGED,RESERVATION_EXPIRED)", "required": true, "nullable": false, "status": "missing", "example": "STOCK_CHANGED" },
+            { "id": "error-lines", "section": "error", "path": "rejectedLines[]", "type": "{sku:string,requested:integer,available:integer}[]", "required": false, "nullable": false, "status": "missing", "example": [{ "sku": "BOTTLE-SAGE", "requested": 3, "available": 2 }] }
+          ] }, { "status": 422, "type": "PaymentDeclined", "fields": [
+            { "id": "error-code", "section": "error", "path": "code", "type": "string", "required": true, "example": "PAYMENT_DECLINED" }
+          ] }], "responses": "201 Order; 409 STOCK_CHANGED or RESERVATION_EXPIRED; 422 PAYMENT_DECLINED", "decisions": ["Does a duplicate key replay the first result or wait for an in-flight attempt?", "How does checkout recover when payment authorization succeeds but order persistence fails?"] },
+          { "id": "retry", "label": "Retry payment", "kind": "http", "status": "changed", "http": { "method": "POST", "path": "/carts/{cartId}/payment-attempts" }, "description": "Checks the original hold before authorizing a newly selected synthetic payment token.", "requestType": "RetryPaymentRequest", "fields": [
+            { "id": "attempt-key", "section": "header", "path": "Idempotency-Key", "type": "string", "required": true, "nullable": false, "status": "missing", "example": "payment:cart-203:attempt-b" },
+            { "id": "reservation-id", "section": "request", "path": "reservationId", "type": "string", "required": true, "nullable": false, "status": "missing", "example": "hold-203" }
+          ], "returns": [{ "status": 201, "type": "PaymentAttempt" }, { "status": 410, "type": "ReservationExpired" }], "responses": "201 PaymentAttempt; 410 RESERVATION_EXPIRED" },
+          { "id": "complete", "label": "Commit authorized checkout", "kind": "command", "description": "Internal completion consumes the hold through Inventory and inserts one paid order before publication. The command and result fields are illustrative synthetic contracts.", "requestType": "CompleteCheckoutCommand", "fields": [
+            { "id": "cart-id", "section": "request", "path": "cartId", "type": "string", "required": true, "example": "cart-201" },
+            { "id": "hold-id", "section": "request", "path": "reservationId", "type": "string", "required": true, "example": "hold-201" },
+            { "id": "payment-id", "section": "request", "path": "authorizedPaymentAttemptId", "type": "string", "required": true, "example": "pay-201" }
+          ], "returns": [{ "type": "PaidOrder", "fields": [
+            { "id": "order-id", "section": "response", "path": "orderId", "type": "string", "required": true, "example": "order-201" },
+            { "id": "status", "section": "response", "path": "status", "type": "string", "required": true, "example": "paid" }
+          ] }] },
+          { "id": "release", "label": "Release an abandoned hold", "kind": "command", "status": "missing", "description": "Unexplored cleanup contract. No recording claims a release occurs.", "decisions": ["Does cancellation release immediately or rely on Inventory expiry?"] }
+        ],
+        "referenceIds": ["stock-holds", "payment-retry", "receipt-delivery"]
+      },
+      {
+        "id": "inventory-api", "label": "Inventory API", "kind": "service",
+        "description": "Illustrative authority for available bottle stock and five-minute holds. A retry inspects an existing hold instead of reserving the same units twice.",
+        "technology": { "name": "Spring Boot", "provider": "Illustrative self-hosted shop", "icon": "spring" },
+        "operations": [
+          { "id": "reserve", "label": "Reserve bottles", "kind": "http", "status": "changed", "http": { "method": "POST", "path": "/stock/reservations" }, "description": "Assumes one transaction locks stock, increments the reserved counter, and inserts a hold; rejection performs neither write.", "requestType": "ReserveStockRequest", "fields": [
+            { "id": "lines", "section": "request", "path": "lines[]", "type": "{sku:string,quantity:integer}[]", "required": true, "nullable": false, "example": [{ "sku": "BOTTLE-SAGE", "quantity": 2 }] }
+          ], "returns": [{ "status": 201, "type": "StockHold", "fields": [
+            { "id": "hold-id", "section": "response", "path": "reservationId", "type": "string", "required": true, "nullable": false, "example": "hold-201" },
+            { "id": "expiry", "section": "response", "path": "expiresAt", "type": "RFC3339 timestamp", "required": true, "nullable": false, "status": "missing", "example": "2026-10-26T14:05:00Z" }
+          ] }, { "status": 409, "type": "InsufficientStock" }], "responses": "201 StockHold; 409 INSUFFICIENT_STOCK", "decisions": ["Is the all-lines-or-none transaction boundary guaranteed by Inventory?"] },
+          { "id": "get", "label": "Inspect reservation", "kind": "http", "http": { "method": "GET", "path": "/stock/reservations/{reservationId}" }, "description": "Reads the existing hold during retry; it performs no new reservation write." },
+          { "id": "consume", "label": "Consume reservation", "kind": "http", "http": { "method": "POST", "path": "/stock/reservations/{reservationId}/consume" }, "description": "Synthetic completion request updates hold state and stock counters inside one Inventory transaction." },
+          { "id": "release", "label": "Release reservation", "kind": "http", "status": "missing", "http": { "method": "DELETE", "path": "/stock/reservations/{reservationId}" }, "description": "Unexplored missing endpoint for cancellation and expiry cleanup.", "fields": [
+            { "id": "hold-id", "section": "path", "path": "reservationId", "type": "string", "required": true, "nullable": false, "status": "missing", "example": "hold-201" },
+            { "id": "state", "section": "error", "path": "code", "type": "enum(HOLD_ALREADY_CONSUMED,HOLD_NOT_FOUND)", "required": true, "nullable": false, "status": "missing", "example": "HOLD_ALREADY_CONSUMED" }
+          ], "responses": "204 Released; 409 HOLD_ALREADY_CONSUMED", "decisions": ["Does repeating DELETE for an expired or missing hold return 204?"] }
+        ],
+        "referenceIds": ["stock-holds", "payment-retry"]
+      },
+      {
+        "id": "commerce-store", "label": "Commerce records", "kind": "database",
+        "description": "Synthetic Amazon RDS PostgreSQL store. Each port describes one repository operation and its table columns; database records are independent of the Domain model.",
+        "technology": { "name": "PostgreSQL", "provider": "AWS", "icon": "postgresql" },
+        "operations": [
+          { "id": "read-cart", "label": "SELECT cart and lines", "kind": "query", "statement": "SELECT c.id, c.version, l.sku, l.quantity, c.total_minor FROM cart c JOIN cart_line l ON l.cart_id = c.id WHERE c.id = :cartId;", "fields": [
+            { "id": "cart-id", "section": "record", "path": "cart.id", "type": "text primary key", "required": true, "nullable": false, "example": "cart-201" },
+            { "id": "quantity", "section": "record", "path": "cart_line.quantity", "type": "integer CHECK > 0", "required": true, "nullable": false, "example": 2 }
+          ] },
+          { "id": "update-cart", "label": "UPDATE cart quantity", "kind": "write", "statement": "UPDATE cart_line SET quantity = :quantity WHERE cart_id = :cartId AND sku = :sku;", "fields": [
+            { "id": "quantity", "section": "record", "path": "cart_line.quantity", "type": "integer", "required": true, "nullable": false, "example": 2 }
+          ], "description": "Synthetic transaction also saves the server-priced total and cart version through separate UPDATE operations." },
+          { "id": "update-total", "label": "UPDATE cart total and version", "kind": "write", "statement": "UPDATE cart SET total_minor = :totalMinor, version = version + 1 WHERE id = :cartId AND version = :expectedVersion;", "fields": [
+            { "id": "version", "section": "record", "path": "cart.version", "type": "bigint NOT NULL", "required": true, "nullable": false, "status": "missing", "example": 8 },
+            { "id": "total", "section": "record", "path": "cart.total_minor", "type": "bigint euro cents", "required": true, "nullable": false, "example": 4900 }
+          ], "responses": "One row updated; zero rows means CART_VERSION_CONFLICT" },
+          { "id": "insert-payment", "label": "INSERT payment attempt", "kind": "write", "statement": "INSERT INTO payment_attempt (id, cart_id, amount_minor, status) VALUES (:attemptId, :cartId, :amountMinor, :status);", "fields": [
+            { "id": "attempt", "section": "record", "path": "payment_attempt.id", "type": "text primary key", "required": true, "nullable": false, "example": "pay-203-a" },
+            { "id": "status", "section": "record", "path": "payment_attempt.status", "type": "enum(authorized,declined)", "required": true, "nullable": false, "example": "declined" }
+          ] },
+          { "id": "insert-order", "label": "INSERT paid order", "kind": "write", "statement": "INSERT INTO purchase_order (id, cart_id, status, receipt_state) VALUES (:orderId, :cartId, 'paid', 'pending-publication');", "fields": [
+            { "id": "order-id", "section": "record", "path": "purchase_order.id", "type": "text primary key", "required": true, "nullable": false, "example": "order-201" },
+            { "id": "attempt-key", "section": "record", "path": "purchase_order.idempotency_key", "type": "text unique", "required": true, "nullable": false, "status": "missing", "example": "checkout:cart-201:v8", "description": "Proposed persistence gap; the illustrative INSERT still requires this column and binding decision." }
+          ] },
+          { "id": "update-receipt", "label": "UPDATE receipt acceptance", "kind": "write", "statement": "UPDATE purchase_order SET receipt_state = 'accepted-by-provider' WHERE id = :orderId;", "fields": [
+            { "id": "receipt", "section": "record", "path": "purchase_order.receipt_state", "type": "text", "required": true, "nullable": false, "example": "accepted-by-provider" }
+          ] }
+        ],
+        "referenceIds": ["cart-experience", "receipt-delivery"]
+      },
+      {
+        "id": "payment-gateway", "label": "DemoPay gateway", "kind": "externalSystem",
+        "description": "Fictional illustrative payment provider. Accepts tokenized authorization requests; card numbers and credentials are outside the snapshots.",
+        "technology": { "name": "Token authorization API", "provider": "Illustrative DemoPay" },
+        "operations": [
+          { "id": "authorize", "label": "Authorize payment", "kind": "http", "http": { "method": "POST", "path": "/authorizations" }, "description": "Returns an authorization or decline for one synthetic payment attempt; authorization does not establish settlement.", "requestType": "AuthorizePaymentRequest", "fields": [
+            { "id": "amount", "section": "request", "path": "amountMinor", "type": "int64 minor units", "required": true, "nullable": false, "example": 4900 },
+            { "id": "currency", "section": "request", "path": "currency", "type": "ISO-4217 string", "required": true, "nullable": false, "example": "EUR" }
+          ], "returns": [{ "status": 200, "type": "PaymentAuthorization", "fields": [
+            { "id": "decline", "section": "response", "path": "declineCode", "type": "string", "required": true, "nullable": true, "example": null }
+          ] }, { "status": 402, "type": "PaymentDeclined" }], "responses": "200 authorized; 402 insufficient_funds; timeout requires lookup by attempt key" }
+        ],
+        "referenceIds": ["payment-retry"]
+      },
+      {
+        "id": "checkout-events", "label": "Paid-order events", "kind": "queue",
+        "description": "Illustrative asynchronous handoff after order commitment. Receipt processing is separate from the browser's checkout request.",
+        "technology": { "name": "Amazon SQS", "provider": "AWS", "icon": "queue" },
+        "operations": [
+          { "id": "enqueue", "label": "Enqueue OrderPaid.v1", "kind": "write", "description": "Assumed SNS subscription uses raw delivery; the queue receives the event payload without an SNS envelope." },
+          { "id": "deliver", "label": "Deliver OrderPaid.v1", "kind": "consume", "description": "Logical queue-to-handler delivery; Lambda polling, acknowledgement, visibility timeout, and DLQ configuration are not network topology claims." }
+        ],
+        "referenceIds": ["receipt-delivery"]
+      },
+      {
+        "id": "receipt-worker", "label": "Receipt worker", "kind": "worker",
+        "description": "Illustrative event consumer that sends a receipt and records the provider's accepted-delivery result. These recordings do not claim inbox arrival.",
+        "technology": { "name": "AWS Lambda", "provider": "AWS", "icon": "function" },
+        "operations": [
+          { "id": "send", "label": "Handle paid-order event", "kind": "consume", "description": "Assumes deduplication by eventId before receipt submission; records provider acceptance, not inbox arrival.", "requestType": "OrderPaid.v1", "fields": [
+            { "id": "event-id", "section": "message", "path": "eventId", "type": "string", "required": true, "nullable": false, "example": "evt-order-201" },
+            { "id": "order-id", "section": "message", "path": "orderId", "type": "string", "required": true, "nullable": false, "example": "order-201" }
+          ], "decisions": ["Where is the event deduplication result stored before acknowledging SQS delivery?"] }
+        ],
+        "referenceIds": ["receipt-delivery"]
+      },
+      {
+        "id": "email-delivery", "label": "DemoMail delivery", "kind": "externalSystem",
+        "description": "Fictional illustrative email boundary. An accepted submission is not proof that a human received or read the receipt.",
+        "technology": { "name": "Transactional email API", "provider": "Illustrative DemoMail" },
+        "operations": [
+          { "id": "send", "label": "Accept receipt email", "kind": "http", "http": { "method": "POST", "path": "/messages" } }
+        ],
+        "referenceIds": ["receipt-delivery"]
+      },
+      { "id": "quantity-stepper", "label": "QuantityStepper", "kind": "uiComponent", "technology": { "name": "Angular", "icon": "angular" }, "description": "Synthetic Angular child component under the basket screen.", "operations": [{ "id": "change", "label": "Change quantity", "kind": "command" }], "referenceIds": ["cart-experience"] },
+      { "id": "checkout-summary", "label": "CheckoutSummary", "kind": "uiComponent", "technology": { "name": "Angular", "icon": "angular" }, "description": "Synthetic Angular checkout action under the checkout screen.", "operations": [{ "id": "submit", "label": "Confirm checkout", "kind": "command" }], "referenceIds": ["stock-holds"] },
+      { "id": "payment-form", "label": "PaymentForm", "kind": "uiComponent", "technology": { "name": "Angular", "icon": "angular" }, "description": "Synthetic tokenized payment selection; actual credentials stay outside the explanation.", "operations": [{ "id": "retry", "label": "Retry with selected method", "kind": "command" }], "referenceIds": ["payment-retry"] },
+      { "id": "inventory-store", "label": "Inventory records", "kind": "database", "technology": { "name": "PostgreSQL", "provider": "AWS", "icon": "postgresql" }, "description": "Synthetic Inventory-owned relational store. One transaction groups reservation reads and writes; lines remain separately inspectable.", "operations": [
+        { "id": "read-balance", "label": "SELECT available stock FOR UPDATE", "kind": "query", "statement": "SELECT sku, on_hand_qty - reserved_qty AS available_qty FROM inventory_balance WHERE sku = :sku FOR UPDATE;", "fields": [
+          { "id": "sku", "section": "record", "path": "inventory_balance.sku", "type": "varchar(64) primary key", "required": true, "nullable": false, "example": "BOTTLE-SAGE" },
+          { "id": "available", "section": "response", "path": "available_qty", "type": "integer >= 0", "required": true, "nullable": false, "example": 2 }
+        ] },
+        { "id": "increment-reserved", "label": "UPDATE reserved quantity", "kind": "write", "statement": "UPDATE inventory_balance SET reserved_qty = reserved_qty + :quantity WHERE sku = :sku AND on_hand_qty - reserved_qty >= :quantity;", "fields": [
+          { "id": "reserved", "section": "record", "path": "inventory_balance.reserved_qty", "type": "integer NOT NULL DEFAULT 0", "required": true, "nullable": false, "status": "missing", "example": 2 }
+        ] },
+        { "id": "insert-hold", "label": "INSERT stock hold", "kind": "write", "status": "changed", "statement": "INSERT INTO stock_hold (id, cart_id, sku, quantity, expires_at, status) VALUES (:holdId, :cartId, :sku, :quantity, :expiresAt, 'active');", "fields": [
+          { "id": "hold-id", "section": "record", "path": "stock_hold.id", "type": "text primary key", "required": true, "nullable": false, "example": "hold-201" },
+          { "id": "expiry", "section": "record", "path": "stock_hold.expires_at", "type": "timestamptz NOT NULL", "required": true, "nullable": false, "status": "missing", "example": "2026-10-26T14:05:00Z" }
+        ] },
+        { "id": "read-hold", "label": "SELECT live stock hold", "kind": "query", "statement": "SELECT id, expires_at, status FROM stock_hold WHERE id = :holdId;", "fields": [
+          { "id": "expiry", "section": "response", "path": "expires_at", "type": "timestamptz", "required": true, "nullable": false, "example": "2026-10-26T14:05:00Z" }
+        ] },
+        { "id": "consume-hold", "label": "UPDATE hold consumed", "kind": "write", "statement": "UPDATE stock_hold SET status = 'consumed' WHERE id = :holdId AND status = 'active' AND expires_at > now();" },
+        { "id": "consume-balance", "label": "UPDATE sold stock counters", "kind": "write", "statement": "UPDATE inventory_balance SET on_hand_qty = on_hand_qty - :quantity, reserved_qty = reserved_qty - :quantity WHERE sku = :sku;", "description": "Assumed transaction decrements counters only after an active hold is successfully consumed." }
+      ], "referenceIds": ["stock-holds", "payment-retry"] },
+      { "id": "order-topic", "label": "OrderPaid topic", "kind": "topic", "technology": { "name": "Amazon SNS", "provider": "AWS", "icon": "topic" }, "description": "Synthetic topic fans out paid-order events to a distinct receipt queue; a topic is not a competing-consumer queue.", "operations": [
+        { "id": "publish", "label": "Publish OrderPaid.v1", "kind": "publish", "requestType": "OrderPaid.v1", "fields": [
+          { "id": "event-id", "section": "message", "path": "eventId", "type": "string", "required": true, "nullable": false, "example": "evt-order-201" },
+          { "id": "order-id", "section": "message", "path": "orderId", "type": "string", "required": true, "nullable": false, "example": "order-201" },
+          { "id": "occurred-at", "section": "message", "path": "occurredAt", "type": "RFC3339 timestamp", "required": true, "nullable": false, "status": "missing", "example": "2026-10-26T14:00:04Z" }
+        ], "decisions": ["How is publication recovered after an order commit if the publisher crashes?"] },
+        { "id": "fanout", "label": "Deliver subscription payload", "kind": "publish", "description": "Assumed raw message delivery to the receipt queue; this is distinct from Lambda consumption." }
+      ], "referenceIds": ["receipt-delivery"] },
+      { "id": "datadog", "label": "Datadog traces", "kind": "observability", "technology": { "name": "Datadog", "provider": "Datadog", "icon": "datadog" }, "description": "Synthetic OTLP-compatible trace ingestion boundary. Any collector or vendor adapter is outside this interface inventory.", "operations": [
+        { "id": "traces", "label": "Export OTLP traces", "kind": "telemetry", "fields": [
+          { "id": "trace-id", "section": "telemetry", "path": "trace_id", "type": "32-character hexadecimal string", "required": true, "nullable": false, "example": "4bf92f3577b34da6a3ce929d0e0e4736" },
+          { "id": "route", "section": "telemetry", "path": "attributes.http.route", "type": "string route template", "required": true, "nullable": false, "example": "/carts/{cartId}/checkout" },
+          { "id": "outcome", "section": "telemetry", "path": "attributes.hold.outcome", "type": "enum(created,rejected,reused,unreserved)", "required": false, "nullable": false, "status": "missing", "example": "created" }
+        ], "description": "Only synthetic identifiers and route templates; never payment tokens or request bodies." }
+      ], "referenceIds": ["stock-holds", "receipt-delivery"] }
+    ],
+    "connections": [
+      { "id": "load-cart", "label": "Load basket", "kind": "http", "source": { "componentId": "storefront", "screenId": "cart" }, "target": { "componentId": "cart-api", "operationId": "get" }, "protocol": "HTTPS", "referenceIds": ["cart-experience"] },
+      { "id": "read-confirmation", "label": "Read confirmation summary", "kind": "http", "description": "Assumed confirmation-screen request reads the accepted order summary through the basket endpoint.", "source": { "componentId": "storefront", "screenId": "confirmation" }, "target": { "componentId": "cart-api", "operationId": "get" }, "protocol": "HTTPS", "referenceIds": ["cart-experience"] },
+      { "id": "update-cart", "label": "Change quantity", "kind": "http", "source": { "componentId": "quantity-stepper", "operationId": "change" }, "target": { "componentId": "cart-api", "operationId": "update" }, "protocol": "HTTPS", "referenceIds": ["cart-experience"] },
+      { "id": "quote-prices", "label": "Quote basket total", "kind": "rpc", "source": { "componentId": "cart-api", "operationId": "update" }, "target": { "componentId": "pricing-rules", "operationId": "quote" }, "protocol": "In-process Java call", "referenceIds": ["cart-experience"] },
+      { "id": "persist-cart", "label": "SELECT cart and lines", "kind": "query", "source": { "componentId": "cart-api", "operationId": "get" }, "target": { "componentId": "commerce-store", "operationId": "read-cart" }, "protocol": "SQL", "referenceIds": ["cart-experience"] },
+      { "id": "write-cart", "label": "UPDATE cart line", "kind": "write", "source": { "componentId": "cart-api", "operationId": "update" }, "target": { "componentId": "commerce-store", "operationId": "update-cart" }, "protocol": "SQL", "referenceIds": ["cart-experience"] },
+      { "id": "write-cart-total", "label": "UPDATE total and version", "kind": "write", "status": "changed", "source": { "componentId": "cart-api", "operationId": "update" }, "target": { "componentId": "commerce-store", "operationId": "update-total" }, "protocol": "SQL", "referenceIds": ["cart-experience"] },
+      { "id": "start-checkout", "label": "Submit checkout", "kind": "http", "status": "changed", "source": { "componentId": "checkout-summary", "operationId": "submit" }, "target": { "componentId": "checkout-api", "operationId": "submit" }, "protocol": "HTTPS", "referenceIds": ["stock-holds", "payment-retry"], "fields": [
+        { "id": "idempotency", "section": "header", "path": "Idempotency-Key", "type": "string", "required": true, "nullable": false, "status": "missing", "example": "checkout:cart-201:v8", "description": "Caller handoff gap shared with the owning endpoint contract." }
+      ] },
+      { "id": "reserve-stock", "label": "Reserve stock", "kind": "http", "source": { "componentId": "checkout-api", "operationId": "submit" }, "target": { "componentId": "inventory-api", "operationId": "reserve" }, "protocol": "HTTPS", "referenceIds": ["stock-holds"] },
+      { "id": "read-stock", "label": "SELECT available FOR UPDATE", "kind": "query", "source": { "componentId": "inventory-api", "operationId": "reserve" }, "target": { "componentId": "inventory-store", "operationId": "read-balance" }, "protocol": "SQL", "referenceIds": ["stock-holds"] },
+      { "id": "increment-reserved-stock", "label": "UPDATE reserved quantity", "kind": "write", "source": { "componentId": "inventory-api", "operationId": "reserve" }, "target": { "componentId": "inventory-store", "operationId": "increment-reserved" }, "protocol": "SQL", "referenceIds": ["stock-holds"] },
+      { "id": "insert-stock-hold", "label": "INSERT stock hold", "kind": "write", "status": "changed", "source": { "componentId": "inventory-api", "operationId": "reserve" }, "target": { "componentId": "inventory-store", "operationId": "insert-hold" }, "protocol": "SQL", "referenceIds": ["stock-holds"] },
+      { "id": "check-reservation", "label": "Inspect reservation", "kind": "http", "description": "Retry inspects the existing hold instead of creating another reservation.", "source": { "componentId": "checkout-api", "operationId": "retry" }, "target": { "componentId": "inventory-api", "operationId": "get" }, "protocol": "HTTPS", "referenceIds": ["stock-holds", "payment-retry"] },
+      { "id": "read-stock-hold", "label": "SELECT live hold", "kind": "query", "source": { "componentId": "inventory-api", "operationId": "get" }, "target": { "componentId": "inventory-store", "operationId": "read-hold" }, "protocol": "SQL", "referenceIds": ["payment-retry"] },
+      { "id": "consume-reservation", "label": "Consume reservation", "kind": "http", "source": { "componentId": "checkout-api", "operationId": "complete" }, "target": { "componentId": "inventory-api", "operationId": "consume" }, "protocol": "HTTPS", "referenceIds": ["stock-holds"] },
+      { "id": "mark-hold-consumed", "label": "UPDATE hold consumed", "kind": "write", "source": { "componentId": "inventory-api", "operationId": "consume" }, "target": { "componentId": "inventory-store", "operationId": "consume-hold" }, "protocol": "SQL", "referenceIds": ["stock-holds"] },
+      { "id": "decrement-stock", "label": "UPDATE sold stock counters", "kind": "write", "source": { "componentId": "inventory-api", "operationId": "consume" }, "target": { "componentId": "inventory-store", "operationId": "consume-balance" }, "protocol": "SQL", "referenceIds": ["stock-holds"] },
+      { "id": "release-stock", "label": "Release reservation", "kind": "http", "status": "missing", "description": "Unexplored synthetic cancellation interface; no occurrence maps this wire.", "source": { "componentId": "checkout-api", "operationId": "release" }, "target": { "componentId": "inventory-api", "operationId": "release" }, "protocol": "HTTPS", "referenceIds": ["stock-holds"] },
+      { "id": "authorize-payment", "label": "Authorize payment", "kind": "http", "source": { "componentId": "checkout-api", "operationId": "submit" }, "target": { "componentId": "payment-gateway", "operationId": "authorize" }, "protocol": "HTTPS", "referenceIds": ["payment-retry"] },
+      { "id": "record-payment", "label": "INSERT first payment attempt", "kind": "write", "source": { "componentId": "checkout-api", "operationId": "submit" }, "target": { "componentId": "commerce-store", "operationId": "insert-payment" }, "protocol": "SQL", "referenceIds": ["payment-retry"] },
+      { "id": "submit-retry", "label": "Retry payment", "kind": "http", "source": { "componentId": "payment-form", "operationId": "retry" }, "target": { "componentId": "checkout-api", "operationId": "retry" }, "protocol": "HTTPS", "referenceIds": ["payment-retry"] },
+      { "id": "authorize-retry", "label": "Retry authorization", "kind": "http", "source": { "componentId": "checkout-api", "operationId": "retry" }, "target": { "componentId": "payment-gateway", "operationId": "authorize" }, "protocol": "HTTPS", "referenceIds": ["payment-retry"] },
+      { "id": "record-retry-payment", "label": "INSERT retry payment attempt", "kind": "write", "source": { "componentId": "checkout-api", "operationId": "retry" }, "target": { "componentId": "commerce-store", "operationId": "insert-payment" }, "protocol": "SQL", "referenceIds": ["payment-retry"] },
+      { "id": "finalize-checkout", "label": "Finalize authorization", "kind": "command", "description": "Synthetic in-process handoff within the checkout service.", "source": { "componentId": "checkout-api", "operationId": "submit" }, "target": { "componentId": "checkout-api", "operationId": "complete" }, "protocol": "In-process call", "referenceIds": ["payment-retry", "receipt-delivery"] },
+      { "id": "record-order", "label": "INSERT paid order", "kind": "write", "source": { "componentId": "checkout-api", "operationId": "complete" }, "target": { "componentId": "commerce-store", "operationId": "insert-order" }, "protocol": "SQL", "referenceIds": ["payment-retry", "receipt-delivery"] },
+      { "id": "publish-order", "label": "Publish OrderPaid.v1", "kind": "publish", "source": { "componentId": "checkout-api", "operationId": "complete" }, "target": { "componentId": "order-topic", "operationId": "publish" }, "protocol": "SNS Publish API", "referenceIds": ["receipt-delivery"] },
+      { "id": "fanout-order", "label": "SNS subscription to SQS", "kind": "publish", "source": { "componentId": "order-topic", "operationId": "fanout" }, "target": { "componentId": "checkout-events", "operationId": "enqueue" }, "protocol": "Raw message delivery (assumption)", "referenceIds": ["receipt-delivery"] },
+      { "id": "consume-order", "label": "SQS event to Lambda", "kind": "consume", "source": { "componentId": "checkout-events", "operationId": "deliver" }, "target": { "componentId": "receipt-worker", "operationId": "send" }, "protocol": "Logical event delivery", "referenceIds": ["receipt-delivery"] },
+      { "id": "send-receipt", "label": "Send receipt", "kind": "http", "source": { "componentId": "receipt-worker", "operationId": "send" }, "target": { "componentId": "email-delivery", "operationId": "send" }, "protocol": "HTTPS", "referenceIds": ["receipt-delivery"] },
+      { "id": "record-receipt", "label": "UPDATE email acceptance", "kind": "write", "source": { "componentId": "receipt-worker", "operationId": "send" }, "target": { "componentId": "commerce-store", "operationId": "update-receipt" }, "protocol": "SQL", "referenceIds": ["receipt-delivery"] },
+      { "id": "trace-checkout", "label": "Export checkout trace", "kind": "telemetry", "source": { "componentId": "checkout-api", "operationId": "submit" }, "target": { "componentId": "datadog", "operationId": "traces" }, "protocol": "OTLP (synthetic adapter)", "referenceIds": ["stock-holds"] },
+      { "id": "trace-retry", "label": "Export retry trace", "kind": "telemetry", "source": { "componentId": "checkout-api", "operationId": "retry" }, "target": { "componentId": "datadog", "operationId": "traces" }, "protocol": "OTLP (synthetic adapter)", "referenceIds": ["payment-retry"] },
+      { "id": "trace-inventory", "label": "Export reservation trace", "kind": "telemetry", "source": { "componentId": "inventory-api", "operationId": "reserve" }, "target": { "componentId": "datadog", "operationId": "traces" }, "protocol": "OTLP (synthetic adapter)", "referenceIds": ["stock-holds"] },
+      { "id": "trace-receipt", "label": "Export receipt trace", "kind": "telemetry", "source": { "componentId": "receipt-worker", "operationId": "send" }, "target": { "componentId": "datadog", "operationId": "traces" }, "protocol": "OTLP (synthetic adapter)", "referenceIds": ["receipt-delivery"] }
+    ],
+    "references": [
+      { "id": "cart-experience", "key": "CART-DEMO-101", "url": "https://example.com/work/CART-DEMO-101", "description": "Fictional illustrative work scope for basket screens, pricing, API updates, and persistence. Attachments describe coverage, not completion." },
+      { "id": "stock-holds", "key": "CART-DEMO-102", "description": "Fictional illustrative work scope for reserving stock and inspecting a live reservation during payment retry." },
+      { "id": "payment-retry", "key": "CART-DEMO-103", "url": "https://example.com/work/CART-DEMO-103", "description": "Fictional illustrative work scope spanning the checkout UI, orchestration, inventory checks, and payment-provider boundary." },
+      { "id": "receipt-delivery", "key": "CART-DEMO-104", "description": "Fictional illustrative work scope across order commitment, queue handoff, worker processing, and receipt acceptance. It establishes no dependency ordering." }
+    ]
+  },
+  "diagrams": [
+    {
+      "id": "shopping-cart-flow", "title": "From basket to receipt", "kind": "flow",
+      "nodes": [
+        { "id": "review", "label": "Open basket", "entityIds": ["cart"], "role": "start" },
+        { "id": "update", "label": "Set bottle quantity", "entityIds": ["cart"], "role": "action" },
+        { "id": "consider", "label": "Review before submitting", "entityIds": ["cart"], "role": "manualOperation" },
+        { "id": "reserve", "label": "Check stock hold", "entityIds": ["cart"], "role": "decision" },
+        { "id": "stock-rejected", "label": "Explain insufficient stock", "entityIds": ["cart"], "role": "end" },
+        { "id": "pay", "label": "Authorize payment attempt", "entityIds": ["cart", "payment"], "role": "decision" },
+        { "id": "retry-choice", "label": "Choose another payment method", "entityIds": ["cart", "payment"], "role": "inputOutput" },
+        { "id": "record-order", "label": "Commit paid order", "entityIds": ["cart", "payment", "order"], "role": "database" },
+        { "id": "publish", "label": "Queue receipt work", "entityIds": ["order"], "role": "action" },
+        { "id": "receipt", "label": "Submit receipt email", "entityIds": ["order"], "role": "document" },
+        { "id": "confirmation", "label": "View order confirmation", "entityIds": ["cart", "order"], "role": "end" }
+      ],
+      "edges": [
+        { "id": "review-update", "sourceNodeId": "review", "targetNodeId": "update", "label": "Change quantity" },
+        { "id": "review-consider", "sourceNodeId": "review", "targetNodeId": "consider", "label": "Keep current quantity" },
+        { "id": "update-consider", "sourceNodeId": "update", "targetNodeId": "consider", "label": "Price shown" },
+        { "id": "consider-reserve", "sourceNodeId": "consider", "targetNodeId": "reserve", "label": "Submit checkout or retry" },
+        { "id": "consider-pay-current", "sourceNodeId": "consider", "targetNodeId": "pay", "label": "Current: authorize without a hold" },
+        { "id": "reserve-rejected", "sourceNodeId": "reserve", "targetNodeId": "stock-rejected", "label": "Insufficient stock" },
+        { "id": "reserve-pay", "sourceNodeId": "reserve", "targetNodeId": "pay", "label": "Live hold" },
+        { "id": "pay-retry", "sourceNodeId": "pay", "targetNodeId": "retry-choice", "label": "Declined" },
+        { "id": "retry-consider", "sourceNodeId": "retry-choice", "targetNodeId": "consider", "label": "Another method selected" },
+        { "id": "pay-record", "sourceNodeId": "pay", "targetNodeId": "record-order", "label": "Authorized" },
+        { "id": "record-publish", "sourceNodeId": "record-order", "targetNodeId": "publish", "label": "Order committed" },
+        { "id": "publish-receipt", "sourceNodeId": "publish", "targetNodeId": "receipt", "label": "Event consumed" },
+        { "id": "receipt-confirmation", "sourceNodeId": "receipt", "targetNodeId": "confirmation", "label": "Shopper opens confirmation" }
+      ],
+      "groups": [
+        { "id": "checkout-work", "label": "Checkout", "nodeIds": ["reserve", "stock-rejected", "pay", "retry-choice", "record-order"] },
+        { "id": "receipt-work", "label": "Asynchronous receipt", "nodeIds": ["publish", "receipt"] }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "cart-checkout-success", "title": "Two bottles, first payment accepted", "labels": ["CART-DEMO-102", "Proposed", "Happy path", "Synthetic"],
+      "description": "Synthetic proposed recording. Noor opens cart-201, increases the bottle quantity from one to two, and checks out for EUR 49.00. Assume Inventory accepts a five-minute hold before payment authorization. Target contracts and instrumentation are assumptions; missing fields identify work still requiring a decision. The order commits, SNS delivers the receipt event to SQS, and Lambda submits the receipt before Noor opens confirmation. Email acceptance does not establish inbox arrival. Local review explicitly maps no Wiring elements.",
+      "diagramId": "shopping-cart-flow",
+      "occurrences": [
+        {
+          "id": "success-open", "nodeId": "review", "incomingEdgeId": null, "trigger": "Noor opens /cart",
+          "narration": "The storefront reads the existing one-bottle basket. Capturing it introduces cart-201 into this recording; it does not mean the basket was created by this read.",
+          "changeSummary": "The existing basket becomes captured; no business state changes.",
+          "wiringRefs": { "connectionIds": ["load-cart", "persist-cart"], "screenRefs": [{ "componentId": "storefront", "screenId": "cart" }] },
+          "before": { "instances": [], "links": [] },
+          "after": { "instances": [{ "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 1, "totalMinor": 2450, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "success-quantity", "nodeId": "update", "incomingEdgeId": "review-update", "trigger": "Quantity set to 2",
+          "narration": "The Cart API uses the illustrative pricing library and persists two bottles at 2450 cents each. Editing the basket does not hold stock.",
+          "wiringRefs": { "connectionIds": ["update-cart", "quote-prices", "write-cart", "write-cart-total"], "screenRefs": [{ "componentId": "storefront", "screenId": "cart" }] },
+          "methodCalls": [{ "entityId": "cart", "methodId": "set-quantity", "instanceId": "cart-201" }],
+          "before": { "instances": [{ "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 1, "totalMinor": 2450, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "success-local-review", "nodeId": "consider", "incomingEdgeId": "update-consider", "trigger": "Noor checks the displayed total",
+          "narration": "Noor reviews the already displayed EUR 49.00 total. This recorded human pause explicitly maps no Wiring elements. It is not a claim that the browser ceased to exist.",
+          "wiringRefs": {},
+          "before": { "instances": [{ "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "success-reserve", "nodeId": "reserve", "incomingEdgeId": "consider-reserve", "trigger": "POST /carts/cart-201/checkout",
+          "narration": "The checkout submission requests two units from Inventory. Inventory accepts hold hold-201 for five minutes, so authorization can proceed.",
+          "wiringRefs": { "connectionIds": ["start-checkout", "reserve-stock", "read-stock", "increment-reserved-stock", "insert-stock-hold", "trace-checkout", "trace-inventory"], "screenRefs": [{ "componentId": "storefront", "screenId": "checkout" }] },
+          "before": { "instances": [{ "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "awaiting-payment", "reservation": "hold-201" } }], "links": [] }
+        },
+        {
+          "id": "success-authorize", "nodeId": "pay", "incomingEdgeId": "reserve-pay", "trigger": "DemoPay authorizes attempt pay-201",
+          "narration": "DemoPay authorizes 4900 cents for the first attempt. This is a recorded authorization result, not evidence of settlement or receipt delivery.",
+          "wiringRefs": { "connectionIds": ["authorize-payment", "record-payment"] },
+          "before": { "instances": [{ "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "awaiting-payment", "reservation": "hold-201" } }], "links": [] },
+          "after": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "authorized", "reservation": "hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }] }
+        },
+        {
+          "id": "success-commit", "nodeId": "record-order", "incomingEdgeId": "pay-record", "trigger": "Authorization accepted by checkout",
+          "narration": "Checkout invokes its internal completion capability and commits paid order order-201. The self-connection describes an internal handoff, not another deployed service. The stock hold is consumed by this assumed completion responsibility.",
+          "wiringRefs": { "connectionIds": ["finalize-checkout", "consume-reservation", "mark-hold-consumed", "decrement-stock", "record-order"] },
+          "before": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "authorized", "reservation": "hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }] },
+          "after": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-201", "entityId": "order", "values": { "status": "paid", "receipt": "pending-publication" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-201", "targetInstanceId": "order-201" }] }
+        },
+        {
+          "id": "success-publish", "nodeId": "publish", "incomingEdgeId": "record-publish", "trigger": "Paid order is durable",
+          "narration": "Checkout publishes a paid-order event to SNS, and the assumed raw subscription delivers it to SQS. The worker and email provider are later in the recording; publication and fan-out alone do not establish consumption at this step.",
+          "wiringRefs": { "connectionIds": ["publish-order", "fanout-order"] },
+          "before": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-201", "entityId": "order", "values": { "status": "paid", "receipt": "pending-publication" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-201", "targetInstanceId": "order-201" }] },
+          "after": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-201", "entityId": "order", "values": { "status": "paid", "receipt": "queued" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-201", "targetInstanceId": "order-201" }] }
+        },
+        {
+          "id": "success-receipt", "nodeId": "receipt", "incomingEdgeId": "publish-receipt", "trigger": "Receipt worker receives the event",
+          "narration": "The worker consumes the event, submits a receipt to DemoMail, and stores the accepted result. No browser action is mapped here even though the cart remains in the snapshot.",
+          "wiringRefs": { "connectionIds": ["consume-order", "send-receipt", "record-receipt", "trace-receipt"] },
+          "before": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-201", "entityId": "order", "values": { "status": "paid", "receipt": "queued" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-201", "targetInstanceId": "order-201" }] },
+          "after": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-201", "entityId": "order", "values": { "status": "paid", "receipt": "accepted-by-provider" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-201", "targetInstanceId": "order-201" }] }
+        },
+        {
+          "id": "success-confirmation", "nodeId": "confirmation", "incomingEdgeId": "receipt-confirmation", "trigger": "Noor views order-201",
+          "narration": "Noor opens the confirmation screen, which reads the accepted order summary through the Cart API. This synthetic request is an authored assumption. The confirmation read maps its own wire independently of the basket-screen read.",
+          "wiringRefs": { "connectionIds": ["read-confirmation"] },
+          "before": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-201", "entityId": "order", "values": { "status": "paid", "receipt": "accepted-by-provider" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-201", "targetInstanceId": "order-201" }] },
+          "after": { "instances": [
+            { "id": "cart-201", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-201" } },
+            { "id": "pay-201", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-201", "entityId": "order", "values": { "status": "paid", "receipt": "accepted-by-provider" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-201", "targetInstanceId": "pay-201" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-201", "targetInstanceId": "order-201" }] }
+        }
+      ]
+    },
+    {
+      "id": "cart-stock-rejected", "title": "A stale basket exceeds available stock", "labels": ["CART-DEMO-101", "Proposed", "Stock rejected", "Synthetic"],
+      "description": "Synthetic recording. Imani increases cart-202 from one bottle to three for EUR 73.50. Assume only two units remain when checkout requests a stock hold. Inventory rejects the request atomically, and the UI explains that quantity must change. No payment attempt or order is created. The recording stops at this feedback; it does not predict the shopper's next action.",
+      "diagramId": "shopping-cart-flow",
+      "occurrences": [
+        {
+          "id": "stock-open", "nodeId": "review", "incomingEdgeId": null, "trigger": "Imani opens /cart",
+          "narration": "The browser reads a previously saved one-bottle basket. No stock is reserved by this read.",
+          "wiringRefs": { "connectionIds": ["load-cart", "persist-cart"], "screenRefs": [{ "componentId": "storefront", "screenId": "cart" }] },
+          "before": { "instances": [], "links": [] },
+          "after": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 1, "totalMinor": 2450, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "stock-quantity", "nodeId": "update", "incomingEdgeId": "review-update", "trigger": "Quantity set to 3",
+          "narration": "The Cart API prices and saves three bottles. Basket edits do not guarantee availability at checkout, so the displayed EUR 73.50 total can coexist with insufficient stock.",
+          "wiringRefs": { "connectionIds": ["update-cart", "quote-prices", "write-cart", "write-cart-total"] },
+          "methodCalls": [{ "entityId": "cart", "methodId": "set-quantity", "instanceId": "cart-202" }],
+          "before": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 1, "totalMinor": 2450, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 3, "totalMinor": 7350, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "stock-local-review", "nodeId": "consider", "incomingEdgeId": "update-consider", "trigger": "Imani reviews the basket",
+          "narration": "Imani pauses before submitting the three-bottle basket. The author explicitly maps no Wiring elements for this human review.",
+          "wiringRefs": {},
+          "before": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 3, "totalMinor": 7350, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 3, "totalMinor": 7350, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "stock-reserve-rejected", "nodeId": "reserve", "incomingEdgeId": "consider-reserve", "trigger": "POST /carts/cart-202/checkout",
+          "narration": "Inventory finds two units available against a request for three and rejects the hold. Checkout stops before calling DemoPay. The basket stays editable and its reservation remains null.",
+          "wiringRefs": { "connectionIds": ["start-checkout", "reserve-stock", "read-stock", "trace-checkout", "trace-inventory"], "screenRefs": [{ "componentId": "storefront", "screenId": "checkout" }] },
+          "before": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 3, "totalMinor": 7350, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 3, "totalMinor": 7350, "currency": "EUR", "status": "stock-rejected", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "stock-feedback", "nodeId": "stock-rejected", "incomingEdgeId": "reserve-rejected", "trigger": "Stock response shown",
+          "narration": "The checkout screen explains that only two bottles are available. This visit maps the checkout screen displaying the recorded stock rejection. Payment, queue, and receipt elements remain outside this scenario's mapped scope.",
+          "wiringRefs": { "screenRefs": [{ "componentId": "storefront", "screenId": "checkout" }] },
+          "before": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 3, "totalMinor": 7350, "currency": "EUR", "status": "stock-rejected", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-202", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 3, "totalMinor": 7350, "currency": "EUR", "status": "stock-rejected", "reservation": null } }], "links": [] }
+        }
+      ]
+    },
+    {
+      "id": "cart-payment-retry", "title": "A different payment method succeeds", "labels": ["CART-DEMO-103", "Proposed", "Payment retry", "Synthetic"],
+      "description": "Synthetic recording. Ellis checks out the existing two-bottle cart-203 for EUR 49.00. Assume hold-203 remains valid throughout the retry. The first payment is declined for insufficient funds; Ellis chooses another tokenized method. Checkout inspects the same hold, authorizes a new attempt, and commits one order. Both payment attempts remain captured. Wiring mapping is intentionally not recorded for retry-second-review; every other occurrence has an explicit mapping.",
+      "diagramId": "shopping-cart-flow",
+      "occurrences": [
+        {
+          "id": "retry-open", "nodeId": "review", "incomingEdgeId": null, "trigger": "Ellis opens /cart",
+          "narration": "The storefront reads the existing two-bottle basket. The pricing library is outside this scenario's mapped scope because this recording makes no quantity change or repricing call.",
+          "wiringRefs": { "connectionIds": ["load-cart", "persist-cart"], "screenRefs": [{ "componentId": "storefront", "screenId": "cart" }] },
+          "before": { "instances": [], "links": [] },
+          "after": { "instances": [{ "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "retry-first-review", "nodeId": "consider", "incomingEdgeId": "review-consider", "trigger": "Ellis opens checkout",
+          "narration": "Ellis reviews the checkout screen and selects the first saved payment method. Only the screen is mapped for this visit; its owner becomes relevant without implying a checkout submission yet.",
+          "wiringRefs": { "screenRefs": [{ "componentId": "storefront", "screenId": "checkout" }] },
+          "before": { "instances": [{ "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "retry-first-reserve", "nodeId": "reserve", "incomingEdgeId": "consider-reserve", "trigger": "POST /carts/cart-203/checkout",
+          "narration": "Inventory accepts hold-203 for two bottles. This first visit creates the hold; the later visit to the same diagram node only checks it.",
+          "wiringRefs": { "connectionIds": ["start-checkout", "reserve-stock", "read-stock", "increment-reserved-stock", "insert-stock-hold", "trace-checkout", "trace-inventory"] },
+          "before": { "instances": [{ "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "awaiting-payment", "reservation": "hold-203" } }], "links": [] }
+        },
+        {
+          "id": "retry-first-payment", "nodeId": "pay", "incomingEdgeId": "reserve-pay", "trigger": "DemoPay declines pay-203-a",
+          "narration": "The first authorization returns insufficient_funds. The declined attempt is recorded and the stock hold remains live. No paid order exists at this point.",
+          "wiringRefs": { "connectionIds": ["authorize-payment", "record-payment"] },
+          "before": { "instances": [{ "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "awaiting-payment", "reservation": "hold-203" } }], "links": [] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "payment-declined", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }] }
+        },
+        {
+          "id": "retry-choose-method", "nodeId": "retry-choice", "incomingEdgeId": "pay-retry", "trigger": "Ellis selects another saved method",
+          "narration": "The checkout screen offers another tokenized method. The snapshot records no token or card data. Choosing the method does not yet invoke the retry endpoint.",
+          "wiringRefs": { "screenRefs": [{ "componentId": "storefront", "screenId": "checkout" }] },
+          "before": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "payment-declined", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "payment-declined", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }] }
+        },
+        {
+          "id": "retry-second-review", "nodeId": "consider", "incomingEdgeId": "retry-consider", "trigger": "Ellis pauses before retrying",
+          "narration": "Ellis reviews the retry choice. Wiring mapping was not recorded for this occurrence, so its missing mapping is different from an explicit empty mapping. Current Wiring emphasis clears here even though the previous visit mapped the checkout screen.",
+          "before": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "payment-declined", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "payment-declined", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }] }
+        },
+        {
+          "id": "retry-check-existing-hold", "nodeId": "reserve", "incomingEdgeId": "consider-reserve", "trigger": "POST /carts/cart-203/payment-attempts",
+          "narration": "The retry endpoint checks hold-203 and finds it still valid. The existing hold is reused. This repeated reserve-node visit maps Inventory's get operation, not its reserve operation; the parallel check-reservation connection is independently relevant.",
+          "wiringRefs": { "connectionIds": ["submit-retry", "check-reservation", "read-stock-hold", "trace-retry"] },
+          "before": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "payment-declined", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "awaiting-payment", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }] }
+        },
+        {
+          "id": "retry-second-payment", "nodeId": "pay", "incomingEdgeId": "reserve-pay", "trigger": "DemoPay authorizes pay-203-b",
+          "narration": "DemoPay authorizes a new 4900-cent attempt using the selected method. The first declined attempt remains captured. The two visits share a diagram node but map different payment connections and checkout operations.",
+          "wiringRefs": { "connectionIds": ["authorize-retry", "record-retry-payment"] },
+          "before": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "awaiting-payment", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "authorized", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }] }
+        },
+        {
+          "id": "retry-commit", "nodeId": "record-order", "incomingEdgeId": "pay-record", "trigger": "Retry authorization accepted",
+          "narration": "Checkout's completion capability commits one paid order and consumes hold-203. The retry operation and completion operation are explicitly mapped; the first-attempt internal self-connection is not inferred for this visit.",
+          "wiringRefs": { "connectionIds": ["consume-reservation", "mark-hold-consumed", "decrement-stock", "record-order"], "operationRefs": [{ "componentId": "checkout-api", "operationId": "retry" }, { "componentId": "checkout-api", "operationId": "complete" }] },
+          "before": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "authorized", "reservation": "hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-203", "entityId": "order", "values": { "status": "paid", "receipt": "pending-publication" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-203", "targetInstanceId": "order-203" }] }
+        },
+        {
+          "id": "retry-publish", "nodeId": "publish", "incomingEdgeId": "record-publish", "trigger": "Order order-203 is durable",
+          "narration": "Checkout publishes the committed order event to SNS, and the assumed subscription enqueues it in SQS. A declined attempt in the snapshot does not imply another gateway call. The receipt worker consumes the event at a later recorded step.",
+          "wiringRefs": { "connectionIds": ["publish-order", "fanout-order"] },
+          "before": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-203", "entityId": "order", "values": { "status": "paid", "receipt": "pending-publication" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-203", "targetInstanceId": "order-203" }] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-203", "entityId": "order", "values": { "status": "paid", "receipt": "queued" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-203", "targetInstanceId": "order-203" }] }
+        },
+        {
+          "id": "retry-receipt", "nodeId": "receipt", "incomingEdgeId": "publish-receipt", "trigger": "Worker handles order-203 event",
+          "narration": "The receipt worker submits the paid order's receipt and records DemoMail acceptance. The two payment attempts remain business history, not Wiring usage inferred from their presence.",
+          "wiringRefs": { "connectionIds": ["consume-order", "send-receipt", "record-receipt", "trace-receipt"] },
+          "before": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-203", "entityId": "order", "values": { "status": "paid", "receipt": "queued" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-203", "targetInstanceId": "order-203" }] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-203", "entityId": "order", "values": { "status": "paid", "receipt": "accepted-by-provider" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-203", "targetInstanceId": "order-203" }] }
+        },
+        {
+          "id": "retry-confirmation", "nodeId": "confirmation", "incomingEdgeId": "receipt-confirmation", "trigger": "Ellis views the accepted order",
+          "narration": "Ellis opens order confirmation after the receipt submission. This screen-only mapping does not infer Cart API participation. Rewinding to earlier visits recomputes their earlier/current/later emphasis without moving the shared Wiring geometry.",
+          "wiringRefs": { "screenRefs": [{ "componentId": "storefront", "screenId": "confirmation" }] },
+          "before": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-203", "entityId": "order", "values": { "status": "paid", "receipt": "accepted-by-provider" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-203", "targetInstanceId": "order-203" }] },
+          "after": { "instances": [
+            { "id": "cart-203", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "converted", "reservation": "consumed:hold-203" } },
+            { "id": "pay-203-a", "entityId": "payment", "values": { "status": "declined", "amountMinor": 4900, "declineCode": "insufficient_funds" } },
+            { "id": "pay-203-b", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } },
+            { "id": "order-203", "entityId": "order", "values": { "status": "paid", "receipt": "accepted-by-provider" } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-a" }, { "relationshipId": "cart-payments", "sourceInstanceId": "cart-203", "targetInstanceId": "pay-203-b" }, { "relationshipId": "cart-order", "sourceInstanceId": "cart-203", "targetInstanceId": "order-203" }] }
+        }
+      ]
+    },
+    {
+      "id": "cart-current-no-hold", "title": "Current: authorization without a hold", "labels": ["CART-DEMO-104", "Current", "No stock hold", "Synthetic"],
+      "description": "Synthetic current-behavior recording. Assume Noor edits a one-bottle cart to two bottles for EUR 49.00. Checkout authorizes the payment without asking Inventory to hold stock. The recording stops at authorization and establishes neither stock availability nor order completion. Compare the proposed successful recording for the assumed stock-hold path. Current and Proposed are authored scenario labels, not computed Wiring versions.",
+      "diagramId": "shopping-cart-flow",
+      "occurrences": [
+        {
+          "id": "current-open", "nodeId": "review", "incomingEdgeId": null, "trigger": "Noor opens /cart",
+          "narration": "The Angular basket screen reads the existing one-bottle cart. The SQL read introduces its captured state without reserving stock.",
+          "wiringRefs": { "connectionIds": ["load-cart", "persist-cart"], "screenRefs": [{ "componentId": "storefront", "screenId": "cart" }] },
+          "before": { "instances": [], "links": [] },
+          "after": { "instances": [{ "id": "cart-204", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 1, "totalMinor": 2450, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "current-quantity", "nodeId": "update", "incomingEdgeId": "review-update", "trigger": "Quantity set to 2",
+          "narration": "The quantity component calls the basket endpoint. The pricing library supplies EUR 49.00, and the assumed cart transaction updates line quantity, total, and version through separate SQL operations.",
+          "wiringRefs": { "connectionIds": ["update-cart", "quote-prices", "write-cart", "write-cart-total"] },
+          "methodCalls": [{ "entityId": "cart", "methodId": "set-quantity", "instanceId": "cart-204" }],
+          "before": { "instances": [{ "id": "cart-204", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 1, "totalMinor": 2450, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-204", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "current-review", "nodeId": "consider", "incomingEdgeId": "update-consider", "trigger": "Noor reviews the displayed total",
+          "narration": "Noor reviews EUR 49.00 before submitting. This human pause has an explicit empty Wiring mapping.",
+          "wiringRefs": {},
+          "before": { "instances": [{ "id": "cart-204", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [{ "id": "cart-204", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] }
+        },
+        {
+          "id": "current-authorize", "nodeId": "pay", "incomingEdgeId": "consider-pay-current", "trigger": "POST /carts/cart-204/checkout",
+          "narration": "Assume the current checkout path calls DemoPay directly and stores an authorized payment attempt. No Inventory call or stock write is recorded. The synthetic checkout trace labels the hold outcome unreserved. Authorization alone gives no assurance that both bottles remain available.",
+          "wiringRefs": { "connectionIds": ["start-checkout", "authorize-payment", "record-payment", "trace-checkout"], "screenRefs": [{ "componentId": "storefront", "screenId": "checkout" }] },
+          "before": { "instances": [{ "id": "cart-204", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "open", "reservation": null } }], "links": [] },
+          "after": { "instances": [
+            { "id": "cart-204", "entityId": "cart", "values": { "sku": "BOTTLE-SAGE", "quantity": 2, "totalMinor": 4900, "currency": "EUR", "status": "authorized", "reservation": null } },
+            { "id": "pay-204", "entityId": "payment", "values": { "status": "authorized", "amountMinor": 4900, "declineCode": null } }
+          ], "links": [{ "relationshipId": "cart-payments", "sourceInstanceId": "cart-204", "targetInstanceId": "pay-204" }] }
+        }
+      ]
+    }
+  ]
+}

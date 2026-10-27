@@ -22,8 +22,8 @@ impl Explanation {
     pub(crate) fn validate_method_calls(&self) -> Result<(), String> {
         let methods: HashMap<_, HashSet<_>> = self
             .domain
-            .entities
             .iter()
+            .flat_map(|domain| &domain.entities)
             .map(|entity| {
                 (
                     entity.id.as_str(),

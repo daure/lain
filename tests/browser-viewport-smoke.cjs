@@ -5,7 +5,7 @@ const { pathToFileURL } = require('node:url');
 const { chromium } = require(process.env.LAIN_PLAYWRIGHT_MODULE || 'playwright');
 
 async function geometry(page) {
-  return page.locator('.viewport-enabled').evaluate(canvas => {
+  return page.locator('.viewport-enabled:visible').evaluate(canvas => {
     const region = canvas.querySelector('.viewport-scroll');
     const content = canvas.querySelector('.viewport-content');
     const scale = Number(canvas.dataset.scale);
@@ -46,7 +46,7 @@ async function assertActualSize(page) {
     assert.ok(Math.abs(scroll - expected) <= 1, `bounded canvas: ${JSON.stringify(bounds)}`);
     assert.ok(Math.abs(origin - (extent <= viewport ? (viewport - extent) / 2 : 20)) < 1, JSON.stringify(bounds));
   }
-  await page.locator('.viewport-scroll').evaluate(region => {
+  await page.locator('.viewport-scroll:visible').evaluate(region => {
     region.scrollLeft = region.scrollWidth;
     region.scrollTop = region.scrollHeight;
   });
@@ -54,7 +54,7 @@ async function assertActualSize(page) {
   assert.equal(end.left, end.scrollWidth - end.width);
   assert.equal(end.top, end.scrollHeight - end.height);
   if (await page.locator('.sequence').count()) {
-    const alignment = await page.locator('.viewport-enabled').evaluate(canvas => {
+    const alignment = await page.locator('.viewport-enabled:visible').evaluate(canvas => {
       const headings = [...canvas.querySelectorAll('.sequence-participant > rect')];
       const lifelines = [...canvas.querySelectorAll('.sequence-lifeline')];
       return headings.map((heading, index) => {
@@ -139,7 +139,7 @@ async function main() {
         await page.getByRole('button', { name: 'Zoom to 100% and focus', exact: true }).click();
         for (const zoom of [false, true]) {
           if (zoom) await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
-          await page.locator('.viewport-scroll').evaluate(region => {
+          await page.locator('.viewport-scroll:visible').evaluate(region => {
             region.scrollLeft = (region.scrollWidth - region.clientWidth) / 2;
             region.scrollTop = Math.min(80, region.scrollHeight - region.clientHeight);
           });
@@ -167,9 +167,9 @@ async function main() {
         }
       }
       await page.emulateMedia({ reducedMotion: 'no-preference' });
-      await page.locator('.viewport-scroll').evaluate(region => { region.scrollLeft = 0; });
+      await page.locator('.viewport-scroll:visible').evaluate(region => { region.scrollLeft = 0; });
       await page.waitForFunction(() => getComputedStyle(document.querySelector('.lane-heading-shadow')).opacity === '0');
-      await page.locator('.viewport-scroll').evaluate(region => { region.scrollLeft = (region.scrollWidth - region.clientWidth) / 2; });
+      await page.locator('.viewport-scroll:visible').evaluate(region => { region.scrollLeft = (region.scrollWidth - region.clientWidth) / 2; });
       await page.waitForFunction(() => document.querySelector('.lane-heading.is-sticky'));
       const fade = await page.locator('.lane-heading-shadow').first().evaluate(shadow => ({
         opacity: Number(getComputedStyle(shadow).opacity), duration: getComputedStyle(shadow).transitionDuration,
@@ -177,7 +177,7 @@ async function main() {
       assert.equal(fade.duration, '0.2s', 'sticky shadow fades rather than appearing immediately');
       assert.ok(fade.opacity < 1, 'shadow begins below full opacity');
       await page.waitForFunction(() => getComputedStyle(document.querySelector('.lane-heading-shadow')).opacity === '1');
-      await page.locator('.viewport-scroll').evaluate(region => { region.scrollLeft = 0; });
+      await page.locator('.viewport-scroll:visible').evaluate(region => { region.scrollLeft = 0; });
       await page.waitForFunction(() => getComputedStyle(document.querySelector('.lane-heading-shadow')).opacity === '0');
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.screenshot({ path: `/tmp/opencode/lain-sticky-swimlanes-${width}.png` });

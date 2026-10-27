@@ -1,10 +1,10 @@
-import type { Explanation, Occurrence } from './model';
+import type { Domain, Occurrence } from './model';
 import { compareInstances, formatValue, type AttributeChange } from './snapshots';
 
 export type PropertyEffect = AttributeChange & { instanceId: string; description: string };
 export type EntityActivity = { properties: Map<string, PropertyEffect[]>; methods: Map<string, string[]> };
 
-export function domainActivity(domain: Explanation['domain'], occurrence?: Occurrence) {
+export function domainActivity(domain: Domain, occurrence?: Occurrence) {
   const entities = new Map<string, EntityActivity>();
   const activityFor = (id: string) => {
     if (!entities.has(id)) entities.set(id, { properties: new Map(), methods: new Map() });

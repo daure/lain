@@ -63,7 +63,7 @@ export function compareLinks(document: Explanation, before: Snapshot, after: Sna
   const next = new Map(after.links.map(link => [key(link), link]));
   return [...new Set([...previous.keys(), ...next.keys()])].map(id => {
     const link = (next.get(id) ?? previous.get(id))!;
-    const relationship = document.domain.relationships.find(item => item.id === link.relationshipId)!;
+    const relationship = document.domain!.relationships.find(item => item.id === link.relationshipId)!;
     return {
       id,
       label: `${link.sourceInstanceId} → ${relationship.label} → ${link.targetInstanceId}`,

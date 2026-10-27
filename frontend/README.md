@@ -21,8 +21,10 @@ Library deletion requires user confirmation, then sends bodyless `DELETE /api/ex
 
 Sequence diagrams render participant lifelines and message arrows from structured data. Scenario occurrence IDs identify message rows, including repeated sends. Compact views show the previous and current messages.
 
+All chart canvases support two-finger pinch/stretch and trackpad pinch around the gesture position. Gesture zoom uses the controls' zoom bounds and exits fit mode while preserving the recorded occurrence.
+
 Human/system icons precede participant labels inside their boxes. Lifelines are dashed. Calls use solid filled arrows; asynchronous sends use solid open arrows; replies use dashed open arrows. Scenario relevance changes color and opacity while preserving semantic line styles. Omitted kinds use system participants and call messages. Chart exports retain the same icons and notation.
 
-Chart export menus offer Scenario only or All scenarios, then SVG, PNG, or PDF. The UI downloads through the local export endpoints. Each file contains the full current Diagram or Domain chart in the active theme, without playback or inspection state. Scenario only preserves off-path muting. SVG is vector artwork; PNG and PDF use bounded high-resolution images. The daemon requires Chrome/Chromium on PATH or `LAIN_CHROMIUM_EXECUTABLE`.
+Chart export menus offer Scenario only or All scenarios, then SVG, PNG, or PDF. The UI downloads through the local export endpoints. Each file contains the full current Diagram, Domain, or Wiring chart in the active theme, without playback or inspection state. Scenario only preserves off-path muting. SVG is vector artwork; PNG and PDF use bounded high-resolution images. The daemon requires Chrome/Chromium on PATH or `LAIN_CHROMIUM_EXECUTABLE`.
 
 Tests cover browser wiring, live invalidations and fetch races, route restoration, cursor preservation, sequence message selection, snapshot semantics, explicit revisit selection, off-path inspection, chart export, and hostile authored text. After building the frontend and running `cargo build` at the repository root, `node ../tests/chart-export-browser.cjs` verifies themed downloads with Playwright against an isolated daemon and runtime home. Set `LAIN_PLAYWRIGHT_MODULE`, `LAIN_BINARY`, or `LAIN_CHROMIUM_EXECUTABLE` when using external installations.

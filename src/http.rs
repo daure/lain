@@ -57,6 +57,7 @@ pub fn router(service: AppService, port: u16) -> Router {
             get(export_diagram),
         )
         .route("/api/explanations/{id}/domain/export", get(export_domain))
+        .route("/api/explanations/{id}/wiring/export", get(export_wiring))
         .merge(crate::mcp::router(service).with_state(()))
         .fallback(static_asset)
         .with_state(state.clone())
@@ -148,6 +149,14 @@ async fn export_domain(
     options: Result<Query<ExportOptions>, QueryRejection>,
 ) -> Response {
     export_response(state, id, ExportTarget::Domain, options).await
+}
+
+async fn export_wiring(
+    State(state): State<HttpState>,
+    Path(id): Path<String>,
+    options: Result<Query<ExportOptions>, QueryRejection>,
+) -> Response {
+    export_response(state, id, ExportTarget::Wiring, options).await
 }
 
 async fn export_response(

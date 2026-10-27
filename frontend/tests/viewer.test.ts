@@ -57,18 +57,18 @@ describe('recorded traversal', () => {
 describe('concrete state', () => {
   it('distinguishes uncaptured attributes, null, instance creation, and removal', () => {
     const success = document.scenarios[0]!;
-    const received = compareInstances(document.domain.entities, success.occurrences[0]!.before, success.occurrences[0]!.after);
+    const received = compareInstances(document.domain!.entities, success.occurrences[0]!.before, success.occurrences[0]!.after);
     const receipt = received.find(item => item.id === 'rcpt-481')!;
     expect(receipt.change).toBe('created');
     expect(formatValue(receipt.attributes.find(item => item.id === 'responseStatus')!.before)).toBe('Absent');
     expect(formatValue(receipt.attributes.find(item => item.id === 'responseStatus')!.after)).toBe('null');
     const capture = success.occurrences[2]!;
-    const failure = compareInstances(document.domain.entities, capture.before, capture.after).find(item => item.id === 'pay-72')!.attributes.find(item => item.id === 'failureReason')!;
+    const failure = compareInstances(document.domain!.entities, capture.before, capture.after).find(item => item.id === 'pay-72')!.attributes.find(item => item.id === 'failureReason')!;
     expect(failure.change).toBe('changed');
     expect(formatValue(failure.before)).toBe('Uncaptured');
     expect(formatValue(failure.after)).toBe('null');
     const closed = document.scenarios[3]!.occurrences[3]!;
-    const removed = compareInstances(document.domain.entities, closed.before, closed.after).find(item => item.id === 'ful-31')!;
+    const removed = compareInstances(document.domain!.entities, closed.before, closed.after).find(item => item.id === 'ful-31')!;
     expect(removed.change).toBe('removed');
     expect(removed.attributes.map(attribute => formatValue(attribute.after))).toEqual(['Absent', 'Absent']);
     expect(compareLinks(document, closed.before, closed.after).map(link => link.change)).toEqual(['removed', 'removed', 'unchanged']);

@@ -14,6 +14,7 @@ const props = defineProps<{
   scenarioTitle?: string;
   currentNodeId?: string;
   currentOccurrenceId?: string;
+  inspectedNodeId?: string;
   visitedNodeIds?: string[];
   visitedEdgeIds?: string[];
   scenarioNodeIds?: string[];
@@ -127,9 +128,9 @@ function edgeMarker(id: string) {
       </g>
       <g v-for="node in layout.nodes" :key="node.id" class="scenario-jump-target" :transform="`translate(${node.x - node.width / 2},${node.y - node.height / 2})`">
       <g :data-node-id="node.id"
-         :class="['graph-node', { 'state-marker': node.stateRole, current: node.id === currentNodeId, visited: visitedNodeIds?.includes(node.id), interactive, 'on-scenario': scenarioNodeIds?.includes(node.id), 'off-scenario': scenarioNodeIds !== undefined && !scenarioNodeIds.includes(node.id) }]"
+         :class="['graph-node', { 'state-marker': node.stateRole, inspected: node.id === inspectedNodeId, current: node.id === currentNodeId, visited: visitedNodeIds?.includes(node.id), interactive, 'on-scenario': scenarioNodeIds?.includes(node.id), 'off-scenario': scenarioNodeIds !== undefined && !scenarioNodeIds.includes(node.id) }]"
          :role="interactive ? 'button' : undefined" :tabindex="interactive ? 0 : undefined"
-         :aria-label="nodeLabel(node)" @click="interactive && emit('select', node.id)"
+         :aria-label="nodeLabel(node)" :aria-pressed="interactive ? node.id === inspectedNodeId : undefined" @click="interactive && emit('select', node.id)"
           @keydown.enter="interactive && activateDiagramNode($event, links?.get(node.id), () => emit('select', node.id), id => emit('open', id))" @keydown.space.prevent="interactive && emit('select', node.id)">
          <template v-if="node.stateRole">
            <title>{{ nodeLabel(node) }}</title>

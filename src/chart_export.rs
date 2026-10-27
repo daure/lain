@@ -26,6 +26,7 @@ use tokio_tungstenite::{
 use crate::{
     model::{Diagram, Domain, Explanation, Scenario, validate_id},
     service::ServiceError,
+    wiring::Wiring,
 };
 
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -67,11 +68,13 @@ pub struct ExportOptions {
     #[serde(default)]
     pub theme: ExportTheme,
     pub scenario_id: Option<String>,
+    pub occurrence_id: Option<String>,
 }
 
 pub enum ExportTarget {
     Diagram(String),
     Domain,
+    Wiring,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -99,6 +102,7 @@ pub struct ChartDownload {
 pub(crate) struct ExportPlan {
     diagram: Option<Diagram>,
     domain: Option<Domain>,
+    wiring: Option<Wiring>,
     scenario: Option<Scenario>,
     options: ExportOptions,
 }
@@ -109,6 +113,11 @@ impl ExportPlan {
         target: ExportTarget,
         options: ExportOptions,
     ) -> Result<Self, ExportError> {
+        if options.occurrence_id.is_some() && !matches!(target, ExportTarget::Wiring) {
+            return Err(ExportError::Invalid(
+                "occurrenceId is supported only for Wiring exports".into(),
+            ));
+        }
         let scenario = options
             .scenario_id
             .as_ref()
@@ -122,7 +131,30 @@ impl ExportPlan {
                     .ok_or(ExportError::Missing("scenario"))
             })
             .transpose()?;
-        let (diagram, domain) = match target {
+        if let Some(id) = &options.occurrence_id {
+            validate_id(id).map_err(ExportError::Invalid)?;
+            let scenario = scenario
+                .as_ref()
+                .ok_or_else(|| ExportError::Invalid("occurrenceId requires scenarioId".into()))?;
+            let occurrence = scenario
+                .occurrences
+                .iter()
+                .find(|occurrence| occurrence.id == *id)
+                .ok_or(ExportError::Missing("occurrence"))?;
+            let refs = occurrence.wiring_refs.as_ref().ok_or_else(|| {
+                ExportError::Invalid("Wiring mapping not recorded for occurrence".into())
+            })?;
+            if refs.component_ids.is_empty()
+                && refs.connection_ids.is_empty()
+                && refs.operation_refs.is_empty()
+                && refs.screen_refs.is_empty()
+            {
+                return Err(ExportError::Invalid(
+                    "No wiring elements mapped for occurrence".into(),
+                ));
+            }
+        }
+        let (diagram, domain, wiring) = match target {
             ExportTarget::Diagram(id) => {
                 validate_id(&id).map_err(ExportError::Invalid)?;
                 let diagram = document
@@ -138,34 +170,45 @@ impl ExportPlan {
                         "scenarioId must belong to the requested diagram".into(),
                     ));
                 }
-                (Some(diagram), None)
+                (Some(diagram), None, None)
             }
             ExportTarget::Domain => {
+                let domain = document.domain.ok_or(ExportError::Missing("domain"))?;
                 let diagram = scenario.as_ref().and_then(|scenario| {
                     document
                         .diagrams
                         .into_iter()
                         .find(|diagram| diagram.id == scenario.diagram_id)
                 });
-                (diagram, Some(document.domain))
+                (diagram, Some(domain), None)
             }
+            ExportTarget::Wiring => (
+                None,
+                None,
+                Some(document.wiring.ok_or(ExportError::Missing("wiring"))?),
+            ),
         };
-        let scenario = scenario.map(|scenario| relevance_only(scenario, domain.is_some()));
+        let scenario =
+            scenario.map(|scenario| relevance_only(scenario, domain.is_some(), wiring.is_some()));
         Ok(Self {
             diagram,
             domain,
+            wiring,
             scenario,
             options,
         })
     }
 }
 
-fn relevance_only(mut scenario: Scenario, include_domain: bool) -> Scenario {
+fn relevance_only(mut scenario: Scenario, include_domain: bool, include_wiring: bool) -> Scenario {
     scenario.description.clear();
     for occurrence in &mut scenario.occurrences {
         occurrence.trigger = None;
         occurrence.narration.clear();
         occurrence.change_summary.clear();
+        if !include_wiring {
+            occurrence.wiring_refs = None;
+        }
         for snapshot in [&mut occurrence.before, &mut occurrence.after] {
             if include_domain {
                 for instance in &mut snapshot.instances {
@@ -432,5 +475,202 @@ impl DevTools {
             }
         }
         anyhow::bail!("renderer disconnected")
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    use crate::wiring::WiringRelevance;
+
+    #[test]
+    fn chart_export_plans_omit_wiring_mappings_and_preserve_the_source_document() {
+        let mut document: Explanation = serde_json::from_value(json!({
+            "schemaVersion": 1, "title": "Chart export scope", "description": "Recorded participation.",
+            "domain": {"entities": [], "relationships": []},
+            "wiring": {"components": [{"id": "api", "label": "API", "kind": "service"}], "connections": []},
+            "diagrams": [{"id": "flow", "title": "Flow", "kind": "flow", "nodes": [
+                {"id": "submit", "label": "Submit", "entityIds": []}
+            ], "edges": [{"id": "retry", "sourceNodeId": "submit", "targetNodeId": "submit", "label": "Retry"}]}],
+            "scenarios": [{"id": "dispatch", "title": "Dispatch", "diagramId": "flow", "occurrences": [
+                {"id": "first", "nodeId": "submit", "incomingEdgeId": null, "trigger": null,
+                 "narration": "Submit.", "before": {"instances": [], "links": []},
+                 "after": {"instances": [], "links": []}},
+                {"id": "second", "nodeId": "submit", "incomingEdgeId": "retry", "trigger": null,
+                 "narration": "Wait.", "before": {"instances": [], "links": []},
+                 "after": {"instances": [], "links": []}}
+            ]}]
+        })).unwrap();
+        let scenario_id = document.scenarios[0].id.clone();
+        let diagram_id = document.scenarios[0].diagram_id.clone();
+        for occurrence in &mut document.scenarios[0].occurrences {
+            occurrence.wiring_refs = Some(WiringRelevance::default());
+        }
+        document.scenarios[0].occurrences[0].wiring_refs = Some(WiringRelevance {
+            component_ids: vec!["api".into()],
+            ..Default::default()
+        });
+        document.validate().unwrap();
+        let original = serde_json::to_value(&document).unwrap();
+        for target in [ExportTarget::Diagram(diagram_id), ExportTarget::Domain] {
+            let plan = ExportPlan::new(
+                document.clone(),
+                target,
+                ExportOptions {
+                    scenario_id: Some(scenario_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let plan = serde_json::to_value(plan).unwrap();
+            for occurrence in plan["scenario"]["occurrences"].as_array().unwrap() {
+                assert!(occurrence.get("wiringRefs").is_none());
+            }
+        }
+        assert_eq!(serde_json::to_value(document).unwrap(), original);
+        assert_eq!(
+            original["scenarios"][0]["occurrences"][0]["wiringRefs"],
+            json!({"componentIds": ["api"]})
+        );
+        assert_eq!(
+            original["scenarios"][0]["occurrences"][1]["wiringRefs"],
+            json!({})
+        );
+    }
+
+    #[test]
+    fn current_step_exports_select_a_recorded_occurrence_without_snapshot_values() {
+        let document: Explanation =
+            serde_json::from_str(include_str!("../examples/shopping-cart.json")).unwrap();
+        let plan = ExportPlan::new(
+            document,
+            ExportTarget::Wiring,
+            ExportOptions {
+                scenario_id: Some("cart-payment-retry".into()),
+                occurrence_id: Some("retry-check-existing-hold".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let plan = serde_json::to_value(plan).unwrap();
+        assert_eq!(plan["options"]["occurrenceId"], "retry-check-existing-hold");
+        let occurrence = plan["scenario"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|occurrence| occurrence["id"] == "retry-check-existing-hold")
+            .unwrap();
+        assert_eq!(
+            occurrence["wiringRefs"]["connectionIds"],
+            json!([
+                "submit-retry",
+                "check-reservation",
+                "read-stock-hold",
+                "trace-retry"
+            ])
+        );
+        assert_eq!(occurrence["narration"], "");
+        assert_eq!(occurrence["before"], json!({"instances": [], "links": []}));
+        assert_eq!(occurrence["after"], json!({"instances": [], "links": []}));
+    }
+
+    #[test]
+    fn current_step_exports_require_a_wiring_scenario_with_nonempty_recorded_mapping() {
+        let document: Explanation =
+            serde_json::from_str(include_str!("../examples/shopping-cart.json")).unwrap();
+        for (target, scenario_id, occurrence_id, expected) in [
+            (
+                ExportTarget::Domain,
+                Some("cart-payment-retry"),
+                "retry-check-existing-hold",
+                "occurrenceId is supported only for Wiring exports",
+            ),
+            (
+                ExportTarget::Diagram("shopping-cart-flow".into()),
+                Some("cart-payment-retry"),
+                "retry-check-existing-hold",
+                "occurrenceId is supported only for Wiring exports",
+            ),
+            (
+                ExportTarget::Wiring,
+                None,
+                "retry-check-existing-hold",
+                "occurrenceId requires scenarioId",
+            ),
+            (
+                ExportTarget::Wiring,
+                Some("cart-payment-retry"),
+                "missing",
+                "occurrence not found",
+            ),
+            (
+                ExportTarget::Wiring,
+                Some("cart-payment-retry"),
+                "success-reserve",
+                "occurrence not found",
+            ),
+            (
+                ExportTarget::Wiring,
+                Some("cart-payment-retry"),
+                "retry-second-review",
+                "Wiring mapping not recorded for occurrence",
+            ),
+            (
+                ExportTarget::Wiring,
+                Some("cart-stock-rejected"),
+                "stock-local-review",
+                "No wiring elements mapped for occurrence",
+            ),
+        ] {
+            let error = ExportPlan::new(
+                document.clone(),
+                target,
+                ExportOptions {
+                    scenario_id: scenario_id.map(str::to_owned),
+                    occurrence_id: Some(occurrence_id.into()),
+                    ..Default::default()
+                },
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn wiring_exports_include_only_interface_definitions_and_recorded_relevance() {
+        let document: Explanation =
+            serde_json::from_str(include_str!("../examples/shopping-cart.json")).unwrap();
+        let original = serde_json::to_value(&document).unwrap();
+        let scenario = &document.scenarios[0];
+        let plan = ExportPlan::new(
+            document.clone(),
+            ExportTarget::Wiring,
+            ExportOptions {
+                scenario_id: Some(scenario.id.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let plan = serde_json::to_value(plan).unwrap();
+        assert_eq!(plan["wiring"], original["wiring"]);
+        assert!(plan["diagram"].is_null());
+        assert!(plan["domain"].is_null());
+        for (index, occurrence) in plan["scenario"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(
+                occurrence.get("wiringRefs"),
+                original["scenarios"][0]["occurrences"][index].get("wiringRefs")
+            );
+            assert_eq!(occurrence["narration"], "");
+            assert_eq!(occurrence["before"], json!({"instances": [], "links": []}));
+            assert_eq!(occurrence["after"], json!({"instances": [], "links": []}));
+            assert!(occurrence.get("methodCalls").is_none());
+        }
+        assert_eq!(serde_json::to_value(document).unwrap(), original);
     }
 }

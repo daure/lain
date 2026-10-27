@@ -16,6 +16,7 @@ The command publishes these complete schema-version-1 documents in order:
 | `release-promotion` | `release-promotion.json` |
 | `incident-recovery` | `incident-recovery.json` |
 | `pr-comment-review` | `pr-comment-review.json` |
+| `shopping-cart` | `shopping-cart.json` |
 
 For an individual MCP publication, call `get_context` first, then `publish_explanation({id, document})` with the matching ID and the file's complete parsed JSON object as `document`. A filename or partial document is not a publication payload. Publication atomically creates, replaces, or recreates that ID; the last commit wins. The browser loads committed explanations from the API; it does not publish examples on startup.
 
@@ -78,6 +79,20 @@ The shared payment sequence defines a receipt-verification loop, an optional han
 Payment callback messages use calls for receipt lookup and payment operations, asynchronous sends for fulfillment, and replies for handled receipts and duplicate acknowledgements. Select the successful scenario to see off-scenario replies retain their dashes while dimmed; off-scenario calls and fragment borders stay solid. Omitted participant and message kinds in Payment capture exchange use system icons and call arrows.
 
 Snapshots contain complete captured state for each occurrence. An omitted attribute is uncaptured; `null` is captured; an omitted instance is absent. The shipment traversal captures order, fulfillment, and shipment state. Payment and receipt instances are outside that traversal’s captured state.
+
+The optional Wiring tab shares one feature-level inventory across these scenarios. Callback/dispatch endpoints and warehouse screens belong to their software owners. Each recorded visit has an explicit mapping, including an empty mapping for manual packing. Synthetic software responsibilities are labelled assumptions. Duplicate and declined callbacks leave fulfillment publication outside their mapped scope even when a snapshot contains queued work. `warehouse-ui-dispatch` demonstrates a synthetic UI submission that stops at accepted queue work. Fictional `DEMO-101` and `DEMO-102` work references demonstrate shared attachments without claiming ticket ordering.
+
+## Shopping cart Wiring
+
+`shopping-cart.json` is a self-contained synthetic checkout explanation. Wiring shows Angular screens and child components, Spring REST endpoints, individual SELECT/UPDATE/INSERT operations owned by PostgreSQL stores, a payment provider, SNS topic fan-out to SQS, Lambda receipt consumption, and Datadog trace export. Products, contracts, transactions, transport settings, telemetry, and work references are labelled assumptions. Nested groups describe responsibility, not IAM, network access, or deployment topology.
+
+`cart-current-no-hold` has Current and No stock hold badges and stops after authorizing a two-bottle basket without calling Inventory. `cart-checkout-success` has Proposed and Happy path badges and records a hold before payment, then order commitment, publication, and receipt processing. Their Overview comparison contrasts authored recordings; it does not align steps or compute diffs. `cart-stock-rejected` records the stock SELECT without a hold INSERT, stock UPDATE, payment, or receipt publication. `cart-payment-retry` reads the existing hold without creating another one. Revisited payment/review nodes keep distinct occurrence IDs and mappings. Local review uses explicit empty mappings; `retry-second-review` intentionally omits its mapping so **Mapping not recorded** remains visible.
+
+Open Wiring to inspect every owner-local operation/screen port and its individual wires. `persist-cart` is the basket SELECT; `write-cart` and `write-cart-total` are separate UPDATE wires. `publish-order` reaches SNS, `fanout-order` reaches SQS, and `consume-order` reaches Lambda only at the recorded receipt step. Trace wires are mapped only on recorded synthetic export steps. The missing `release-stock` DELETE remains off-scenario.
+
+Contracts show typed fields separated into request, response, error, record, message, and telemetry sections. Missing expiry, idempotency, and error DTO fields name contract work; they do not claim a production endpoint was measured. Required and nullable are independent. `technology.icon` selects bundled identifiers such as `angular`, `spring`, `postgresql`, and `datadog`; unknown identifiers use a kind fallback rather than loading an asset.
+
+Select an illustrative work key to see shared attachments without advancing playback. **Focus current step** frames mapped owners and complete wire paths once; later steps retain the single camera. Details link to matching recorded occurrences and safe optional work URLs. Diagram/Domain exports omit wiring mappings while stored explanations keep them. `tests/browser-wiring-smoke.cjs` checks Wiring against an isolated preview with this fixture.
 
 ## Release approval and deployment
 

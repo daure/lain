@@ -14,6 +14,7 @@ const props = withDefaults(defineProps<{
   diagram: Diagram;
   scenario: Scenario;
   currentOccurrenceId: string;
+  inspectedNodeId?: string;
   stateKey?: string;
   compact?: boolean;
   links?: Map<string, DiagramLink>;
@@ -244,8 +245,8 @@ function visitBadgePosition(row: typeof rows.value[number]) {
       <SequenceHeading v-for="frame in compact ? [] : layout.frames" :key="`${frame.id}-label`"
         v-show="!pinnedIds.has(frame.id)" :data-heading-id="frame.id" :frame="frame" :width="width" :y="frame.y" :selected="onScenarioPath(frame.nodeIds)" />
       <g v-for="row in rows" :key="row.key" class="scenario-jump-target">
-      <g :class="['sequence-message', row.kind, { visited: row.visited, current: row.current, upcoming: row.upcoming, 'off-scenario': row.offScenario, self: row.self }]"
-         :data-node-id="row.node.id" :data-occurrence-id="row.occurrence?.id" role="button" tabindex="0" :aria-label="row.accessibleLabel" :aria-current="row.current ? 'step' : undefined"
+      <g :class="['sequence-message', row.kind, { inspected: row.node.id === inspectedNodeId, visited: row.visited, current: row.current, upcoming: row.upcoming, 'off-scenario': row.offScenario, self: row.self }]"
+         :data-node-id="row.node.id" :data-occurrence-id="row.occurrence?.id" role="button" tabindex="0" :aria-label="row.accessibleLabel" :aria-pressed="row.node.id === inspectedNodeId" :aria-current="row.current ? 'step' : undefined"
            @click="select(row)" @keydown.enter="activateDiagramNode($event, links?.get(row.node.id), () => select(row), id => emit('open', id))" @keydown.space.prevent="select(row)"
           @focusin="focusedNodeId = row.node.id" @focusout="focusedNodeId = undefined">
         <title>{{ row.accessibleLabel }}</title>

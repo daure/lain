@@ -34,7 +34,7 @@ async fn legacy_entities_publish_and_reload_with_optional_methods_omitted() {
         .await
         .unwrap();
     let mut authored = document();
-    for entity in &mut authored.domain.entities {
+    for entity in &mut authored.domain.as_mut().unwrap().entities {
         entity.methods.clear();
     }
     let legacy = serde_json::to_value(&authored).unwrap();
@@ -63,7 +63,7 @@ async fn methods_preserve_authored_order_and_plain_text_across_database_reopen()
     untrusted.id = "untrusted".into();
     untrusted.signature = "<script>alert(1)</script>(value: string): void".into();
     untrusted.description = "<img src=x onerror=alert(1)>".into();
-    authored.domain.entities[0].methods = vec![method(), untrusted];
+    authored.domain.as_mut().unwrap().entities[0].methods = vec![method(), untrusted];
     let expected = serde_json::to_value(&authored).unwrap();
     service.publish("methods", request(authored)).await.unwrap();
     drop(service);
@@ -80,7 +80,7 @@ async fn invalid_method_definitions_preserve_the_committed_revision() {
         .await
         .unwrap();
     let mut authored = document();
-    authored.domain.entities[0].methods = vec![method()];
+    authored.domain.as_mut().unwrap().entities[0].methods = vec![method()];
     service
         .publish("methods", request(authored.clone()))
         .await
@@ -145,7 +145,7 @@ async fn method_ids_are_not_snapshot_attribute_keys() {
         .await
         .unwrap();
     let mut authored = document();
-    authored.domain.entities[0].methods = vec![method()];
+    authored.domain.as_mut().unwrap().entities[0].methods = vec![method()];
     let order = authored.scenarios[0].occurrences[0]
         .after
         .instances

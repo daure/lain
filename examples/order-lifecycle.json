@@ -5,7 +5,7 @@
   "overview": "These synthetic recordings follow an order from payment through delivery. Start with Payment handling to contrast successful, repeated, and declined callbacks. Packing and dispatch connects request messages to warehouse work; Delivery outcomes contrasts a first delivery, a retry, and a return. Payment internals exposes the capture details. Diagrams are shared definitions: flow and message recordings can answer the same reader question without becoming separate topics.",
   "topics": [
     { "id": "payments", "title": "Payment handling", "description": "What happens when a callback succeeds, repeats, or reports a decline? Flow and message views describe the same alternatives.", "scenarioIds": ["successful-callback", "duplicate-callback", "declined-payment", "sequence-successful-callback", "sequence-duplicate-callback", "sequence-declined-payment"] },
-    { "id": "dispatch", "title": "Packing and dispatch", "description": "How does accepting a dispatch request differ from completing warehouse work?", "scenarioIds": ["dispatch-request-accepted", "priority-order-dispatch"] },
+    { "id": "dispatch", "title": "Packing and dispatch", "description": "How does accepting a dispatch request differ from completing warehouse work?", "scenarioIds": ["dispatch-request-accepted", "warehouse-ui-dispatch", "priority-order-dispatch"] },
     { "id": "delivery", "title": "Delivery outcomes", "description": "Compare a first delivery with redelivery and a return to the sender.", "scenarioIds": ["parcel-delivered", "delivery-retry", "returned-to-sender"] },
     { "id": "capture", "title": "Payment internals", "description": "Follow the capture operation through its flow and message recordings.", "scenarioIds": ["capture-authorized-payment", "capture-payment-exchange"] }
   ],
@@ -14,6 +14,36 @@
     { "id": "callback-views", "title": "One callback through actions and messages", "description": "These recordings explain the successful callback from two perspectives. Their steps have different granularity and are not automatically aligned.", "leftScenarioId": "successful-callback", "rightScenarioId": "sequence-successful-callback" },
     { "id": "delivery-outcomes", "title": "Successful redelivery versus return", "description": "Both recordings include a failed attempt. Agreeing to redelivery leads to delivery; declining it returns the parcel.", "leftScenarioId": "delivery-retry", "rightScenarioId": "returned-to-sender" }
   ],
+  "wiring": {
+    "components": [
+      { "id": "payment-gateway", "label": "Payment gateway", "kind": "externalSystem", "description": "Gateway named by the payment sequences.", "referenceIds": ["callback-work"] },
+      { "id": "payment-service", "label": "Payment service", "kind": "service", "description": "Callback handling and capture responsibility named by the payment sequences.", "operations": [{ "id": "callback", "label": "Receive payment callback", "http": { "method": "POST", "path": "/payments/callback" } }, { "id": "capture", "label": "Capture authorized payment", "description": "Named capture capability; no additional HTTP route is asserted." }], "referenceIds": ["callback-work"] },
+      { "id": "receipt-store", "label": "Receipt store", "kind": "database", "description": "Logical persistent receipt store named by the sequences; database engine unspecified.", "referenceIds": ["callback-work"] },
+      { "id": "fulfillment-queue", "label": "Fulfillment queue", "kind": "queue", "description": "Shared work queue named by the payment and dispatch sequences.", "referenceIds": ["dispatch-work"] },
+      { "id": "dispatch-service", "label": "Dispatch service", "kind": "service", "description": "Dispatch intake named by its sequence. The route template generalizes the recorded POST /orders/ORD-1042/dispatch request.", "operations": [{ "id": "dispatch", "label": "Submit paid order dispatch", "http": { "method": "POST", "path": "/orders/{orderId}/dispatch" } }], "referenceIds": ["dispatch-work"] },
+      { "id": "warehouse-ui", "label": "Warehouse application", "kind": "uiApp", "description": "Synthetic assumption: a warehouse application records operator input; its screens and routes are illustrative.", "screens": [{ "id": "queue", "label": "Dispatch queue", "route": "/dispatch", "description": "Synthetic assumption: operators select a paid order here." }, { "id": "packing", "label": "Packing detail", "route": "/packing/{workId}", "description": "Synthetic assumption: operators record packing and carrier checks here." }], "referenceIds": ["dispatch-work"] },
+      { "id": "fulfillment-service", "label": "Fulfillment recording", "kind": "service", "description": "Synthetic assumption: software records packing, shipment status, and acknowledgement. Manual packing remains a human action; this is not a claim about a separate deployment." },
+      { "id": "commerce-store", "label": "Commerce store", "kind": "database", "description": "Synthetic assumption: a logical store persists order, payment, and shipment records. Engine unspecified." },
+      { "id": "carrier-system", "label": "DemoParcel coordination", "kind": "externalSystem", "description": "Synthetic assumption: an external carrier boundary supports coordination. No carrier HTTP API is asserted." }
+    ],
+    "connections": [
+      { "id": "callback-delivery", "label": "delivers callback", "source": { "componentId": "payment-gateway" }, "target": { "componentId": "payment-service", "operationId": "callback" }, "protocol": "HTTPS", "referenceIds": ["callback-work"] },
+      { "id": "receipt-lookup", "label": "checks handled receipts", "source": { "componentId": "payment-service" }, "target": { "componentId": "receipt-store" } },
+      { "id": "payment-recording", "label": "records payment outcome", "source": { "componentId": "payment-service" }, "target": { "componentId": "commerce-store" }, "description": "Synthetic assumption: this persistence responsibility records payment capture, decline, and the paid order." },
+      { "id": "fulfillment-publication", "label": "queues fulfillment", "source": { "componentId": "payment-service" }, "target": { "componentId": "fulfillment-queue" } },
+      { "id": "dispatch-submission", "label": "submits paid order", "source": { "componentId": "warehouse-ui" }, "target": { "componentId": "dispatch-service", "operationId": "dispatch" }, "protocol": "HTTPS", "description": "Synthetic assumption: the warehouse application submits the dispatch contract.", "referenceIds": ["dispatch-work"] },
+      { "id": "dispatch-enqueue", "label": "queues dispatch work", "source": { "componentId": "dispatch-service", "operationId": "dispatch" }, "target": { "componentId": "fulfillment-queue" }, "referenceIds": ["dispatch-work"] },
+      { "id": "work-consumption", "label": "consumes queued work", "source": { "componentId": "fulfillment-queue" }, "target": { "componentId": "fulfillment-service" }, "description": "Synthetic assumption: software accepts warehouse work from the queue." },
+      { "id": "warehouse-recording", "label": "records warehouse progress", "source": { "componentId": "warehouse-ui" }, "target": { "componentId": "fulfillment-service" }, "description": "Synthetic assumption: software records operator input around human packing." },
+      { "id": "shipment-persistence", "label": "persists shipment progress", "source": { "componentId": "fulfillment-service" }, "target": { "componentId": "commerce-store" }, "description": "Synthetic assumption: shipment state and durable work records use the logical commerce store." },
+      { "id": "carrier-coordination", "label": "coordinates parcel handoff", "source": { "componentId": "fulfillment-service" }, "target": { "componentId": "carrier-system" }, "description": "Synthetic assumption: coordination includes pickup, delivery updates, retries, and returns; no transport contract is asserted." },
+      { "id": "queue-acknowledgement", "label": "acknowledges completed work", "source": { "componentId": "fulfillment-service" }, "target": { "componentId": "fulfillment-queue" }, "description": "Synthetic assumption: recorded work closure includes acknowledgement; the arrow does not assert the direction of every response byte." }
+    ],
+    "references": [
+      { "id": "callback-work", "key": "DEMO-101", "description": "Illustrative fictional work: callback handling and receipt-based duplicate suppression.", "url": "https://example.com/work/DEMO-101" },
+      { "id": "dispatch-work", "key": "DEMO-102", "description": "Illustrative fictional work: warehouse dispatch submission and accepted queue work." }
+    ]
+  },
   "domain": {
     "entities": [
       { "id": "order", "label": "Order", "attributes": [{ "id": "number", "label": "Order number" }, { "id": "paymentStatus", "label": "Payment status" }, { "id": "total", "label": "Total (EUR)" }], "methods": [
@@ -246,6 +276,11 @@
         { "id": "wait-notify", "sourceNodeId": "wait", "targetNodeId": "notify", "label": "Carrier arrives" },
         { "id": "notify-end", "sourceNodeId": "notify", "targetNodeId": "end", "label": "Notice sent" }
       ]
+    },
+    {
+      "id": "warehouse-dispatch-flow", "title": "Warehouse UI dispatch", "kind": "flow",
+      "nodes": [{ "id": "open", "label": "Open Dispatch queue", "entityIds": ["order"], "role": "start" }, { "id": "submit", "label": "Submit paid order dispatch", "entityIds": ["order", "fulfillment"], "role": "action" }, { "id": "accepted", "label": "Dispatch work accepted", "entityIds": ["order", "fulfillment"], "role": "end" }],
+      "edges": [{ "id": "submit", "sourceNodeId": "open", "targetNodeId": "submit", "label": "Select paid order" }, { "id": "accepted", "sourceNodeId": "submit", "targetNodeId": "accepted", "label": "HTTP 202" }]
     }
   ],
   "scenarios": [
@@ -256,6 +291,7 @@
       "occurrences": [
         {
           "id": "success-received", "nodeId": "callback", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["callback-delivery"] },
           "changeSummary": "Receipt rcpt-481 is created and linked to payment pay-72. The order and payment remain pending.",
           "trigger": "POST /payments/callback · evt_481",
           "narration": "A callback arrives for order ORD-1042. The service creates a receipt for evt_481. No payment or fulfillment work has been completed yet.",
@@ -271,6 +307,7 @@
         },
         {
           "id": "success-checked", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "trigger": "receipt.lookup(evt_481)",
           "narration": "The receipt has not been handled. The callback says the issuer authorized EUR 89.90, so this traversal takes the new-successful-callback branch.",
           "before": { "instances": [
@@ -286,6 +323,7 @@
         },
         {
           "id": "success-captured", "nodeId": "capture", "incomingEdgeId": "check-capture",
+          "wiringRefs": { "connectionIds": ["payment-recording"], "operationRefs": [{ "componentId": "payment-service", "operationId": "capture" }] },
           "changeSummary": "The order becomes paid and the payment becomes captured. The failure reason is captured as null; its previous value was uncaptured.",
           "methodCalls": [{ "entityId": "payment", "methodId": "capture", "instanceId": "pay-72" }, { "entityId": "order", "methodId": "mark-paid", "instanceId": "ord-1042" }],
           "trigger": "payment.capture(pay-72)",
@@ -303,6 +341,7 @@
         },
         {
           "id": "success-fulfilled", "nodeId": "fulfill", "incomingEdgeId": "capture-fulfill",
+          "wiringRefs": { "connectionIds": ["fulfillment-publication"] },
           "trigger": "fulfillment.enqueue(ord-1042)",
           "narration": "One fulfillment work item is created for the paid order. The receipt is marked handled and HTTP 200 acknowledges the callback. The order is ready for packing.",
           "before": { "instances": [
@@ -326,6 +365,7 @@
       "occurrences": [
         {
           "id": "duplicate-received", "nodeId": "callback", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["callback-delivery"] },
           "trigger": "POST /payments/callback · retry evt_481",
           "narration": "The gateway retries an already handled callback. The order is paid and one fulfillment item exists. The response status is not captured before this retry; null after receipt means no response has been sent for this request yet.",
           "before": { "instances": [
@@ -343,6 +383,7 @@
         },
         {
           "id": "duplicate-first-check", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "changeSummary": "The receipt lookup count increases from zero to one. The handled flag remains true.",
           "trigger": "receipt.lookup(evt_481)",
           "narration": "The first lookup finds the handled receipt. This occurrence belongs to the first visit to Receipt checked. The lookup count becomes one.",
@@ -361,6 +402,7 @@
         },
         {
           "id": "duplicate-existing", "nodeId": "existing", "incomingEdgeId": "check-existing",
+          "wiringRefs": { "componentIds": ["payment-service"] },
           "trigger": "receipt.found(evt_481)",
           "narration": "The service takes the already-handled branch. It does not capture a second payment or enqueue a second fulfillment. A verification read will revisit Receipt checked.",
           "before": { "instances": [
@@ -378,6 +420,7 @@
         },
         {
           "id": "duplicate-verification", "nodeId": "check", "incomingEdgeId": "existing-check",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "changeSummary": "The receipt lookup count increases from one to two on this separate verification visit. The payment and fulfillment remain unchanged.",
           "trigger": "receipt.verify(evt_481)",
           "narration": "A second read verifies the saved receipt before acknowledgement. This is a separate occurrence at the same diagram node: its lookup count changes from one to two, not from zero to one.",
@@ -396,6 +439,7 @@
         },
         {
           "id": "duplicate-ignored", "nodeId": "ignore", "incomingEdgeId": "check-ignore",
+          "wiringRefs": { "connectionIds": ["callback-delivery"] },
           "trigger": "response.send(200)",
           "narration": "HTTP 200 acknowledges the retry and stops further retries. The order remains paid, the payment remains captured, and exactly one fulfillment work item remains. No new work is created.",
           "before": { "instances": [
@@ -420,6 +464,7 @@
       "occurrences": [
         {
           "id": "decline-received", "nodeId": "callback", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["callback-delivery"] },
           "trigger": "POST /payments/callback · evt_482",
           "narration": "The issuer sends a declined-payment callback for a different order, ORD-1043. The service records the incoming event before deciding which branch to take.",
           "before": { "instances": [
@@ -434,6 +479,7 @@
         },
         {
           "id": "decline-checked", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "trigger": "receipt.lookup(evt_482)",
           "narration": "The receipt is new and unhandled. The issuer response is insufficient_funds, so this path takes the declined branch rather than capturing the payment.",
           "before": { "instances": [
@@ -449,6 +495,7 @@
         },
         {
           "id": "decline-recorded", "nodeId": "decline", "incomingEdgeId": "check-decline",
+          "wiringRefs": { "connectionIds": ["payment-recording"] },
           "methodCalls": [{ "entityId": "payment", "methodId": "decline", "instanceId": "pay-73" }],
           "trigger": "payment.decline(pay-73, insufficient_funds)",
           "narration": "The order and payment become declined. The failure reason is captured as insufficient_funds. The handled receipt gets HTTP 200; the failed payment is acknowledged without creating fulfillment work.",
@@ -472,6 +519,7 @@
       "occurrences": [
         {
           "id": "shipment-packed", "nodeId": "packed", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["warehouse-recording", "shipment-persistence"], "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "packing" }] },
           "trigger": "warehouse.pack(ful-31)",
           "narration": "Rotterdam packs the paid order for Utrecht with DemoParcel. The shipment is linked to the order and fulfillment work. Tracking is uncaptured; zero delivery attempts and null delivery and return metadata record a parcel awaiting pickup.",
           "before": { "instances": [
@@ -486,6 +534,7 @@
         },
         {
           "id": "shipment-transit", "nodeId": "transit", "incomingEdgeId": "packed-transit",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "trigger": "carrier.pickup(ship-88)",
           "narration": "DemoParcel collects the parcel in Rotterdam for Utrecht and assigns NL-003488. Fulfillment becomes dispatched and the shipment becomes in_transit. Pickup is not a delivery attempt, so the count remains zero.",
           "before": { "instances": [
@@ -501,6 +550,7 @@
         },
         {
           "id": "shipment-delivered", "nodeId": "delivered", "incomingEdgeId": "transit-delivered",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "methodCalls": [{ "entityId": "shipment", "methodId": "record-attempt", "instanceId": "ship-88" }],
           "trigger": "carrier.delivered(ship-88)",
           "narration": "DemoParcel confirms delivery in Utrecht on the first attempt at 2026-10-09T14:32:00Z. The shipment becomes delivered with one attempt and no delivery issue. Fulfillment becomes complete; the order remains paid.",
@@ -517,6 +567,7 @@
         },
         {
           "id": "shipment-closed", "nodeId": "closed", "incomingEdgeId": "delivered-closed",
+          "wiringRefs": { "connectionIds": ["queue-acknowledgement", "shipment-persistence"] },
           "trigger": "fulfillment.acknowledge(ful-31)",
           "narration": "The queue removes the completed fulfillment work item and its links. The delivered shipment remains linked directly to the order as the durable delivery record. Absent after means the work item has been removed, not that its attributes became null.",
           "before": { "instances": [
@@ -538,6 +589,7 @@
       "occurrences": [
         {
           "id": "sequence-received", "nodeId": "callback", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["callback-delivery"] },
           "trigger": "POST /payments/callback · evt_481",
           "narration": "A callback arrives for order ORD-1042. The service creates a receipt for evt_481. No payment or fulfillment work has been completed yet.",
           "before": { "instances": [
@@ -552,6 +604,7 @@
         },
         {
           "id": "sequence-checked", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "trigger": "receipt.lookup(evt_481)",
           "narration": "The receipt has not been handled. The callback says the issuer authorized EUR 89.90, so this traversal takes the new-successful-callback branch.",
           "before": { "instances": [
@@ -567,6 +620,7 @@
         },
         {
           "id": "sequence-captured", "nodeId": "capture", "incomingEdgeId": "check-capture",
+          "wiringRefs": { "connectionIds": ["payment-recording"], "operationRefs": [{ "componentId": "payment-service", "operationId": "capture" }] },
           "methodCalls": [{ "entityId": "payment", "methodId": "capture", "instanceId": "pay-72" }, { "entityId": "order", "methodId": "mark-paid", "instanceId": "ord-1042" }],
           "trigger": "payment.capture(pay-72)",
           "narration": "The payment is captured and the order becomes paid. A captured null failure reason means there is no failure. At the preceding occurrence that attribute was uncaptured.",
@@ -583,6 +637,7 @@
         },
         {
           "id": "sequence-fulfilled", "nodeId": "fulfill", "incomingEdgeId": "capture-fulfill",
+          "wiringRefs": { "connectionIds": ["fulfillment-publication"] },
           "trigger": "fulfillment.enqueue(ord-1042)",
           "narration": "One fulfillment work item is created for the paid order. The receipt is marked handled and HTTP 200 acknowledges the callback. The order is ready for packing.",
           "before": { "instances": [
@@ -606,6 +661,7 @@
       "occurrences": [
         {
           "id": "retry-packed", "nodeId": "packed", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["warehouse-recording", "shipment-persistence"], "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "packing" }] },
           "trigger": "warehouse.pack(ful-31)",
           "narration": "Rotterdam packs ORD-1042 for Utrecht with DemoParcel. The new shipment has zero delivery attempts and captured null delivery and return metadata. Tracking will be assigned at pickup.",
           "before": { "instances": [
@@ -620,6 +676,7 @@
         },
         {
           "id": "retry-transit", "nodeId": "transit", "incomingEdgeId": "packed-transit",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "trigger": "carrier.pickup(ship-88)",
           "narration": "DemoParcel collects the Utrecht parcel and assigns NL-003489. Fulfillment becomes dispatched and the shipment becomes in_transit. The carrier has not attempted delivery yet.",
           "before": { "instances": [
@@ -635,6 +692,7 @@
         },
         {
           "id": "retry-failed", "nodeId": "delivery-failed", "incomingEdgeId": "transit-delivery-failed",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "methodCalls": [{ "entityId": "shipment", "methodId": "record-attempt", "instanceId": "ship-88" }],
           "trigger": "carrier.deliveryFailed(ship-88, recipient unavailable)",
           "narration": "DemoParcel reaches Utrecht but the recipient is unavailable. The first attempt increments deliveryAttempts to one and records the delivery issue. The shipment becomes delivery_failed and fulfillment becomes exception; deliveredAt remains null.",
@@ -651,6 +709,7 @@
         },
         {
           "id": "retry-rescheduled", "nodeId": "transit", "incomingEdgeId": "delivery-failed-transit",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "trigger": "carrier.scheduleRedelivery(ship-88)",
           "narration": "The recipient arranges another delivery with DemoParcel. The parcel returns to In transit and fulfillment becomes dispatched. This separate visit retains one completed attempt and its issue; scheduling does not count as a second attempt.",
           "before": { "instances": [
@@ -666,6 +725,7 @@
         },
         {
           "id": "retry-delivered", "nodeId": "delivered", "incomingEdgeId": "transit-delivered",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "methodCalls": [{ "entityId": "shipment", "methodId": "record-attempt", "instanceId": "ship-88" }],
           "trigger": "carrier.delivered(ship-88)",
           "narration": "DemoParcel delivers NL-003489 in Utrecht on the second attempt at 2026-10-10T14:32:00Z. The attempt count becomes two and the delivery issue clears to a captured null. Fulfillment becomes complete; return metadata remains null.",
@@ -682,6 +742,7 @@
         },
         {
           "id": "retry-closed", "nodeId": "closed", "incomingEdgeId": "delivered-closed",
+          "wiringRefs": { "connectionIds": ["queue-acknowledgement", "shipment-persistence"] },
           "trigger": "fulfillment.acknowledge(ful-31)",
           "narration": "The queue acknowledges completed work and removes ful-31 with its links. The paid order retains its direct link to the delivered parcel, including both delivery attempts and the final delivery timestamp.",
           "before": { "instances": [
@@ -703,6 +764,7 @@
       "occurrences": [
         {
           "id": "return-packed", "nodeId": "packed", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["warehouse-recording", "shipment-persistence"], "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "packing" }] },
           "trigger": "warehouse.pack(ful-31)",
           "narration": "Rotterdam packs the paid order for Utrecht with DemoParcel. The shipment is created with zero attempts and null delivery and return metadata. The order and fulfillment links identify the parcel's work item.",
           "before": { "instances": [
@@ -717,6 +779,7 @@
         },
         {
           "id": "return-transit", "nodeId": "transit", "incomingEdgeId": "packed-transit",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "trigger": "carrier.pickup(ship-88)",
           "narration": "DemoParcel picks up the parcel and assigns NL-003490 for Utrecht. The shipment becomes in_transit and fulfillment becomes dispatched. Delivery attempts remain zero because pickup does not reach the recipient.",
           "before": { "instances": [
@@ -732,6 +795,7 @@
         },
         {
           "id": "return-failed", "nodeId": "delivery-failed", "incomingEdgeId": "transit-delivery-failed",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "methodCalls": [{ "entityId": "shipment", "methodId": "record-attempt", "instanceId": "ship-88" }],
           "trigger": "carrier.deliveryFailed(ship-88, recipient unavailable)",
           "narration": "The recipient is unavailable when DemoParcel attempts delivery in Utrecht. The shipment records one attempt and recipient unavailable, with status delivery_failed. Fulfillment becomes exception while delivery and return timestamps remain null.",
@@ -748,6 +812,7 @@
         },
         {
           "id": "return-returned", "nodeId": "returned", "incomingEdgeId": "delivery-failed-returned",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "methodCalls": [{ "entityId": "shipment", "methodId": "return", "instanceId": "ship-88" }],
           "trigger": "recipient.declineRedelivery(ship-88) · carrier.returned(ship-88)",
           "narration": "The recipient declines redelivery, so DemoParcel returns NL-003490 to Rotterdam at 2026-10-10T10:18:00Z. Shipment and fulfillment become returned. The record keeps one attempt, its delivery issue, and returnReason redelivery declined; deliveredAt stays null.",
@@ -764,6 +829,7 @@
         },
         {
           "id": "return-closed", "nodeId": "closed", "incomingEdgeId": "returned-closed",
+          "wiringRefs": { "connectionIds": ["queue-acknowledgement", "shipment-persistence"] },
           "trigger": "fulfillment.acknowledge(ful-31)",
           "narration": "The queue acknowledges the returned parcel and removes ful-31 with its links. The order keeps the returned shipment as a durable record. Payment status remains paid because this traversal records parcel handling, with no refund event.",
           "before": { "instances": [
@@ -785,6 +851,7 @@
       "occurrences": [
         {
           "id": "sequence-duplicate-received", "nodeId": "callback", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["callback-delivery"] },
           "trigger": "POST /payments/callback · retry evt_481",
           "narration": "The gateway retries an already handled callback. The order is paid and one fulfillment item exists. The response status is not captured before this retry; null after receipt means no response has been sent for this request yet.",
           "before": { "instances": [
@@ -802,6 +869,7 @@
         },
         {
           "id": "sequence-duplicate-first-check", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "trigger": "receipt.lookup(evt_481)",
           "narration": "The first lookup finds the handled receipt. This occurrence belongs to the first visit to Receipt checked. The lookup count becomes one.",
           "before": { "instances": [
@@ -819,6 +887,7 @@
         },
         {
           "id": "sequence-duplicate-existing", "nodeId": "existing", "incomingEdgeId": "check-existing",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "trigger": "receipt.found(evt_481)",
           "narration": "The service takes the already-handled branch. It does not capture a second payment or enqueue a second fulfillment. A verification read will revisit Receipt checked.",
           "before": { "instances": [
@@ -836,6 +905,7 @@
         },
         {
           "id": "sequence-duplicate-verification", "nodeId": "check", "incomingEdgeId": "existing-check",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "trigger": "receipt.verify(evt_481)",
           "narration": "A second read verifies the saved receipt before acknowledgement. This is a separate occurrence at the same diagram node: its lookup count changes from one to two, not from zero to one.",
           "before": { "instances": [
@@ -853,6 +923,7 @@
         },
         {
           "id": "sequence-duplicate-ignored", "nodeId": "ignore", "incomingEdgeId": "check-ignore",
+          "wiringRefs": { "connectionIds": ["callback-delivery"] },
           "trigger": "response.send(200)",
           "narration": "HTTP 200 acknowledges the retry and stops further retries. The order remains paid, the payment remains captured, and exactly one fulfillment work item remains. No new work is created.",
           "before": { "instances": [
@@ -877,6 +948,7 @@
       "occurrences": [
         {
           "id": "sequence-decline-received", "nodeId": "callback", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["callback-delivery"] },
           "trigger": "POST /payments/callback · evt_482",
           "narration": "The issuer sends a declined-payment callback for a different order, ORD-1043. The service records the incoming event before deciding which branch to take.",
           "before": { "instances": [
@@ -891,6 +963,7 @@
         },
         {
           "id": "sequence-decline-checked", "nodeId": "check", "incomingEdgeId": "callback-check",
+          "wiringRefs": { "connectionIds": ["receipt-lookup"] },
           "trigger": "receipt.lookup(evt_482)",
           "narration": "The receipt is new and unhandled. The issuer response is insufficient_funds, so this path takes the declined branch rather than capturing the payment.",
           "before": { "instances": [
@@ -906,6 +979,7 @@
         },
         {
           "id": "sequence-decline-recorded", "nodeId": "decline", "incomingEdgeId": "check-decline",
+          "wiringRefs": { "connectionIds": ["payment-recording"] },
           "methodCalls": [{ "entityId": "payment", "methodId": "decline", "instanceId": "pay-73" }],
           "trigger": "payment.decline(pay-73, insufficient_funds)",
           "narration": "The order and payment become declined. The failure reason is captured as insufficient_funds. The handled receipt gets HTTP 200; the failed payment is acknowledged without creating fulfillment work.",
@@ -929,6 +1003,7 @@
       "occurrences": [
         {
           "id": "capture-detail-payment", "nodeId": "capture-payment", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["payment-recording"], "operationRefs": [{ "componentId": "payment-service", "operationId": "capture" }] },
           "trigger": "payment.capture(pay-72)",
           "narration": "The payment service captures the authorized EUR 89.90 on pay-72. The payment becomes captured and its failure reason is recorded as null.\n\nThe order is still pending in this intermediate snapshot. Marking the order paid is the next action in this detail recording.",
           "methodCalls": [{ "entityId": "payment", "methodId": "capture", "instanceId": "pay-72" }],
@@ -943,6 +1018,7 @@
         },
         {
           "id": "capture-detail-order", "nodeId": "mark-order-paid", "incomingEdgeId": "capture-mark-paid",
+          "wiringRefs": { "connectionIds": ["payment-recording"] },
           "trigger": "order.markPaid(pay-72)",
           "narration": "With pay-72 captured, the service marks ORD-1042 paid. The order can now proceed to fulfillment.\n\nThis detail recording stops at the paid order. It does not record queuing, packing, or delivery.",
           "methodCalls": [{ "entityId": "order", "methodId": "mark-paid", "instanceId": "ord-1042" }],
@@ -964,6 +1040,7 @@
       "occurrences": [
         {
           "id": "capture-exchange-payment", "nodeId": "capture-payment", "incomingEdgeId": null,
+          "wiringRefs": { "connectionIds": ["payment-recording"], "operationRefs": [{ "componentId": "payment-service", "operationId": "capture" }] },
           "trigger": "payment.capture(pay-72)",
           "narration": "The payment service calls capture on pay-72 for the authorized EUR 89.90. The payment becomes captured with a null failure reason.\n\nThe order remains pending until the following message. The drill link opens the corresponding action flow, preserving this sequence visit.",
           "methodCalls": [{ "entityId": "payment", "methodId": "capture", "instanceId": "pay-72" }],
@@ -978,6 +1055,7 @@
         },
         {
           "id": "capture-exchange-order", "nodeId": "mark-order-paid", "incomingEdgeId": "capture-mark-paid",
+          "wiringRefs": { "connectionIds": ["payment-recording"] },
           "trigger": "order.markPaid(pay-72)",
           "narration": "After capture succeeds, the payment service calls markPaid on ORD-1042 with pay-72. The order changes from pending to paid while the captured payment retains its values.\n\nThe interaction ends here. Fulfillment belongs to the surrounding callback sequence.",
           "methodCalls": [{ "entityId": "order", "methodId": "mark-paid", "instanceId": "ord-1042" }],
@@ -999,12 +1077,14 @@
       "occurrences": [
         {
           "id": "dispatch-requested", "nodeId": "request", "incomingEdgeId": null, "trigger": "POST /orders/ORD-1042/dispatch",
+          "wiringRefs": { "operationRefs": [{ "componentId": "dispatch-service", "operationId": "dispatch" }] },
           "narration": "The warehouse operator asks the dispatch service to dispatch ORD-1042 and waits for its response. The solid filled arrow denotes a synchronous call. The order is already paid and remains unchanged.",
           "before": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] },
           "after": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] }
         },
         {
           "id": "dispatch-enqueued", "nodeId": "enqueue", "incomingEdgeId": "request-enqueue", "trigger": "DispatchRequested published",
+          "wiringRefs": { "connectionIds": ["dispatch-enqueue"] },
           "narration": "The service sends a dispatch request to the fulfillment queue. The solid open arrow denotes an asynchronous send: the service does not wait for a warehouse worker to finish. The captured queue contains one work item linked to the paid order.",
           "changeSummary": "Work item ful-dispatch-demo is created and linked to ORD-1042. Its status is queued.",
           "before": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] },
@@ -1015,6 +1095,7 @@
         },
         {
           "id": "dispatch-accepted", "nodeId": "confirm", "incomingEdgeId": "enqueue-confirm", "trigger": "HTTP 202 Accepted",
+          "wiringRefs": { "operationRefs": [{ "componentId": "dispatch-service", "operationId": "dispatch" }] },
           "narration": "The dispatch service replies to the operator with HTTP 202. The dashed open arrow denotes the reply, not scenario relevance. Acceptance confirms queued work, not completed dispatch; the captured work remains queued.",
           "before": { "instances": [
             { "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } },
@@ -1034,76 +1115,97 @@
       "occurrences": [
         {
           "id": "dispatch-start", "nodeId": "start", "incomingEdgeId": null, "trigger": "Packing request queued",
+          "wiringRefs": { "connectionIds": ["work-consumption"] },
           "narration": "The warehouse receives a priority packing request. Work item ful-shape-demo is queued in Rotterdam.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-scan", "nodeId": "scan", "incomingEdgeId": "start-scan", "trigger": "Barcode scanned",
+          "wiringRefs": { "connectionIds": ["warehouse-recording"], "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "queue" }] },
           "narration": "The scanner reads the packing request. The input/output parallelogram marks data entering the workflow, and the work item becomes received.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "received", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-prepare", "nodeId": "prepare", "incomingEdgeId": "scan-prepare", "trigger": "Workstation configured",
+          "wiringRefs": { "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "packing" }] },
           "narration": "The operator prepares the packing workstation. The preparation hexagon marks setup before processing the parcel.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "received", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "prepared", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-save", "nodeId": "save", "incomingEdgeId": "prepare-save", "trigger": "Dispatch work persisted",
+          "wiringRefs": { "connectionIds": ["warehouse-recording", "shipment-persistence"] },
           "narration": "The system saves the prepared dispatch work. The database cylinder describes persistent storage; the recorded work stage becomes stored.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "prepared", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "stored", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-priority", "nodeId": "priority", "incomingEdgeId": "save-priority", "trigger": "Priority request selected",
+          "wiringRefs": { "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "queue" }] },
           "narration": "The operator selects this work for expedited handling. The bottom-wide trapezoid marks prioritized work, and the captured stage becomes priority.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "stored", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "priority", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-pack", "nodeId": "pack", "incomingEdgeId": "priority-pack", "trigger": "Operator seals the parcel",
+          "wiringRefs": {},
           "narration": "The operator packs and seals the parcel by hand. The top-wide trapezoid describes a human-performed operation, and the work item becomes packed.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "priority", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-invoice", "nodeId": "invoice", "incomingEdgeId": "pack-invoice", "trigger": "Invoice generated",
+          "wiringRefs": { "connectionIds": ["warehouse-recording", "shipment-persistence"], "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "packing" }] },
           "narration": "The system creates one invoice for the packed parcel. The document shape describes that single sheet, and the work stage becomes invoiced.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "packed", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "invoiced", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-documents", "nodeId": "documents", "incomingEdgeId": "invoice-documents", "trigger": "Document bundle printed",
+          "wiringRefs": { "componentIds": ["warehouse-ui"] },
           "narration": "The operator prints the invoice, packing slip, and carrier paperwork. Stacked document sheets describe the bundle, and the work becomes documentsReady.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "invoiced", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "documentsReady", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-first-wait", "nodeId": "wait", "incomingEdgeId": "documents-wait", "trigger": "Carrier pickup pending",
+          "wiringRefs": { "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "packing" }] },
           "narration": "The parcel and documents are ready, but the carrier has not arrived. The D-shaped delay marks this recorded wait, and the work becomes waiting.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "documentsReady", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "waiting", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-second-wait", "nodeId": "wait", "incomingEdgeId": "carrier-wait", "trigger": "Second carrier check",
+          "wiringRefs": { "connectionIds": ["carrier-coordination"], "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "packing" }] },
           "narration": "A second check finds the carrier still pending. This separate occurrence revisits the same delay node with unchanged captured values.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "waiting", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "waiting", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-notify", "nodeId": "notify", "incomingEdgeId": "wait-notify", "trigger": "Carrier arrives",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "narration": "The carrier arrives and the system sends the dispatch notice. The reversed input/output parallelogram describes outgoing data, and the work becomes notified.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "waiting", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "notified", "warehouse": "Rotterdam" } }], "links": [] }
         },
         {
           "id": "dispatch-complete", "nodeId": "end", "incomingEdgeId": "notify-end", "trigger": "Parcel handed to carrier",
+          "wiringRefs": { "connectionIds": ["carrier-coordination", "shipment-persistence"] },
           "narration": "The operator hands the prepared parcel to the carrier. The work item becomes dispatched, and the pill-shaped terminator marks the recording's completion.",
           "before": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "notified", "warehouse": "Rotterdam" } }], "links": [] },
           "after": { "instances": [{ "id": "ful-shape-demo", "entityId": "fulfillment", "values": { "status": "dispatched", "warehouse": "Rotterdam" } }], "links": [] }
         }
+      ]
+    },
+    {
+      "id": "warehouse-ui-dispatch", "title": "Warehouse operator submits a paid order", "diagramId": "warehouse-dispatch-flow", "labels": ["Synthetic UI", "Accepted"],
+      "description": "Synthetic assumption: a warehouse operator opens Dispatch queue in an illustrative warehouse application and submits paid order ORD-1042. The dispatch-request-accepted recording is the behavioral contract reference, not a continued or automatically aligned recording. This recording stops at accepted queue work; packing has not completed.",
+      "occurrences": [
+        { "id": "warehouse-open-queue", "nodeId": "open", "incomingEdgeId": null, "trigger": "Open /dispatch (illustrative route)", "narration": "The operator opens the synthetic Dispatch queue screen and selects paid order ORD-1042.", "wiringRefs": { "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "queue" }] }, "before": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] }, "after": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] } },
+        { "id": "warehouse-submit-dispatch", "nodeId": "submit", "incomingEdgeId": "submit", "trigger": "POST /orders/ORD-1042/dispatch", "narration": "The illustrative application submits the paid order through the dispatch endpoint. The service queues work for later processing.", "wiringRefs": { "connectionIds": ["dispatch-submission", "dispatch-enqueue"], "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "queue" }] }, "before": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }], "links": [] }, "after": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }, { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Amsterdam" } }], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] } },
+        { "id": "warehouse-dispatch-accepted", "nodeId": "accepted", "incomingEdgeId": "accepted", "trigger": "HTTP 202 Accepted", "narration": "The application displays acceptance. Work remains queued; acceptance is not warehouse completion.", "wiringRefs": { "connectionIds": ["dispatch-submission"], "screenRefs": [{ "componentId": "warehouse-ui", "screenId": "queue" }] }, "before": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }, { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Amsterdam" } }], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] }, "after": { "instances": [{ "id": "ord-1042", "entityId": "order", "values": { "number": "ORD-1042", "paymentStatus": "paid", "total": 89.9 } }, { "id": "ful-31", "entityId": "fulfillment", "values": { "status": "queued", "warehouse": "Amsterdam" } }], "links": [{ "relationshipId": "order-fulfillments", "sourceInstanceId": "ord-1042", "targetInstanceId": "ful-31" }] } }
       ]
     }
   ]

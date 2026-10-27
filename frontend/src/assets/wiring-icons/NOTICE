@@ -1,0 +1,42 @@
+Wiring icons
+
+Devicon v2.18.0, MIT, copyright (c) 2015 konpa.
+Source: https://github.com/devicons/devicon/tree/v2.18.0
+SVG source: https://raw.githubusercontent.com/devicons/devicon/v2.18.0/icons/{name}/{name}-original.svg
+License source: https://raw.githubusercontent.com/devicons/devicon/v2.18.0/LICENSE
+Local files: devicon/{name}.svg and devicon/LICENSE.
+
+Tabler Icons v3.24.0, MIT, copyright (c) 2020-2024 Paweł Kuna.
+Source: https://github.com/tabler/tabler-icons/tree/v3.24.0
+SVG source: https://raw.githubusercontent.com/tabler/tabler-icons/v3.24.0/icons/outline/{name}.svg
+License source: https://raw.githubusercontent.com/tabler/tabler-icons/v3.24.0/LICENSE
+Local files: tabler/{name}.svg and tabler/LICENSE.
+
+Artwork is unchanged; each file ends with a terminal LF. SHA256 below hashes
+the vendored bytes, with paths relative to this directory. Include both LICENSE
+files with distributions. Product names and logos belong to their respective
+owners. Follow their brand policies; use does not imply endorsement.
+
+121194741d4a915b9f5890fdd6dd95121f9b1f816517c792358d72d7c838d664  devicon/LICENSE
+dd68ea503bda597e28d1de997ac584bb5989a35230713661f66d23bf6e16cb21  devicon/amazonwebservices.svg
+9666f86466e1175ba5e0c685fb423123e93a544732fd7b241e92a192cbb613ab  devicon/angular.svg
+2505c5b688c18c8fd5dd8e888561eb7b23a56a75d291ff17e8ee18770193f3e8  devicon/apachekafka.svg
+7923db83e3f9755bd412241a683fa996fb7a9d0259b5084de449e6be92f7ca20  devicon/azure.svg
+37536bdc59abe690f2f7b8b7913b9d761dfd70d9b8fda19e3faf0b3924b29496  devicon/datadog.svg
+e08d528c64b270207927ef0d724c1db9ff8e659f908e6fb8bd05342d6ec3a7b3  devicon/googlecloud.svg
+d68b3da8c1ba0aa8a9ff18b0599836e00928dae10962ad479f01f82b130e393f  devicon/postgresql.svg
+9beacc43b0792c3489722c8272c2908998b5222e5765788efd7bdb9f8d0e4851  devicon/redis.svg
+e7cd143bec12baa7cde9e85280326cb6d24f6a4d2eb37d41f35bc3e9fb5f3e1a  devicon/sentry.svg
+4bae92720d27acb7d8cde3bed758a26aed07cd81c353f59ab379b8dd651ff973  devicon/spring.svg
+d5a3f948ae5cb95bfc4d2f767ef2bf6a778815b0ddb2d1c48037744cf636518e  tabler/LICENSE
+50f73328f695573d530c6f62db048720d45a5ad2432ecdf09ad524b960019b1d  tabler/broadcast.svg
+65c415f48c642ddf0e70e0229630bf79fe902ced0e07b1d8d268953aca36906e  tabler/browser.svg
+018990f8036e18e1c74e5e4d66c2b6dc7c3b8d56a45ca7488a878b35b445de60  tabler/bucket.svg
+62d1495b2ff0fe56f7ff84883dc961ac82fd9fb7ac2c18606bb608416c5eb03d  tabler/cloud.svg
+4e594ed8c97455df1868ea0b66329933d724aa62e619c38a4d67d6af14490a51  tabler/cpu.svg
+a3c75eb0640c45f10fc1c4cab126a183a5c870086c4a9b38f22ac82460cee56b  tabler/cube.svg
+29d5c3f4626229b111d4b14c77a020304fe585ff0d959d7c1e41d24151d1aa62  tabler/database.svg
+7c29ffc1b7bfd04c0dd0018129a4a53552cf6bc1020879a6bce90b66ff87c658  tabler/list.svg
+f90bc483bc6cdd85f9bfab29b05632a32d8bf1b7ad599869444526e540a07cf8  tabler/router.svg
+81fb60acc5c1dfd24ad8a32cd570263687d16f8a896c3ca9ca06a8ff312618e4  tabler/server.svg
+c9ee8faa3131f14ad87995981cbb74c1339938cb009e6ca41b3cdf4dd76e4bb2  tabler/shield-lock.svg

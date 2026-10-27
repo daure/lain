@@ -101,7 +101,7 @@ async fn invalid_containment_is_rejected_without_replacing_the_committed_recordi
             "requires at least one descendant node",
         ),
         (
-            "/diagrams/2/groups",
+            "/diagrams/payment-sequence/groups",
             json!([{"id": "group", "label": "Sequence", "nodeIds": ["callback"]}]),
             "groups require kind flow or state",
         ),
@@ -130,8 +130,14 @@ async fn invalid_containment_is_rejected_without_replacing_the_committed_recordi
         ),
     ] {
         let mut invalid = original.clone();
-        if pointer == "/diagrams/2/groups" {
-            invalid["diagrams"][2]["groups"] = replacement;
+        if pointer == "/diagrams/payment-sequence/groups" {
+            let sequence = invalid["diagrams"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|diagram| diagram["id"] == "payment-sequence")
+                .unwrap();
+            sequence["groups"] = replacement;
         } else {
             *invalid.pointer_mut(pointer).unwrap() = replacement;
         }

@@ -34,14 +34,14 @@ const matched = () => [...document.querySelectorAll<SVGGElement>('.domain-entity
 
 async function mountDomain(count: number, grouped = false) {
   const documentFixture = structuredClone(fixture) as Explanation;
-  if (!grouped) delete documentFixture.domain.groups;
+  if (!grouped) delete documentFixture.domain!.groups;
   documentFixture.diagrams = documentFixture.diagrams.filter(diagram => diagram.kind !== 'sequence');
   documentFixture.scenarios = documentFixture.scenarios.filter(scenario => documentFixture.diagrams.some(diagram => diagram.id === scenario.diagramId));
-  while (documentFixture.domain.entities.length < count) {
-    const id = `extra-${documentFixture.domain.entities.length}`;
-    documentFixture.domain.entities.push({ id, label: id, attributes: [] });
+  while (documentFixture.domain!.entities.length < count) {
+    const id = `extra-${documentFixture.domain!.entities.length}`;
+    documentFixture.domain!.entities.push({ id, label: id, attributes: [] });
   }
-  if (!grouped) documentFixture.domain.entities.reverse();
+  if (!grouped) documentFixture.domain!.entities.reverse();
   vi.stubGlobal('WebSocket', LiveSocket);
   vi.stubGlobal('matchMedia', () => ({ matches: true }));
   vi.stubGlobal('fetch', vi.fn(async (path: string) => Response.json(path === '/api/explanations'

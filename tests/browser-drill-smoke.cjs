@@ -56,21 +56,23 @@ async function main() {
           assert.ok(await icon.evaluate(element => {
             const icon = element.getBoundingClientRect();
             if (element instanceof SVGElement) {
+              const matrix = element.getScreenCTM();
+              const scale = Math.hypot(matrix.a, matrix.b);
               const glyph = element.querySelector('.drill-icon').getBoundingClientRect();
               if (element.ownerSVGElement.classList.contains('sequence')) {
-                const label = element.previousElementSibling.querySelector('text').getBoundingClientRect();
-                return icon.width <= 20.01 && Math.abs(glyph.left - label.right - 8) < 1
+                const label = element.previousElementSibling.querySelector('text tspan:last-child').getBoundingClientRect();
+                return icon.width <= 20.01 * scale && Math.abs(glyph.left - label.right - 8 * scale) < 1
                   && Math.abs(glyph.top + glyph.height / 2 - label.top - label.height / 2) < 2;
               }
               const node = element.previousElementSibling;
               const box = node.querySelector('.node-shape').getBoundingClientRect();
               const label = node.querySelector('text').getBoundingClientRect();
-              return icon.width <= 20.01 && Math.abs(box.left + box.width / 2 - glyph.left - glyph.width / 2) < 1
-                && glyph.top > label.bottom && Math.abs(box.bottom - icon.bottom - 8) < 1;
+              return icon.width <= 20.01 * scale && Math.abs(box.left + box.width / 2 - glyph.left - glyph.width / 2) < 1
+                && glyph.top > label.bottom && Math.abs(box.bottom - icon.bottom - 8 * scale) < 1;
             }
             const text = element.parentElement.querySelector('code, span:not(.drill-link)').getBoundingClientRect();
             return icon.width <= 20.01 && Math.abs(icon.top + icon.height / 2 - text.top - text.height / 2) < 1;
-          }), `${surface} icon is aligned with or centered below its text`);
+          }), `${sourceId} ${width}px ${surface} icon is aligned with or centered below its text`);
           if (surface !== 'diagram') assert.ok(await icon.evaluate(element => {
             const text = element.parentElement.querySelector('code, span:not(.drill-link)');
             return getComputedStyle(element).color === getComputedStyle(text).color;
@@ -145,7 +147,7 @@ async function main() {
     assert.ok(await selfIcon.evaluate(element => {
       const icon = element.getBoundingClientRect();
       const canvas = element.ownerSVGElement.getBoundingClientRect();
-      const label = element.previousElementSibling.querySelector('text').getBoundingClientRect();
+      const label = element.previousElementSibling.querySelector('text tspan:last-child').getBoundingClientRect();
       const glyph = element.querySelector('.drill-icon').getBoundingClientRect();
       return icon.right < canvas.right && Math.abs(glyph.left - label.right - 8) < 1;
     }), 'self-message drill icons stay beside their labels and inside the canvas');

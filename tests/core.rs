@@ -813,7 +813,7 @@ async fn entities_allow_200_attributes_and_reject_excess_definitions_before_stor
     let (_directory, service) = service().await;
     let mut authored = document();
     for number in 2..200 {
-        authored.domain.entities[0]
+        authored.domain.as_mut().unwrap().entities[0]
             .attributes
             .push(lain::model::Attribute {
                 id: format!("attribute-{number}"),
@@ -828,14 +828,19 @@ async fn entities_allow_200_attributes_and_reject_excess_definitions_before_stor
         .publish("attribute-limit", request(authored.clone()))
         .await
         .unwrap();
-    assert_eq!(stored.document.domain.entities[0].attributes.len(), 200);
+    assert_eq!(
+        stored.document.domain.as_ref().unwrap().entities[0]
+            .attributes
+            .len(),
+        200
+    );
     assert_eq!(
         stored.document.scenarios[0].occurrences[0].after.instances[0]
             .values
             .len(),
         200
     );
-    authored.domain.entities[0]
+    authored.domain.as_mut().unwrap().entities[0]
         .attributes
         .push(lain::model::Attribute {
             id: "excess".into(),
@@ -976,9 +981,11 @@ async fn snapshot_links_enforce_duplicate_endpoint_and_both_cardinality_rules() 
     link.target_instance_id = "c2".into();
     snapshot.links.push(link);
     assert_invalid(&service, authored.clone(), "target cardinality one").await;
-    authored.domain.relationships[0].target_cardinality = lain::model::Cardinality::ExactlyOne;
+    authored.domain.as_mut().unwrap().relationships[0].target_cardinality =
+        lain::model::Cardinality::ExactlyOne;
     assert_invalid(&service, authored.clone(), "target cardinality one").await;
-    authored.domain.relationships[0].target_cardinality = lain::model::Cardinality::ZeroOrMore;
+    authored.domain.as_mut().unwrap().relationships[0].target_cardinality =
+        lain::model::Cardinality::ZeroOrMore;
     service
         .publish("many-targets", request(authored))
         .await
@@ -995,9 +1002,11 @@ async fn snapshot_links_enforce_duplicate_endpoint_and_both_cardinality_rules() 
         .publish("many-sources", request(authored.clone()))
         .await
         .unwrap();
-    authored.domain.relationships[0].source_cardinality = lain::model::Cardinality::ZeroOrOne;
+    authored.domain.as_mut().unwrap().relationships[0].source_cardinality =
+        lain::model::Cardinality::ZeroOrOne;
     assert_invalid(&service, authored.clone(), "source cardinality one").await;
-    authored.domain.relationships[0].source_cardinality = lain::model::Cardinality::ExactlyOne;
+    authored.domain.as_mut().unwrap().relationships[0].source_cardinality =
+        lain::model::Cardinality::ExactlyOne;
     assert_invalid(&service, authored, "source cardinality one").await;
 }
 
@@ -1009,9 +1018,9 @@ async fn required_endpoints_enforce_minimum_links_in_both_snapshots() {
         for source in [false, true] {
             let mut authored = document();
             if source {
-                authored.domain.relationships[0].source_cardinality = cardinality;
+                authored.domain.as_mut().unwrap().relationships[0].source_cardinality = cardinality;
             } else {
-                authored.domain.relationships[0].target_cardinality = cardinality;
+                authored.domain.as_mut().unwrap().relationships[0].target_cardinality = cardinality;
             }
             service
                 .publish(
@@ -1124,7 +1133,7 @@ async fn collection_ids_and_minimum_counts_are_validated_before_storage() {
         .await;
     }
     let mut invalid = document();
-    invalid.domain.entities[0].id = "🦀".into();
+    invalid.domain.as_mut().unwrap().entities[0].id = "🦀".into();
     assert_invalid(&service, invalid, "invalid ID").await;
 }
 

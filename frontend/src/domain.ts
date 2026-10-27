@@ -1,7 +1,7 @@
 import dagre from '@dagrejs/dagre';
 import { roundedPath, type Point } from './edge-path';
 import { boxBounds, edgeBounds, enclosingBounds, groupFrames, normalizeGroupGaps, wrapLabel, type LayoutGroup } from './layout';
-import type { Cardinality, Diagram, EntityMethod, Explanation, Relationship, Scenario } from './model';
+import type { Cardinality, Diagram, Domain, Entity, EntityMethod, Relationship, Scenario } from './model';
 
 type EntityRow = { id: string; label: string; labelLines: string[]; idLines: string[]; y: number; height: number };
 type MethodRow = EntityMethod & { signatureLines: string[]; y: number; height: number };
@@ -30,7 +30,7 @@ export function scenarioDomain(diagram: Diagram, scenario: Scenario) {
   return { entityIds, relationshipIds };
 }
 
-function entityTable(entity: Explanation['domain']['entities'][number], titleX: number) {
+function entityTable(entity: Entity, titleX: number) {
   const titleLines = wrapLabel(entity.label, Math.floor((320 - titleX - 130) / 8.4));
   const headerHeight = Math.max(44, titleLines.length * 20 + 20);
   let y = headerHeight;
@@ -117,7 +117,7 @@ function explicitCardinality(cardinality: Cardinality | 'one' | 'many'): Cardina
   return cardinality;
 }
 
-export function domainLayout(domain: Explanation['domain']): DomainLayout {
+export function domainLayout(domain: Domain): DomainLayout {
   if (!domain.entities.length) return { width: 640, height: 200, entities: [], relationships: [], groups: [] };
   const headings = (domain.groups ?? []).map(group => ({ ...group, nodeIds: group.entityIds, lines: wrapLabel(group.label) }));
   const graph = new dagre.graphlib.Graph({ multigraph: true, compound: true });
@@ -204,7 +204,7 @@ export function domainLayout(domain: Explanation['domain']): DomainLayout {
   return { width, height, entities, groups, relationships: relationships.map(({ route, ...edge }) => ({ ...edge, path: roundedPath(route, 8) })) };
 }
 
-function missingGroupSpace(domain: Explanation['domain'], groups: DomainLayout['groups']): number {
+function missingGroupSpace(domain: Domain, groups: DomainLayout['groups']): number {
   const parents = new Map((domain.groups ?? []).map(group => [group.id, group.parentGroupId]));
   let missing = 0;
   for (const [index, group] of groups.entries()) {
@@ -220,7 +220,7 @@ function missingGroupSpace(domain: Explanation['domain'], groups: DomainLayout['
   return Math.ceil(missing);
 }
 
-function numberEntities(domain: Explanation['domain'], entities: DomainEntity[], groups: DomainLayout['groups']) {
+function numberEntities(domain: Domain, entities: DomainEntity[], groups: DomainLayout['groups']) {
   const definitions = domain.groups ?? [];
   const parents = new Map(definitions.flatMap(group => group.entityIds.map(id => [id, group.id] as const)));
   const frames = new Map(groups.map(group => [group.id, group]));

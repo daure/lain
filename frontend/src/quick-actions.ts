@@ -13,6 +13,7 @@ export const quickActions = [
   { id: ']', title: 'Next tab', description: 'Select the next event view', group: 'Tabs', icon: 'pi-angle-right' },
   { id: 'm', title: 'Toggle focus mode', description: 'Hide or restore the sidebar, header, and event footer', group: 'Tabs', icon: 'pi-window-maximize' },
   { id: 'n', title: 'Toggle data inspector', description: 'Show or hide recorded data beside the current view', group: 'Data', icon: 'pi-table' },
+  { id: 'w', title: 'Toggle wiring inspector', description: 'Show or hide interface details in Wiring', group: 'Data', icon: 'pi-sitemap' },
   { id: ',', title: 'Previous data tab', description: 'Select the previous inspector view', group: 'Data', icon: 'pi-angle-left' },
   { id: '.', title: 'Next data tab', description: 'Select the next inspector view', group: 'Data', icon: 'pi-angle-right' },
   { id: "'", title: 'Page data up', description: 'Scroll up one page in the active inspector tab', group: 'Data', icon: 'pi-angle-up' },

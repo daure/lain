@@ -37,7 +37,7 @@ async function main() {
     await focused(0);
     assert.equal(await page.locator('.library-results').textContent(), '7 explanations');
     assert.equal(await page.locator('.library-search').evaluate(element => element.previousElementSibling.matches('.library-heading')
-      && element.nextElementSibling.matches('.library-results')), true, 'search follows the introduction and precedes the results');
+      && element.nextElementSibling.querySelector('.library-results') !== null), true, 'search follows the introduction and precedes the results');
 
     for (const [width, columns] of [[1920, 3], [1250, 3], [800, 2], [390, 1]]) {
       await page.setViewportSize({ width, height: 900 });
@@ -113,8 +113,7 @@ async function main() {
     assert.equal(opens, 1, 'Enter opens exactly one explanation');
 
     for (const key of ['Control+[', 'Escape']) {
-      const tab = page.getByRole('tab', { name: 'Data', exact: true });
-      await tab.click();
+      await page.locator('.overview-link').focus();
       const cursor = new URL(page.url()).search;
       await page.keyboard.press(key);
       assert.equal(await page.evaluate(() => document.activeElement === document.body), true);

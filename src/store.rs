@@ -197,8 +197,14 @@ fn decode(row: &SqliteRow) -> Result<StoredExplanation, ServiceError> {
     let revision: i64 = row.try_get("revision").map_err(storage)?;
     let timestamp: i64 = row.try_get("updated_at_ms").map_err(storage)?;
     let json: String = row.try_get("document_json").map_err(storage)?;
-    let mut document: Explanation = serde_json::from_str(&json).map_err(storage)?;
-    for relationship in &mut document.domain.relationships {
+    let mut value: serde_json::Value = serde_json::from_str(&json).map_err(storage)?;
+    normalize_wiring(&mut value);
+    let mut document: Explanation = serde_json::from_value(value).map_err(storage)?;
+    for relationship in document
+        .domain
+        .iter_mut()
+        .flat_map(|domain| &mut domain.relationships)
+    {
         relationship.source_cardinality = relationship.source_cardinality.explicit();
         relationship.target_cardinality = relationship.target_cardinality.explicit();
     }
@@ -208,6 +214,36 @@ fn decode(row: &SqliteRow) -> Result<StoredExplanation, ServiceError> {
         updated_at_ms: u64::try_from(timestamp).map_err(storage)?,
         document,
     })
+}
+
+fn normalize_wiring(value: &mut serde_json::Value) {
+    let Some(document) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(wiring) = document.remove("architecture") {
+        document.entry("wiring").or_insert(wiring);
+    }
+    let Some(scenarios) = document
+        .get_mut("scenarios")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for scenario in scenarios {
+        let Some(occurrences) = scenario
+            .get_mut("occurrences")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for occurrence in occurrences {
+            if let Some(occurrence) = occurrence.as_object_mut()
+                && let Some(references) = occurrence.remove("architectureRefs")
+            {
+                occurrence.entry("wiringRefs").or_insert(references);
+            }
+        }
+    }
 }
 
 fn prepare_file(path: &Path) -> std::io::Result<()> {

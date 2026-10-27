@@ -41,7 +41,7 @@ async function main() {
 
     for (const width of [1800, 1584, 900, 390]) {
       await page.setViewportSize({ width, height: 900 });
-      for (const tab of ['Diagram', 'Domain']) {
+      for (const tab of ['Diagram', 'Domain', 'Wiring']) {
         await page.getByRole('tab', { name: tab, exact: true }).click();
         const cursor = new URL(page.url()).search;
         await page.keyboard.press('m');
@@ -77,7 +77,7 @@ async function main() {
         await page.keyboard.press('m');
         assert.equal(await page.locator('.focus-breadcrumb').evaluate(element => getComputedStyle(element.closest('.focus-chrome')).display), 'none', 'exiting focus mode hides the breadcrumb immediately');
         assert.equal(await page.locator(focusSelector).evaluateAll(elements => elements.flatMap(element => element.getAnimations()).length), 0);
-        assert.equal(await page.locator(chromeSelector).evaluateAll(elements => elements.every(element => !element.closest('[inert]'))), true);
+        assert.equal(await page.locator(chromeSelector).evaluateAll(elements => elements.every(element => !!element.closest('[inert]') === (innerWidth <= 700 && element.matches('.sidebar')))), true, 'restored chrome keeps closed mobile navigation inert');
       }
     }
 

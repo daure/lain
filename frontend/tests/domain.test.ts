@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest';
 import fixture from '../../examples/order-lifecycle.json';
 import DomainView from '../src/components/DomainView.vue';
 import { domainLayout } from '../src/domain';
-import type { Explanation, Occurrence, Scenario } from '../src/model';
+import type { Domain, Explanation, Occurrence, Scenario } from '../src/model';
 
 function pathCommands(path: string) {
   return [...path.matchAll(/([MLQ])([^MLQ]+)/g)].map(match => {
@@ -24,10 +24,10 @@ it.each([
   ['many', 'zero', 'M18,0 L0,-8 M18,0 L0,0 M18,0 L0,8', 'zero or more (0..*)'],
 ] as const)('renders both bounds for %s on both relationship endpoints', (cardinality, minimum, maximumPath, label) => {
   const authored = structuredClone(fixture) as Explanation;
-  authored.domain.relationships = JSON.parse(JSON.stringify([{ ...authored.domain.relationships[0]!, sourceCardinality: cardinality, targetCardinality: cardinality }]));
+  authored.domain!.relationships = JSON.parse(JSON.stringify([{ ...authored.domain!.relationships[0]!, sourceCardinality: cardinality, targetCardinality: cardinality }]));
   const root = document.createElement('div');
   document.body.append(root);
-  const app = createApp({ render: () => h(DomainView, { domain: authored.domain, diagram: authored.diagrams[0]!, scenario: authored.scenarios[0]!, selectedEntityId: '' }) });
+  const app = createApp({ render: () => h(DomainView, { domain: authored.domain!, diagram: authored.diagrams[0]!, scenario: authored.scenarios[0]!, selectedEntityId: '' }) });
   app.mount(root);
   try {
     const endpoints = root.querySelectorAll('.domain-cardinality');
@@ -45,13 +45,13 @@ it.each([
         expect(endpoint.querySelector('.domain-cardinality-zero')).toBeNull();
       }
     }
-    expect(authored.domain.relationships[0]!.sourceCardinality).toBe(cardinality);
-    expect(root.querySelectorAll('.domain-entity')).toHaveLength(authored.domain.entities.length);
+    expect(authored.domain!.relationships[0]!.sourceCardinality).toBe(cardinality);
+    expect(root.querySelectorAll('.domain-entity')).toHaveLength(authored.domain!.entities.length);
   } finally { app.unmount(); root.remove(); }
 });
 
 it('shows neighboring After counts with initial Before and final After counts at scenario boundaries', async () => {
-  const domain: Explanation['domain'] = { entities: [{ id: 'item', label: 'Item', attributes: [] }], relationships: [] };
+  const domain: Domain = { entities: [{ id: 'item', label: 'Item', attributes: [] }], relationships: [] };
   const empty = { instances: [], links: [] };
   const populated = { instances: ['a', 'b'].map(id => ({ id, entityId: 'item', values: {} })), links: [] };
   const visits: Occurrence[] = [
@@ -95,26 +95,26 @@ it('shows neighboring After counts with initial Before and final After counts at
 it('shows scenario-wide domain usage from visited nodes and both snapshots while keeping unrelated definitions inspectable', async () => {
   const documentFixture = structuredClone(fixture) as Explanation;
   for (const id of ['node-only', 'snapshot-only', 'other-branch', 'unused']) {
-    documentFixture.domain.entities.push({ id, label: id, attributes: [] });
+    documentFixture.domain!.entities.push({ id, label: id, attributes: [] });
   }
   const diagram = documentFixture.diagrams[0]!;
   diagram.nodes.find(node => node.id === 'fulfill')!.entityIds.push('node-only');
   diagram.nodes.find(node => node.id === 'decline')!.entityIds.push('other-branch');
-  documentFixture.domain.relationships.push({ id: 'unrecorded', label: 'Unrecorded association', sourceEntityId: 'order', targetEntityId: 'payment', sourceCardinality: 'zeroOrMore', targetCardinality: 'zeroOrOne' });
+  documentFixture.domain!.relationships.push({ id: 'unrecorded', label: 'Unrecorded association', sourceEntityId: 'order', targetEntityId: 'payment', sourceCardinality: 'zeroOrMore', targetCardinality: 'zeroOrOne' });
   const success = documentFixture.scenarios[0]!;
   success.occurrences.at(-1)!.before.instances.push({ id: 'snapshot-instance', entityId: 'snapshot-only', values: {} });
   const selectedScenario = ref(success);
   const selectedEntityId = ref('');
   const root = document.createElement('div');
   document.body.append(root);
-  const app = createApp({ render: () => h(DomainView, { domain: documentFixture.domain, diagram,
+  const app = createApp({ render: () => h(DomainView, { domain: documentFixture.domain!, diagram,
     scenario: selectedScenario.value, selectedEntityId: selectedEntityId.value, onSelect: id => { selectedEntityId.value = id; } }) });
   app.mount(root);
   try {
     const entity = (id: string) => root.querySelector<SVGGElement>(`[data-entity-id="${id}"]`)!;
     const geometry = () => [...root.querySelectorAll('.domain-entity')].map(node => node.getAttribute('transform'));
     const initialGeometry = geometry();
-    expect(root.querySelectorAll('.domain-entity')).toHaveLength(documentFixture.domain.entities.length);
+    expect(root.querySelectorAll('.domain-entity')).toHaveLength(documentFixture.domain!.entities.length);
     expect(entity('fulfillment').classList.contains('unrelated')).toBe(false);
     expect(entity('node-only').classList.contains('unrelated')).toBe(false);
     expect(entity('snapshot-only').classList.contains('unrelated')).toBe(false);
@@ -139,7 +139,7 @@ it('shows scenario-wide domain usage from visited nodes and both snapshots while
 });
 
 it('lays out self-links, parallel relationships, and wrapped definitions with rounded orthogonal connectors', () => {
-  const domain: Explanation['domain'] = {
+  const domain: Domain = {
     entities: [
       { id: 'a', label: 'A very long entity title that spans several header lines', attributes: [{ id: 'longAttributeIdentifierWithMoreThanSixteenCharacters', label: 'An attribute label that must wrap across several rows' }] },
       { id: 'b', label: 'B', attributes: [], methods: [
@@ -185,7 +185,7 @@ it('lays out self-links, parallel relationships, and wrapped definitions with ro
 });
 
 it('routes ungrouped attribute-only parcel and payment associations with one rounded elbow and labels above their horizontal lanes', () => {
-  const domain = structuredClone(fixture.domain) as Explanation['domain'];
+  const domain = structuredClone(fixture.domain) as Domain;
   delete domain.groups;
   domain.entities = domain.entities.filter(entity => entity.id !== 'gateway' && entity.id !== 'callback-dto');
   domain.relationships = domain.relationships.filter(edge => domain.entities.some(entity => entity.id === edge.sourceEntityId)
@@ -211,7 +211,7 @@ it('routes ungrouped attribute-only parcel and payment associations with one rou
 });
 
 it.each([true, false])('keeps nested domain frames compact and separate with headings that fit their available width (methods: %s)', methods => {
-  const domain = structuredClone(fixture.domain) as Explanation['domain'];
+  const domain = structuredClone(fixture.domain) as Domain;
   if (!methods) for (const entity of domain.entities) delete entity.methods;
   const layout = domainLayout(domain);
   const frames = new Map(layout.groups.map(group => [group.id, group]));
@@ -257,7 +257,7 @@ it.each([true, false])('keeps nested domain frames compact and separate with hea
 });
 
 it('reserves sibling frame separation through eight levels of nesting and wrapped headings', () => {
-  const domain: Explanation['domain'] = {
+  const domain: Domain = {
     entities: ['a', 'b'].map(id => ({ id, label: id, attributes: [] })),
     relationships: [],
     groups: ['a', 'b'].flatMap(id => Array.from({ length: 8 }, (_, depth) => ({
@@ -277,7 +277,7 @@ it('reserves sibling frame separation through eight levels of nesting and wrappe
 });
 
 it('correlates each recorded visit with property differences and explicit calls without moving the shared tables', async () => {
-  const domain: Explanation['domain'] = { entities: [{ id: 'item', label: 'Item', attributes: [
+  const domain: Domain = { entities: [{ id: 'item', label: 'Item', attributes: [
     { id: 'status', label: 'Status' }, { id: 'optional', label: 'Optional' }, { id: 'payload', label: 'Payload' },
   ], methods: [{ id: 'status', signature: 'status(): void', description: '<script>untrusted</script>' }] }], relationships: [] };
   const first: Occurrence = { id: 'first', nodeId: 'work', incomingEdgeId: null, trigger: null, narration: '',

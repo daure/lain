@@ -739,7 +739,7 @@ it('renders entity methods as safe definitions in the domain compartment and ins
   const documentFixture = structuredClone(fixture) as Explanation;
   const signature = 'capturePayment(paymentId: string): void';
   const description = '<img src=x onerror="globalThis.methodXss=1">';
-  documentFixture.domain.entities[0]!.methods = [{ id: 'capture-payment', signature, description }];
+  documentFixture.domain!.entities[0]!.methods = [{ id: 'capture-payment', signature, description }];
   const app = await mountFixture(documentFixture);
   try {
     await openRecording();
@@ -791,7 +791,7 @@ it('switches embedded views with bounded tab shortcuts and preserves keyboard fo
     expect(document.querySelector('.domain-panel .domain-erd')).not.toBeNull();
     expect(new URLSearchParams(location.search).get('occurrence')).toBe(cursor);
     await press('ArrowLeft', {}, selected());
-    expect(selected().textContent).toBe('Diagram');
+    expect(selected().textContent).toBe('Domain');
     await press('Home', {}, selected());
     expect(selected().textContent).toBe('Diagram');
     await press('End', {}, selected());
@@ -919,6 +919,41 @@ it('bounds keyboard traversal in sidebar group order and preserves each scenario
   } finally { app.unmount(); }
   await press('k', { ctrlKey: true });
   expect(document.querySelector('[role="dialog"]')).toBeNull();
+});
+
+it.each([
+  ['Diagram', '.event-tablist [aria-selected="true"]'],
+  ['Domain', '.event-tablist [aria-selected="true"]'],
+  ['Diagram', '.inspector-tabs [aria-selected="true"]'],
+  ['Domain', '.inspector-tabs [aria-selected="true"]'],
+  ['Diagram', '.diagram-minimap'],
+  ['Domain', '.diagram-minimap'],
+])('uses Left/Right for recorded steps with %s focused at %s', async (view, selector) => {
+  const app = await mountFixture();
+  try {
+    await openRecording();
+    button(view).click(); await settle();
+    await press('n');
+    const target = document.querySelector<HTMLElement | SVGElement>(selector)!;
+    target.focus();
+    const selectedDataTab = document.querySelector('.inspector-tabs [aria-selected="true"]');
+    const occurrences = fixture.scenarios[0]!.occurrences;
+    const currentId = () => new URLSearchParams(location.search).get('occurrence');
+    await press('ArrowLeft', {}, target);
+    expect(currentId()).toBe(occurrences[0]!.id);
+    await press('ArrowRight', {}, target);
+    expect(currentId()).toBe(occurrences[1]!.id);
+    await press('ArrowRight', { repeat: true }, target);
+    expect(currentId()).toBe(occurrences[2]!.id);
+    await press('ArrowLeft', {}, target);
+    expect(currentId()).toBe(occurrences[1]!.id);
+    await press('G', { shiftKey: true }, target);
+    await press('ArrowRight', {}, target);
+    expect(currentId()).toBe(occurrences.at(-1)!.id);
+    expect(button(view).getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector('.inspector-tabs [aria-selected="true"]')).toBe(selectedDataTab);
+    expect(document.activeElement).toBe(target);
+  } finally { app.unmount(); }
 });
 
 it('uses arrows for event and scenario navigation across embedded views and input boundaries', async () => {
@@ -1207,8 +1242,8 @@ it('searches all quick actions, skips disabled options, executes selection, and 
     await press('k', { ctrlKey: true }, origin);
     const search = () => document.querySelector<HTMLInputElement>('[aria-label="Search quick actions"]')!;
     expect(document.activeElement).toBe(search());
-    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(29);
-    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(29);
+    expect(document.querySelectorAll('[role="option"] kbd')).toHaveLength(30);
+    expect(document.querySelectorAll('[role="option"][aria-disabled="true"]')).toHaveLength(30);
     await closeDialog();
     await openRecording();
     await press('k', { ctrlKey: true });

@@ -132,25 +132,26 @@ it('opens a reader overview with topic membership, labels, and explicit cross-di
   expect(overview()).not.toBeNull();
 });
 
-it('switches comparison partners while preserving each recording cursor, the view, and inspector selection', async () => {
+it('opens comparison recordings from Overview while preserving each cursor, the view, and inspector selection', async () => {
   await mount();
   const pair = overview()!.querySelector('#comparison-receipt-check')!;
   pair.querySelector<HTMLButtonElement>('.overview-scenario')!.click(); await settle();
   expect(overview()).toBeNull();
   expect(selected()).toBe(review.scenarios[0]!.title);
-  expect(document.querySelector('.scenario-trail')!.textContent).toContain(review.topics[0]!.title);
-  expect(document.activeElement).toBe(document.querySelector('.scenario-context h2'));
+  expect(document.activeElement).toBe(document.querySelector('.event-tablist [aria-selected="true"]'));
   await press('l');
   const cursor = new URLSearchParams(location.search).get('occurrence');
   expect(cursor).toBe('duplicate-queued');
   await press('n'); await press('.'); await press('.');
   const inspector = document.querySelector('#step-inspector');
   await press(']');
-  document.querySelector<HTMLButtonElement>('.scenario-contrast button')!.click(); await settle();
+  await openOverview();
+  overview()!.querySelectorAll<HTMLButtonElement>('#comparison-receipt-check .overview-scenario')[1]!.click(); await settle();
   expect(selected()).toBe(review.scenarios[1]!.title);
   expect(document.querySelector('.event-tablist [aria-selected="true"]')!.textContent).toBe('Domain');
   await press('l');
-  document.querySelector<HTMLButtonElement>('.scenario-contrast button')!.click(); await settle();
+  await openOverview();
+  overview()!.querySelector<HTMLButtonElement>('#comparison-receipt-check .overview-scenario')!.click(); await settle();
   expect(new URLSearchParams(location.search).get('occurrence')).toBe(cursor);
   await openOverview();
   expect(overview()).not.toBeNull();
@@ -244,7 +245,6 @@ it('reconciles topic and label updates without changing the selected visit or Ov
   next.topics!.reverse(); next.scenarios[3]!.labels = ['Proposed', 'Recovery'];
   await update(next);
   expect(location.search).toBe(route);
-  expect(document.querySelector('.scenario-context .scenario-labels')!.textContent).toBe('ProposedRecovery');
   expect([...document.querySelectorAll('.sidebar .scenario-link.selected .scenario-badge')].map(label => label.textContent)).toEqual(['Proposed', 'Recovery']);
   await openOverview();
   const overviewRoute = location.search;

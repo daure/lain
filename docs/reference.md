@@ -89,7 +89,7 @@ Open the printed URL in a browser on the same machine.
 | `lain setup` | Install, enable, and start the user service |
 | `lain setup --dry-run` | Preview the service and MCP settings |
 | `lain status` | Check daemon readiness |
-| `lain demo` | Publish the bundled order lifecycle, release approval, and incident recovery examples |
+| `lain demo` | Publish the bundled order lifecycle, release approval, incident recovery, review, and shopping-cart examples |
 
 Global `--home` or `LAIN_HOME` selects an isolated state directory. The default is `$XDG_DATA_HOME/lain`, falling back to `~/.local/share/lain`. Global `--port` overrides the saved port; the default is 38475. Successful setup saves the selected port for later commands. Use distinct ports when running isolated instances concurrently.
 
@@ -139,19 +139,27 @@ See [agent-instructions.md](../agent-instructions.md), the discoverable MCP tool
 
 ### Chart downloads
 
-GET `/api/explanations/{id}/diagrams/{diagramId}/export` or `/api/explanations/{id}/domain/export` on the local daemon. Query options: `format=svg|png|pdf` (default png), `theme=light|dark` (default light), and optional `scenarioId` to preserve off-path muting. Omit `scenarioId` for all scenarios. Responses contain file bytes and an attachment filename. Save the file in the uploader's environment before attaching it to a ticket. Server rendering requires Chrome/Chromium on PATH or `LAIN_CHROMIUM_EXECUTABLE`; missing, busy, or timed-out renderers return 503.
+GET `/api/explanations/{id}/diagrams/{diagramId}/export`, `/api/explanations/{id}/domain/export`, or `/api/explanations/{id}/wiring/export` on the local daemon. Query options: `format=svg|png|pdf` (default png), `theme=light|dark` (default light), and optional `scenarioId` to preserve off-path muting. Omit `scenarioId` for all scenarios. Responses contain file bytes and an attachment filename. Save the file in the uploader's environment before attaching it to a ticket. Server rendering requires Chrome/Chromium on PATH or `LAIN_CHROMIUM_EXECUTABLE`; missing, busy, or timed-out renderers return 503.
 
 ## Viewer
 
 Select an explanation to read its Overview, compare scenario summaries, and choose a topic. Search matches scenarios, topics, labels, and comparisons; / focuses search. The sidebar groups scenarios by reader question and shows badges such as Happy path, Failure, Current, and Proposed. Hover or focus a scenario to preview its description and recording details. Diagrams remain shared definitions underneath the topics. Documents without reader structure retain diagram-based navigation and open at Overview.
 
-Open a scenario to follow its recorded steps. Its context strip links to Overview and comparison partners; switching partners preserves each recording's cursor and the selected view. The carousel shows the current event with its position and total, such as `1/4`. Previous and next move through recorded occurrences. Adjacent carousel steps are clickable. Repeated visits to a node retain separate snapshots.
+Open a scenario to follow its recorded steps. The sidebar links to Overview, where comparison cards open related recordings while preserving each recording's cursor and the selected view. The carousel shows the current event with its position and total, such as `1/4`. Previous and next move through recorded occurrences. Adjacent carousel steps are clickable. Repeated visits to a node retain separate snapshots.
+
+Domain and Wiring are independently optional. Their tabs appear only when the document includes their definitions. Present empty definitions still expose their tabs. Domain-free recordings have empty snapshots and no entity, relationship, or method references; Diagram and Wiring playback remain available. Removing the selected domain through a live update returns to Diagram without moving the recorded cursor. Domain export returns 404 when the document omits domain.
 
 The URL records explanation, scenario, and occurrence IDs, or `view=overview` for the explanation overview. Reload and browser Back/Forward restore that location. Share a location with another browser on the same machine; links contain no captured values.
 
 The header's Diagram button opens the full map with muted off-scenario elements, upcoming scenario elements, and blue visited elements. Visit counts appear on nodes and edges after their second visit through the current event. Off-path nodes do not change the scenario. Domain opens the ERD with domain definitions. Live publications update the displayed document automatically, preserving surviving scenario and occurrence selections. Revisions remain internal synchronization metadata; the GUI shows update status and retry actions.
 
 Sequence diagrams share one ordered interaction across their scenarios. The full view shows participant lifelines and alt/opt/loop frames with every alternative visible. Select a message to inspect its snapshots; repeated messages offer an occurrence picker. The compact view shows the previous and current recorded messages.
+
+The Wiring sidepanel has searchable Components and Connections lists and expandable Groups. Component details link owned interfaces, attached connections, and recorded visits. Connection and operation details use Overview, Schema, and Visits tabs. Schema starts with collapsed request and individual response groups; expand a field to inspect its type, requirements, status, description, and contract example. Optional `requestType` names the request DTO, command, or incoming message; omission shows an unknown-type notice. Each response has an independent schema. Unknown schemas, declared empty field lists, and explicit bodyless (`void`) results remain distinct. Existing flat response/error fields appear without an inferred status. Visits group links by scenario and retain repeated occurrences. Inspection preserves playback; selecting a visit opens its recorded step.
+
+Wiring appears after Diagram and the optional Domain tab when the explanation supplies `wiring`. Owner cards show every operation and screen as a port; individual wires attach to their named owner-local rows. Select a port or wire to inspect its typed request, response, SQL record, message, or telemetry fields. Authored `missing` and `changed` statuses identify contract gaps; they do not prove runtime behavior. Optional `technology.icon` uses a bundled icon identifier such as `angular`, `spring`, `postgresql`, or `datadog`; unknown identifiers fall back to the component kind. Icon identifiers never load authored assets. Work references and recorded-occurrence links preserve the cursor; safe optional URLs open externally. Work markers describe attachments, not dependencies or progress.
+
+Wiring starts fitted to the whole map. Scenario changes and playback change emphasis without moving its single layout or camera. **Focus current step** frames mapped owners and connection paths once with 20px padding; later playback preserves that framing. Current, earlier, later, and outside mapped scope have visible markers and a legend. Omitted `wiringRefs` read **Mapping not recorded**; explicit `{}` reads **No wiring elements mapped for this step**. Coverage counts authored mappings rather than verified runtime completeness. Current/Proposed badges identify authored scenario versions, not computed diffs or side-by-side Wiring states. Narrow-screen Wiring details and Data use separate, mutually exclusive sheets. Wiring downloads include the shared map and optional scenario muting without playback or inspection state. Diagram/Domain downloads omit wiring mappings while saved explanations retain them.
 
 Participant boxes prepend human or system icons. Calls use solid filled arrows, asynchronous sends use solid open arrows, and replies use dashed open arrows. Lifelines are dashed; scenario relevance dims elements without changing their semantic line styles. Omitted kinds default to system participants and call messages.
 
@@ -176,7 +184,7 @@ Diagram and Domain canvases open fitted to their content. The active Fit or 1:1 
 | `'` / `/` | Page up / down in the active inspector tab while open |
 | ; | Toggle fit-to-screen / 1:1 with current-step focus in Diagram or Domain |
 
-Type to filter quick actions, use ↑/↓ to select a result, and press Enter to run it. Escape closes the dialog and restores navigation immediately, including during its closing animation. H/L works inside the scenario diagram. J/K works inside both diagram views. I/O switches between those views instantly. Single-letter shortcuts pause while typing, using quick actions or selection overlays, or interacting with unrelated modals. Scenario navigation preserves each scenario's event position and stops at the first/last item.
+Type to filter quick actions, use ↑/↓ to select a result, and press Enter to run it. Escape closes the dialog and restores navigation immediately, including during its closing animation. H/L selects recorded events and J/K selects scenarios from any main view. I selects Diagram; O selects Domain when present. Brackets and tab-list arrows select among available Diagram, Domain, and Wiring tabs. Single-letter shortcuts pause while typing, using quick actions or selection overlays, or interacting with unrelated modals. Scenario navigation preserves each scenario's event position and stops at the first/last item.
 
 Redact secrets and personal data before publication or sharing. No credentials belong in an explanation.
 
@@ -211,6 +219,8 @@ node tests/browser-smoke.cjs
 The harness exercises the actual daemon, live updates, restart persistence, and mobile layout. It cleans up its processes and retains diagnostic artifacts under `/tmp/opencode`.
 
 `tests/browser-overview-smoke.cjs` uses the same Playwright/browser settings to check topic navigation, comparison partners, browser history, both themes, and mobile layout against an isolated daemon. It defaults to `target/debug/lain`; `LAIN_BINARY` selects another built executable.
+
+`tests/browser-wiring-smoke.cjs` uses those browser settings with an isolated frontend preview and the shopping-cart fixture. It checks shared geometry/framing, full-scope focus padding, port inspection, contract gaps, work overlays, mapping coverage, live removal, both themes, and 320–1440px layouts. It performs no publication to saved user state.
 
 ## Release
 

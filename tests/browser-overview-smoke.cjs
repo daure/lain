@@ -78,13 +78,13 @@ async function main() {
 
     await page.mouse.move(1200, 350);
     await page.keyboard.press('j');
-    await page.locator('.scenario-context').waitFor();
+    await page.locator('.step-rail').waitFor();
     const scenarioRoute = page.url();
     await page.keyboard.press('k');
     await page.getByRole('main', { name: 'Explanation overview' }).waitFor();
     assert.equal(page.url(), route);
     await page.keyboard.press('j');
-    await page.locator('.scenario-context').waitFor();
+    await page.locator('.step-rail').waitFor();
     assert.equal(page.url(), scenarioRoute);
     await page.keyboard.press('d');
     await preview.waitFor();
@@ -100,7 +100,7 @@ async function main() {
     await preview.waitFor({ state: 'hidden' });
     await page.keyboard.press('d');
     await preview.waitFor();
-    await page.locator('.scenario-context h2').click();
+    await page.locator('.event-tablist [aria-selected="true"]').click();
     await preview.waitFor({ state: 'hidden' });
     await page.keyboard.press('d');
     await page.keyboard.press('m');
@@ -143,21 +143,23 @@ async function main() {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.locator('#comparison-receipt-check').getByRole('button', { name: 'Open scenario: Repeated callback queues another job', exact: true }).click();
-    await page.locator('.scenario-context').waitFor();
+    await page.locator('.step-rail').waitFor();
     assert.equal(await page.getByRole('button', { name: 'Toggle data inspector' }).getAttribute('aria-expanded'), 'false');
     await page.keyboard.press('l');
     await page.waitForURL('**occurrence=duplicate-queued');
     const source = page.url();
     await page.getByRole('tab', { name: 'Diagram', exact: true }).click();
-    await page.locator('.scenario-contrast button').click();
+    await page.locator('.overview-link').click();
+    await page.locator('#comparison-receipt-check').getByRole('button', { name: 'Open scenario: Receipt check keeps one queued job', exact: true }).click();
     await page.waitForURL('**scenario=duplicate-proposed**');
     assert.equal(await page.getByRole('tab', { name: 'Diagram', exact: true }).getAttribute('aria-selected'), 'true');
-    await page.locator('.scenario-contrast button').click();
+    await page.locator('.overview-link').click();
+    await page.locator('#comparison-receipt-check').getByRole('button', { name: 'Open scenario: Repeated callback queues another job', exact: true }).click();
     await page.waitForURL(source);
     await page.locator('.overview-link').click();
     await page.getByRole('main', { name: 'Explanation overview' }).waitFor();
     await page.goBack();
-    await page.locator('.scenario-context').waitFor();
+    await page.locator('.step-rail').waitFor();
     assert.equal(page.url(), source);
     await page.goForward();
     await page.getByRole('main', { name: 'Explanation overview' }).waitFor();
@@ -169,7 +171,7 @@ async function main() {
     assert.equal(await page.locator('.sidebar [data-topic-id="payments"] .scenario-link').count(), 6);
     assert.equal(await page.locator('.sidebar [data-topic-id]').count(), 4);
     await page.locator('.sidebar [data-scenario-title="New payment queues fulfillment"]').click();
-    await page.locator('.scenario-context').waitFor();
+    await page.locator('.step-rail').waitFor();
     for (const width of [390, 663, 768, 900, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       const footer = await page.locator('.event-controls').boundingBox();

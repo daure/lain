@@ -50,6 +50,232 @@ async function mountGraph(width = 2000) {
 
 afterEach(() => { vi.unstubAllGlobals(); document.body.replaceChildren(); });
 
+function touch(target: Element, type: string, id: number, x: number, y: number) {
+  const event = new MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true });
+  Object.defineProperties(event, { pointerId: { value: id }, pointerType: { value: 'touch' } });
+  target.dispatchEvent(event);
+  return event;
+}
+
+it('doubles background zoom around the pointer and clamps at the maximum scale', async () => {
+  const view = await mountViewport(() => h(DiagramViewport, { width: 3000, height: 1800, title: 'Map' }));
+  try {
+    vi.spyOn(view.scroller, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 80 } as DOMRect);
+    const doubleClick = () => {
+      const event = new MouseEvent('dblclick', { clientX: 350, clientY: 230, bubbles: true, cancelable: true });
+      view.canvas.querySelector('.viewport-content')!.dispatchEvent(event);
+      return event;
+    };
+    expect(doubleClick().defaultPrevented).toBe(true);
+    await settle();
+    expect(view.canvas.dataset.scale).toBe('2');
+    expect(view.position()).toEqual([2270, 1370]);
+    doubleClick(); doubleClick(); doubleClick(); await settle();
+    expect(view.canvas.dataset.scale).toBe('8');
+    expect(view.position()).toEqual([9770, 5870]);
+  } finally { view.app.unmount(); }
+});
+
+it('exits fit on a background double-click and follows the next recorded step at the new zoom', async () => {
+  const view = await mountGraph();
+  try {
+    await view.click('Fit diagram');
+    view.scroller.dispatchEvent(new MouseEvent('dblclick', { clientX: 500, clientY: 300, cancelable: true }));
+    await settle();
+    expect(view.canvas.dataset.scale).toBe('0.96');
+    expect(view.canvas.dataset.fitted).toBe('false');
+    view.selected.value = 'c'; await settle();
+    expect(view.canvas.dataset.scale).toBe('0.96');
+    expect(view.position()).toEqual([960, 0]);
+  } finally { view.app.unmount(); }
+});
+
+it('keeps selectable content and disabled charts out of background double-click zoom', async () => {
+  const enabled = ref(true);
+  const select = vi.fn();
+  const view = await mountViewport(() => h(DiagramViewport, { width: 3000, height: 1800, title: 'Map', enabled: enabled.value },
+    { default: () => [h('button', { onClick: select }, [h('span', 'Node')]), h('g', { role: 'button' }, [h('text', 'Entity')]), h('a', { href: '#details' }, 'Details')] }));
+  try {
+    for (const target of view.canvas.querySelectorAll('.viewport-content span, .viewport-content text, .viewport-content a')) {
+      const event = new MouseEvent('dblclick', { bubbles: true, cancelable: true });
+      target.dispatchEvent(event); await settle();
+      expect(event.defaultPrevented).toBe(false);
+      expect(view.canvas.dataset.scale).toBe('1');
+    }
+    view.canvas.querySelector<HTMLButtonElement>('.viewport-content button')!.click();
+    expect(select).toHaveBeenCalledTimes(1);
+    enabled.value = false; await settle();
+    view.scroller.dispatchEvent(new MouseEvent('dblclick', { cancelable: true })); await settle();
+    expect(view.canvas.dataset.scale).toBe('1');
+  } finally { view.app.unmount(); }
+});
+
+it('zooms around the trackpad pinch position and accumulates rapid wheel events without moving the anchor', async () => {
+  const view = await mountViewport(() => h(DiagramViewport, { width: 3000, height: 1800, title: 'Map' }));
+  try {
+    vi.spyOn(view.scroller, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 80 } as DOMRect);
+    const wheel = (deltaY: number, ctrlKey = true) => {
+      const event = new WheelEvent('wheel', { ctrlKey, deltaY, clientX: 350, clientY: 230, cancelable: true });
+      view.scroller.dispatchEvent(event);
+      return event;
+    };
+    expect(view.position()).toEqual([1020, 620]);
+    expect(wheel(-Math.log(2) * 100).defaultPrevented).toBe(true);
+    wheel(-Math.log(2) * 100);
+    await settle();
+    expect(Number(view.canvas.dataset.scale)).toBeCloseTo(4);
+    expect(view.scroller.scrollLeft).toBeCloseTo(4770);
+    expect(view.scroller.scrollTop).toBeCloseTo(2870);
+    wheel(Math.log(4) * 100); await settle();
+    expect(Number(view.canvas.dataset.scale)).toBeCloseTo(1);
+    expect(view.scroller.scrollLeft).toBeCloseTo(1020);
+    expect(view.scroller.scrollTop).toBeCloseTo(620);
+    expect(wheel(80, false).defaultPrevented).toBe(false);
+    await settle();
+    expect(Number(view.canvas.dataset.scale)).toBeCloseTo(1);
+    await view.click('Fit diagram');
+    wheel(-20); await settle();
+    expect(view.canvas.dataset.fitted).toBe('false');
+  } finally { view.app.unmount(); }
+});
+
+it('pinches over selectable content, follows the moving midpoint, and keeps taps and keyboard selection available', async () => {
+  const select = vi.fn();
+  const view = await mountViewport(() => h(DiagramViewport, { width: 3000, height: 1800, title: 'Map' },
+    { default: () => h('button', { onClick: select }, 'Select node') }));
+  try {
+    const node = view.canvas.querySelector('.viewport-content button')!;
+    touch(node, 'pointerdown', 1, 400, 300);
+    expect(touch(node, 'pointerdown', 2, 600, 300).defaultPrevented).toBe(true);
+    touch(node, 'pointermove', 2, 800, 300); await settle();
+    expect(view.canvas.dataset.scale).toBe('2');
+    expect(view.position()).toEqual([2420, 1520]);
+    touch(node, 'pointermove', 1, 200, 300); await settle();
+    expect(view.canvas.dataset.scale).toBe('3');
+    expect(view.position()).toEqual([4020, 2420]);
+    touch(node, 'pointerup', 2, 800, 300);
+    touch(node, 'pointermove', 1, 100, 250); await settle();
+    expect(view.position()).toEqual([4020, 2420]);
+    touch(node, 'pointerup', 1, 100, 250);
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
+    node.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(select).not.toHaveBeenCalled();
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }));
+    expect(select).toHaveBeenCalledTimes(1);
+    touch(node, 'pointerdown', 3, 400, 300);
+    touch(node, 'pointerup', 3, 400, 300);
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    expect(select).toHaveBeenCalledTimes(2);
+  } finally { view.app.unmount(); }
+});
+
+it('clamps pinch zoom, exits fit, and starts a fresh gesture after cancellation', async () => {
+  const view = await mountViewport(() => h(DiagramViewport, { width: 3000, height: 1800, title: 'Map' },
+    { default: () => h('button', 'Node') }));
+  try {
+    const node = view.canvas.querySelector('.viewport-content button')!;
+    await view.click('Fit diagram');
+    const fittedScale = Number(view.canvas.dataset.scale);
+    touch(node, 'pointerdown', 1, 400, 300);
+    touch(node, 'pointerdown', 2, 600, 300);
+    touch(node, 'pointermove', 2, 800, 300); await settle();
+    expect(Number(view.canvas.dataset.scale)).toBeCloseTo(fittedScale * 2);
+    expect(view.canvas.dataset.fitted).toBe('false');
+    touch(node, 'pointermove', 2, 400, 300); await settle();
+    expect(view.canvas.dataset.scale).toBe('0.1');
+    touch(node, 'pointermove', 2, 10400, 300); await settle();
+    expect(view.canvas.dataset.scale).toBe('8');
+    touch(node, 'pointercancel', 1, 400, 300);
+    touch(node, 'pointercancel', 2, 10400, 300);
+    await view.click('Zoom to 100% and focus');
+    touch(node, 'pointerdown', 3, 400, 300);
+    touch(node, 'pointerdown', 4, 600, 300);
+    touch(node, 'pointermove', 4, 500, 300); await settle();
+    expect(view.canvas.dataset.scale).toBe('0.5');
+    touch(node, 'pointerup', 3, 400, 300);
+    touch(node, 'pointerup', 4, 500, 300);
+  } finally { view.app.unmount(); }
+});
+
+it('fits a shared map initially and frames an explicit scope with 20px padding without enabling following', async () => {
+  const canvas = ref<InstanceType<typeof DiagramViewport>>();
+  const focusKey = ref('first');
+  const view = await mountViewport(() => h(DiagramViewport, { ref: canvas, width: 3000, height: 1800, title: 'Wiring', initialFit: true, autoFollow: false, exportEnabled: false, focusKey: focusKey.value, focusPoint: { x: 2900, y: 1700 } }));
+  try {
+    expect(view.canvas.dataset.fitted).toBe('true');
+    expect(Number(view.canvas.dataset.scale)).toBeCloseTo(560 / 1800);
+    expect(view.canvas.querySelector('[data-chart-export-menu]')).toBeNull();
+    await canvas.value!.focusBounds({ left: 1000, right: 2200, top: 600, bottom: 1200 });
+    await settle();
+    expect(view.canvas.dataset.fitted).toBe('false');
+    expect(Number(view.canvas.dataset.scale)).toBe(.8);
+    expect(view.position()).toEqual([800, 440]);
+    const position = view.position();
+    focusKey.value = 'later'; await settle();
+    expect(view.position()).toEqual(position);
+    expect(Number(view.canvas.dataset.scale)).toBe(.8);
+  } finally { view.app.unmount(); }
+});
+
+it.each([
+  { width: 4000, height: 1000, bounds: { left: 32, right: 3990, top: 100, bottom: 800 }, scale: .24 },
+  { width: 1000, height: 4000, bounds: { left: 100, right: 800, top: 32, bottom: 3990 }, scale: .14 },
+])('retains focus padding when the $width × $height map fits without scrolling', async ({ width, height, bounds, scale }) => {
+  const canvas = ref<InstanceType<typeof DiagramViewport>>();
+  const view = await mountViewport(() => h(DiagramViewport, { ref: canvas, width, height, title: 'Shared map', autoFollow: false }));
+  try {
+    await canvas.value!.focusBounds(bounds); await settle();
+    expect(Number(view.canvas.dataset.scale)).toBe(scale);
+    expect(view.position()).toEqual([0, 0]);
+    const content = view.canvas.querySelector<HTMLElement>('.viewport-content')!;
+    const left = parseFloat(content.style.left), top = parseFloat(content.style.top);
+    expect(left + bounds.left * scale).toBeGreaterThanOrEqual(20);
+    expect(top + bounds.top * scale).toBeGreaterThanOrEqual(20);
+    expect(1000 - left - bounds.right * scale).toBeGreaterThanOrEqual(20);
+    expect(600 - top - bounds.bottom * scale).toBeGreaterThanOrEqual(20);
+  } finally { view.app.unmount(); }
+});
+
+it('fits mapped steps through the target control and navigation while retaining framing for empty mappings', async () => {
+  const bounds = ref<{ left: number; right: number; top: number; bottom: number } | null>(null);
+  const occurrence = ref('unmapped');
+  const view = await mountViewport(() => h(DiagramViewport, { width: 3000, height: 1800, title: 'Wiring', initialFit: true,
+    focusBounds: bounds.value, focusKey: occurrence.value }));
+  try {
+    const target = view.canvas.querySelector<HTMLButtonElement>('[aria-label="Fit current step"]')!;
+    expect(target.disabled).toBe(true);
+    expect(view.canvas.dataset.fitted).toBe('true');
+    bounds.value = { left: 1000, right: 2200, top: 600, bottom: 1200 };
+    occurrence.value = 'first'; await settle();
+    expect(target.disabled).toBe(false);
+    expect(target.getAttribute('aria-pressed')).toBe('true');
+    expect(Number(view.canvas.dataset.scale)).toBe(.8);
+    expect(view.position()).toEqual([800, 440]);
+    await view.click('Zoom in');
+    expect(target.getAttribute('aria-pressed')).toBe('false');
+    await view.click('Fit current step');
+    expect(Number(view.canvas.dataset.scale)).toBe(.8);
+    expect(view.position()).toEqual([800, 440]);
+    await view.click('Fit diagram');
+    bounds.value = { left: 200, right: 800, top: 100, bottom: 900 };
+    occurrence.value = 'next'; await settle();
+    expect(view.canvas.dataset.fitted).toBe('false');
+    expect(Number(view.canvas.dataset.scale)).toBe(.7);
+    expect(view.position()).toEqual([0, 70]);
+    bounds.value = null; occurrence.value = 'empty'; await settle();
+    expect(target.disabled).toBe(true);
+    expect(Number(view.canvas.dataset.scale)).toBe(.7);
+    expect(view.position()).toEqual([0, 70]);
+    bounds.value = { left: 1000, right: 2200, top: 600, bottom: 1200 };
+    occurrence.value = 'revisit'; await settle();
+    await view.click('Zoom out');
+    occurrence.value = 'same-mapping'; await settle();
+    expect(Number(view.canvas.dataset.scale)).toBe(.8);
+    expect(view.position()).toEqual([800, 440]);
+  } finally { view.app.unmount(); }
+});
+
 it('pins swimlane headings with a screen-space left gutter through panning and zoom while exports retain full bands', async () => {
   const layout = diagramLayout({ id: 'handoff', title: 'Handoff', kind: 'flow', nodes: [
     { id: 'a', label: 'Request', entityIds: [] }, { id: 'b', label: 'Handle', entityIds: [] },
