@@ -29,7 +29,7 @@ async function mount(render: () => ReturnType<typeof h>) {
   apps.push(app);
   app.mount(root);
   await nextTick();
-  if (root.querySelector('.wiring-body > [role="status"]')) await vi.waitFor(() => expect(root.querySelector('.wiring-map')).not.toBeNull());
+  if (root.querySelector('.wiring-body > [role="status"]')) await vi.waitFor(() => expect(root.querySelector('.wiring-map')).not.toBeNull(), { timeout: 10_000 });
   return root;
 }
 

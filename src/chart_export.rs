@@ -407,13 +407,17 @@ impl BrowserProcess {
         let mut lines = BufReader::new(browser.child.stderr.take().unwrap()).lines();
         #[cfg(windows)]
         let mut lines = BufReader::new(browser.child.stderr().take().unwrap()).lines();
+        let mut startup_output = String::new();
         let endpoint = loop {
-            let line = lines
-                .next_line()
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Chromium exited before renderer startup"))?;
+            let line = lines.next_line().await?.ok_or_else(|| {
+                anyhow::anyhow!("Chromium exited before renderer startup: {startup_output}")
+            })?;
             if let Some(endpoint) = line.strip_prefix("DevTools listening on ") {
                 break endpoint.to_owned();
+            }
+            if startup_output.len() < 8192 {
+                startup_output.push_str(&line);
+                startup_output.push('\n');
             }
         };
         browser.drain = Some(tokio::spawn(async move {

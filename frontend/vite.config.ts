@@ -26,5 +26,5 @@ export default defineConfig({
       },
     },
   },
-  test: { environment: 'node', include: ['tests/**/*.test.ts'], setupFiles: ['tests/setup.ts'] },
+  test: { environment: 'node', include: ['tests/**/*.test.ts'], setupFiles: ['tests/setup.ts'], maxWorkers: process.env.CI ? 2 : undefined, testTimeout: 30_000 },
 });

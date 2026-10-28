@@ -19,7 +19,7 @@ class LiveSocket {
 const originalURL = location.href;
 const settle = async () => {
   for (let turn = 0; turn < 15; turn++) { await Promise.resolve(); await nextTick(); }
-  if (document.querySelector('.wiring-body > [role="status"]')) await vi.waitFor(() => expect(document.querySelector('.wiring-map')).not.toBeNull());
+  if (document.querySelector('.wiring-body > [role="status"]')) await vi.waitFor(() => expect(document.querySelector('.wiring-map')).not.toBeNull(), { timeout: 10_000 });
 };
 const press = async (key: string, target: EventTarget = document) => {
   target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); await settle();

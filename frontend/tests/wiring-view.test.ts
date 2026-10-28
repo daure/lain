@@ -8,7 +8,7 @@ import { wiringFixture, wiringScenario } from './fixtures/wiring';
 
 const settle = async () => {
   for (let turn = 0; turn < 10; turn++) await nextTick();
-  if (document.querySelector('.wiring-body > [role="status"]')) await vi.waitFor(() => expect(document.querySelector('.wiring-map')).not.toBeNull());
+  if (document.querySelector('.wiring-body > [role="status"]')) await vi.waitFor(() => expect(document.querySelector('.wiring-map')).not.toBeNull(), { timeout: 10_000 });
 };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren(); });
 

@@ -102,7 +102,7 @@ try {
   if (process.env.LAIN_TEST_CHART_EXPORT === '1') {
     const diagram = saved.document.diagrams[0].id;
     const response = await fetch(`${base}/api/explanations/order-lifecycle/diagrams/${diagram}/export?format=svg`, { signal: AbortSignal.timeout(35000) });
-    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(response.status, 200, `${await response.clone().text()}\n${output}`);
     assert.match(await response.text(), /<svg[\s>]/);
   }
   await stop();

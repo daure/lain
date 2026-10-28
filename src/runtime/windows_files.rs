@@ -179,9 +179,12 @@ pub(super) fn check_file(file: &File) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     let allocation = LocalAllocation(text.cast());
-    let sddl = String::from_utf16_lossy(unsafe {
-        std::slice::from_raw_parts(text, length.saturating_sub(1) as usize)
-    });
+    let buffer = unsafe { std::slice::from_raw_parts(text, length as usize) };
+    let end = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(buffer.len());
+    let sddl = String::from_utf16_lossy(&buffer[..end]);
     drop(allocation);
     let entries: Vec<_> = sddl
         .split('(')
@@ -196,9 +199,9 @@ pub(super) fn check_file(file: &File) -> io::Result<()> {
             || fields[2] != "FA"
             || !matches!(fields[5], "SY" | "OW")
         {
-            return Err(io::Error::other(
-                "state must have an owner-only Windows ACL",
-            ));
+            return Err(io::Error::other(format!(
+                "state must have an owner-only Windows ACL: {sddl:?}"
+            )));
         }
         principals.push(fields[5]);
     }
