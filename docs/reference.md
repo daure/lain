@@ -6,7 +6,9 @@ A local web viewer for agent-published software explanations. Agents publish a d
 
 ## Install a release
 
-Supports x86-64 Linux with glibc 2.39+ (Ubuntu 24.04 or newer). Requires `curl` and `tar`; systemd user services are needed for `lain setup`. Rust, Node, and a database server are not required.
+Supports Linux x64 with glibc 2.39+ (Ubuntu 24.04 or newer), macOS on Intel and Apple Silicon, and Windows x64. Linux and macOS require `curl` and `tar`; Windows uses PowerShell 5.1+. Rust, Node, and a database server are not required.
+
+Linux and macOS:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/daure/lain/releases/latest/download/lain-installer.sh | sh
@@ -16,19 +18,30 @@ lain demo
 lain
 ```
 
-The installer downloads the release executable to `~/.local/bin` and runs `lain setup` on first installation. Upgrades list outdated processes from that installation and ask before stopping them. Declining or lacking an interactive terminal aborts before executable replacement. Approval allows forced termination of unresponsive processes. Associated user services restart with their existing configuration; setup failures, restart failures, or remaining outdated processes fail installation. Separate installations and development checkouts remain independent. Reconnect MCP clients after updating. Follow the installer's shell PATH instructions for future terminals. `lain demo` publishes the bundled examples; agents publish your own explanations through [MCP](#agent-connection).
+Windows:
 
-To upgrade, run the installer again, then `lain status`. Runtime data remains under `LAIN_HOME`. If user systemd is unavailable, installation prints manual setup instructions. On a machine without systemd, run `lain serve` in a terminal and `lain open --print-url` in another. Set `LAIN_NO_SETUP=1` to skip service creation; existing processes still require approval and associated services restart:
+```powershell
+irm https://github.com/daure/lain/releases/latest/download/lain-installer.ps1 | iex
+lain status
+lain demo
+lain
+```
+
+The installer downloads the release executable to `~/.local/bin` (`$HOME\.local\bin` on Windows) and runs `lain setup` on first installation. Windows setup creates a limited, interactive scheduled task named `Lain-<user SID>`; macOS uses `~/Library/LaunchAgents/dev.lain.viewer.plist`; Linux uses the systemd user unit `lain.service`. Startup runs at login without administrator privileges. Windows updates the user PATH; follow the shell installer's PATH instructions on Linux and macOS.
+
+Upgrades list outdated processes from that installation and ask before stopping them. Declining or lacking an interactive terminal aborts before executable replacement. Approval allows forced termination; Windows terminates the selected processes immediately. Associated startup jobs restart with their existing configuration. Setup failures, restart failures, or remaining outdated processes fail installation. Separate installations and development checkouts remain independent. Reconnect MCP clients after updating. `lain demo` publishes the bundled examples; agents publish your own explanations through [MCP](#agent-connection).
+
+To upgrade, run the installer again, then `lain status`. Runtime data remains under `LAIN_HOME`. Without a systemd user session or macOS GUI login session, installation prints manual setup instructions. Run `lain serve` in a terminal and `lain open --print-url` in another when background startup is unavailable. Set `LAIN_NO_SETUP=1` to skip startup creation; existing processes still require approval and associated startup jobs restart:
 
 ```sh
 curl -LsSf https://github.com/daure/lain/releases/latest/download/lain-installer.sh | LAIN_NO_SETUP=1 sh
 ```
 
-Versioned archives, SHA-256 checksums, and installers are on the [releases page](https://github.com/daure/lain/releases). To pin an installer, use `/releases/download/vX.Y.Z/lain-installer.sh` with the desired release version.
+On Windows, set `$env:LAIN_NO_SETUP = '1'` before invoking the installer. Versioned archives, SHA-256 checksums, and installers are on the [releases page](https://github.com/daure/lain/releases). To pin an installer, use `/releases/download/vX.Y.Z/lain-installer.sh` or `lain-installer.ps1` with the desired release version. Executables are unsigned; macOS and Windows security policies may require local approval.
 
 ## Build from source
 
-Requirements: Rust 1.96+, Node 24+, npm, and Linux for systemd setup.
+Requirements: Rust 1.96+, Node 24+, and npm. Linux and macOS:
 
 ```sh
 ./scripts/build.sh
@@ -38,9 +51,19 @@ lain demo
 lain
 ```
 
-The source installer copies one executable to `~/.local/bin` by default and applies the same process approval and restart policy as the release installer. The executable embeds the production Vue frontend.
+Windows (PowerShell, with the Visual Studio C++ build tools):
 
-`lain setup` installs and starts a systemd user service. The service starts at login and restarts after a crash. Setup preserves configuration. Starting before login requires user lingering; setup reports the relevant `loginctl` command without invoking sudo.
+```powershell
+npm --prefix frontend ci
+npm --prefix frontend run build
+cargo build --release --locked
+./scripts/install.ps1
+lain setup
+```
+
+The source installer copies one executable to `~/.local/bin` by default and applies the same process approval and restart policy as the release installer. It prints the setup command without changing startup settings. The executable embeds the production Vue frontend.
+
+`lain setup` installs and starts the platform's per-user background viewer with an explicit executable path, state directory, and port. Startup runs at login and restarts after a crash; Windows retries three times at one-minute intervals. Setup preserves unrelated startup configuration. Linux startup before login requires user lingering; setup reports the relevant `loginctl` command without invoking sudo.
 
 ## Development
 
@@ -91,7 +114,7 @@ Open the printed URL in a browser on the same machine.
 | `lain status` | Check daemon readiness |
 | `lain demo` | Publish the bundled order lifecycle, release approval, incident recovery, review, and shopping-cart examples |
 
-Global `--home` or `LAIN_HOME` selects an isolated state directory. The default is `$XDG_DATA_HOME/lain`, falling back to `~/.local/share/lain`. Global `--port` overrides the saved port; the default is 38475. Successful setup saves the selected port for later commands. Use distinct ports when running isolated instances concurrently.
+Global `--home` or `LAIN_HOME` selects an isolated state directory. Defaults are `$XDG_DATA_HOME/lain` (or `~/.local/share/lain`) on Linux, `~/Library/Application Support/lain` on macOS, and `%LOCALAPPDATA%\lain` on Windows. Unix state directories use mode 0700 and settings use 0600; Windows state permits only its owner and SYSTEM. Unsafe links, reparse points, hard-linked settings, and broadly accessible state directories fail validation without repair. Global `--port` overrides the saved port; the default is 38475. Successful setup saves the selected port for later commands. Use distinct ports when running isolated instances concurrently.
 
 SQLite lives at `LAIN_HOME/lain.sqlite`. Keep it on local disk. The daemon is the sole application persistence owner. Back up the state directory while the daemon is stopped, or use SQLite's backup facilities while it runs; copying only the database during WAL writes is not a safe live backup.
 
@@ -139,7 +162,7 @@ See [agent-instructions.md](../agent-instructions.md), the discoverable MCP tool
 
 ### Chart downloads
 
-GET `/api/explanations/{id}/diagrams/{diagramId}/export`, `/api/explanations/{id}/domain/export`, or `/api/explanations/{id}/wiring/export` on the local daemon. Query options: `format=svg|png|pdf` (default png), `theme=light|dark` (default light), and optional `scenarioId` to preserve off-path muting. Omit `scenarioId` for all scenarios. Responses contain file bytes and an attachment filename. Save the file in the uploader's environment before attaching it to a ticket. Server rendering requires Chrome/Chromium on PATH or `LAIN_CHROMIUM_EXECUTABLE`; missing, busy, or timed-out renderers return 503.
+GET `/api/explanations/{id}/diagrams/{diagramId}/export`, `/api/explanations/{id}/domain/export`, or `/api/explanations/{id}/wiring/export` on the local daemon. Query options: `format=svg|png|pdf` (default png), `theme=light|dark` (default light), and optional `scenarioId` to preserve off-path muting. Omit `scenarioId` for all scenarios. Responses contain file bytes and an attachment filename. Save the file in the uploader's environment before attaching it to a ticket. Server rendering requires Chrome, Chromium, or Edge on PATH, in a standard macOS/Windows installation directory, or at `LAIN_CHROMIUM_EXECUTABLE`. Missing, busy, or timed-out renderers return 503.
 
 ## Viewer
 
@@ -224,7 +247,7 @@ The harness exercises the actual daemon, live updates, restart persistence, and 
 
 ## Release
 
-GitHub Actions checks pushes to `main`. A stable `vX.Y.Z` tag matching `Cargo.toml` also builds and publishes an x86-64 Linux archive, SHA-256 checksum, and cargo-dist shell installer. The frontend production build precedes Rust compilation. An isolated smoke test installs the packaged executable and checks embedded assets, local commands, and restart persistence without installing a service.
+GitHub Actions checks pushes to `main` on Linux x64, macOS Apple Silicon/Intel, and Windows x64. Each native runner builds the frontend before Rust, runs tests and Clippy, packages its executable, and smoke-tests installation, embedded assets, chart rendering, local commands, and restart persistence. Global packaging combines the native manifests into shell and PowerShell installers. Each platform tests its generated installer against local release archives with startup and PATH changes disabled. A stable `vX.Y.Z` tag matching `Cargo.toml` publishes the archives, SHA-256 checksums, and installers only after every job passes. Tests never install a real startup job.
 
 From a clean, verified `main` checkout with the release version committed in `Cargo.toml` and `Cargo.lock`:
 

@@ -180,7 +180,7 @@ function visitBadgePosition(row: typeof rows.value[number]) {
 <template>
   <DiagramViewport ref="canvas" :width="width" :height="height" :title="diagram.title" :enabled="!compact" :scroll-class="compact ? 'sequence-view compact' : 'sequence-view'"
     :state-key="stateKey" :scene-key="diagram.id" :focus-key="`${scenario.id}/${currentOccurrenceId}`" :focus-point="focusPoint" :focus-inset="focusInset" :scenario-title="scenario.title" export-scenario
-    :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :style="{ '--sequence-sticky-height': `${headingHeight * scale}px` }" @change="trackScroll">
+    :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :style="{ '--sequence-sticky-height': `${headingHeight * scale}px` }" @change="trackScroll" @background="inspectedNodeId && emit('inspect', '')">
     <template #sticky>
     <div class="sequence-sticky" :style="{ minWidth: `${width}px` }">
       <svg class="sequence-sticky-labels" :viewBox="`0 0 ${width} ${headingHeight}`" :style="{ height: `${headingHeight}px` }" preserveAspectRatio="xMinYMin meet" role="group" aria-label="Participants and visible fragment context">

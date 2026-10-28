@@ -13,7 +13,7 @@ SPEC.loader.exec_module(PREPARER)
 
 
 class InstallerTests(unittest.TestCase):
-    def run_installer(self, state="absent", systemctl=True, skip=False, setup_fails=False):
+    def run_installer(self, state="absent", systemctl=True, skip=False, setup_fails=False, platform="Linux"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bin_dir = root / 'bin with spaces $ % " quote'
@@ -24,6 +24,15 @@ printf 'lain %s\n' "$*" >> "$CALLS"
 [ "$SETUP_FAILS" != 1 ]
 ''')
             binary.chmod(0o700)
+            if platform == "Darwin":
+                (root / "uname").write_text("#!/bin/sh\nprintf 'Darwin\\n'\n")
+                (root / "uname").chmod(0o700)
+                (root / "id").symlink_to("/usr/bin/id")
+                (root / "launchctl").write_text('''#!/bin/sh
+printf 'launchctl %s\n' "$*" >> "$CALLS"
+[ "$SERVICE_STATE" != unavailable ]
+''')
+                (root / "launchctl").chmod(0o700)
             unit = root / "lain.service"
             executable = str(binary).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
             unit.write_text(
@@ -64,7 +73,7 @@ install
             calls = root / "calls"
             result = subprocess.run(
                 ["/bin/sh", str(installer)],
-                env={**os.environ, "PATH": str(root), "_install_dir": str(bin_dir),
+                env={**os.environ, "HOME": str(root), "PATH": str(root), "_install_dir": str(bin_dir),
                      "_install_temp": "unused", "_lib_install_temp": "unused",
                      "CALLS": str(calls), "UNIT": str(unit), "SERVICE_STATE": state,
                      "LAIN_NO_SETUP": "1" if skip else "0", "SETUP_FAILS": "1" if setup_fails else "0"},
@@ -80,6 +89,18 @@ install
             "systemctl --user show --property=FragmentPath --value lain.service",
             "lain setup",
         ])
+
+    def test_macos_sets_up_launchd_in_a_login_session(self):
+        result, calls = self.run_installer(platform="Darwin")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [f"launchctl print gui/{os.getuid()}", "lain setup"])
+
+    def test_macos_without_a_login_session_prints_foreground_instructions(self):
+        result, calls = self.run_installer("unavailable", platform="Darwin")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [f"launchctl print gui/{os.getuid()}"])
+        self.assertIn("launchd login session unavailable", result.stderr)
+        self.assertIn("lain serve", result.stderr)
 
     def test_upgrade_preserves_the_managed_service_configuration(self):
         result, calls = self.run_installer("installed")
@@ -133,6 +154,27 @@ install
                 with self.assertRaisesRegex(RuntimeError, "layout changed"):
                     PREPARER.prepare(installer)
                 self.assertEqual(installer.read_text(), source)
+
+    def test_powershell_preparation_installs_upgrade_recovery_and_archive_verification(self):
+        source = '''  Invoke-DownloadFile -client $wc -url $url -path $dir_path
+function Invoke-Installer($artifacts, $platforms) {
+  foreach ($bin_path in $artifacts["bin_paths"]) {
+    Copy-Item "$bin_path" -Destination "$dest_dir" -ErrorAction Stop
+  }
+  Write-Information "everything's installed!"
+}
+
+# Attempt to do CI-specific rituals
+'''
+        prepared = PREPARER.prepare_powershell(source)
+        self.assertIn("Start-LainUpgrade $dest_dir $artifacts", prepared)
+        self.assertIn("Finish-LainInstall $dest_dir", prepared)
+        self.assertIn("finally { Exit-LainUpgrade }", prepared)
+        self.assertIn("Release archive checksum mismatch", prepared)
+        self.assertEqual(PREPARER.prepare_powershell(prepared), prepared)
+        for invalid in ["unknown layout", source + source]:
+            with self.assertRaisesRegex(RuntimeError, "layout changed"):
+                PREPARER.prepare_powershell(invalid)
 
 
 if __name__ == "__main__":

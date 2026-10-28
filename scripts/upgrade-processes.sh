@@ -65,7 +65,7 @@ upgrade_on_exit() {
     exit "$_upgrade_status"
 }
 
-upgrade_prepare() {
+upgrade_prepare_linux() {
     _upgrade_directory=$(CDPATH='' cd -- "${1%/*}" && pwd -P) || return 1
     _upgrade_binary=$_upgrade_directory/${1##*/}
     _upgrade_replacement=$2
@@ -128,7 +128,7 @@ upgrade_prepare() {
     return 1
 }
 
-upgrade_finish() {
+upgrade_finish_linux() {
     _upgrade_replacement=$_upgrade_binary
     if [ -n "$(upgrade_scan)" ]; then
         printf 'Outdated processes are running; installation is incomplete.\n' >&2
@@ -140,4 +140,105 @@ upgrade_finish() {
         return 1
     fi
     printf 'No outdated processes remain. Reopen stopped apps and reconnect client-managed MCP servers.\n' >&2
+}
+
+mac_upgrade_scan() {
+    [ -e "$_mac_binary" ] || return 0
+    lsof -nP -a -u "$(id -u)" -d txt -F pn 2>/dev/null |
+        LAIN_UPGRADE_BINARY="$_mac_binary" awk '
+            /^p/ { pid = substr($0, 2) }
+            /^n/ { name = substr($0, 2); sub(/ \(deleted\)$/, "", name); if (name == ENVIRON["LAIN_UPGRADE_BINARY"]) print pid }
+        ' | sort -u
+}
+
+mac_upgrade_resume() {
+    [ "${_mac_restart:-0}" = 1 ] || return 0
+    launchctl bootstrap "gui/$(id -u)" "$_mac_plist" || return 1
+    _mac_restart=0
+    _mac_home=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:2' "$_mac_plist") || return 1
+    _mac_port=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:4' "$_mac_plist") || return 1
+    _mac_wait=0
+    while [ "$_mac_wait" -lt 10 ]; do
+        if "$_mac_binary" --home "$_mac_home" --port "$_mac_port" status >/dev/null 2>&1; then return 0; fi
+        sleep 1
+        _mac_wait=$((_mac_wait + 1))
+    done
+    printf 'Lain LaunchAgent did not become ready; inspect %s.\n' "$_mac_plist" >&2
+    return 1
+}
+
+mac_upgrade_exit() {
+    _mac_status=$1
+    trap - 0 HUP INT TERM
+    mac_upgrade_resume || _mac_status=1
+    rmdir "$_mac_lock" || _mac_status=1
+    upgrade_cleanup
+    exit "$_mac_status"
+}
+
+mac_upgrade_prepare() {
+    _mac_directory=$(CDPATH='' cd -- "${1%/*}" && pwd -P) || return 1
+    _mac_binary=$_mac_directory/${1##*/}
+    _mac_replacement=$2
+    _mac_restart=0
+    _mac_plist="$HOME/Library/LaunchAgents/dev.lain.viewer.plist"
+    "$_mac_replacement" --version >/dev/null || return 1
+    for _mac_command in lsof awk sort cmp; do
+        command -v "$_mac_command" >/dev/null 2>&1 || { printf 'Required installer command: %s\n' "$_mac_command" >&2; return 1; }
+    done
+    _mac_lock="$_mac_directory/.lain-upgrade.lock.d"
+    mkdir "$_mac_lock" || { printf 'Another installation owns %s; inspect it before retrying.\n' "$_mac_lock" >&2; return 1; }
+    trap 'mac_upgrade_exit $?' 0
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if [ -e "$_mac_binary" ] && cmp -s "$_mac_binary" "$_mac_replacement"; then return 0; fi
+    _mac_pids=$(mac_upgrade_scan)
+    [ -n "$_mac_pids" ] || return 0
+    printf 'Outdated Lain processes from %s: %s\nStop them for this upgrade? Active calls may be interrupted; unresponsive processes will be killed. [y/N] ' "$_mac_binary" "$_mac_pids" >&2
+    _mac_reply=''
+    if [ -t 0 ]; then
+        IFS= read -r _mac_reply || :
+    elif (exec 3<>/dev/tty) 2>/dev/null; then
+        IFS= read -r _mac_reply </dev/tty || :
+    fi
+    case "$_mac_reply" in y|Y|yes|YES) ;; *) printf '\nUpgrade cancelled.\n' >&2; return 1 ;; esac
+    if [ -f "$_mac_plist" ] && grep -Fq '<!-- Managed by lain setup. -->' "$_mac_plist"; then
+        _mac_service_binary=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$_mac_plist") || return 1
+        if [ "$_mac_service_binary" = "$_mac_binary" ] && launchctl print "gui/$(id -u)/dev.lain.viewer" >/dev/null 2>&1; then
+            launchctl bootout "gui/$(id -u)/dev.lain.viewer" || return 1
+            _mac_restart=1
+        fi
+    fi
+    for _mac_signal in TERM KILL; do
+        for _mac_pid in $_mac_pids; do
+            case " $(mac_upgrade_scan | tr '\n' ' ') " in
+                *" $_mac_pid "*) kill -"$_mac_signal" "$_mac_pid" 2>/dev/null || : ;;
+            esac
+        done
+        _mac_wait=0
+        while [ -n "$(mac_upgrade_scan)" ] && [ "$_mac_wait" -lt 5 ]; do
+            sleep 1
+            _mac_wait=$((_mac_wait + 1))
+        done
+        [ -n "$(mac_upgrade_scan)" ] || return 0
+    done
+    printf 'Lain processes are still running; upgrade aborted.\n' >&2
+    return 1
+}
+
+upgrade_prepare() {
+    _upgrade_os=$(uname -s) || return 1
+    case "$_upgrade_os" in
+        Darwin) mac_upgrade_prepare "$@" ;;
+        Linux) upgrade_prepare_linux "$@" ;;
+        *) printf 'Unsupported installer platform: %s\n' "$_upgrade_os" >&2; return 1 ;;
+    esac
+}
+
+upgrade_finish() {
+    case "${_upgrade_os:-$(uname -s)}" in
+        Darwin) mac_upgrade_resume ;;
+        Linux) upgrade_finish_linux ;;
+    esac
 }

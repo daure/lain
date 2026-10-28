@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import fixture from '../../examples/order-lifecycle.json';
 import GraphView from '../src/components/GraphView.vue';
 import SequenceView from '../src/components/SequenceView.vue';
+import DomainView from '../src/components/DomainView.vue';
 import DiagramViewport from '../src/components/DiagramViewport.vue';
 import { diagramLayout, type GraphLayout } from '../src/layout';
 import { captureChart } from '../src/chart-export';
@@ -49,6 +50,55 @@ async function mountGraph(width = 2000) {
 }
 
 afterEach(() => { vi.unstubAllGlobals(); document.body.replaceChildren(); });
+
+it('distinguishes background clicks from node clicks, zoom controls, panning, and pinching', async () => {
+  const background = vi.fn();
+  const view = await mountViewport(() => h(DiagramViewport, { width: 3000, height: 1800, title: 'Map', onBackground: background },
+    { default: () => [h('svg', { class: 'test-map' }, [h('g', { role: 'button' }, h('rect')), h('g', { 'data-wiring-component-id': 'owner' }, h('rect'))])] }));
+  try {
+    view.scroller.querySelector('.test-map')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(background).toHaveBeenCalledTimes(1);
+    for (const target of view.scroller.querySelectorAll('rect')) target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await view.click('Zoom in');
+    expect(background).toHaveBeenCalledTimes(1);
+    view.scroller.setPointerCapture = vi.fn();
+    const pointer = (type: string, x: number) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: 200, button: 0 });
+      Object.defineProperty(event, 'pointerId', { value: 1 }); view.scroller.dispatchEvent(event);
+    };
+    pointer('pointerdown', 400); pointer('pointermove', 500); pointer('pointerup', 500);
+    view.scroller.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    expect(background).toHaveBeenCalledTimes(1);
+    touch(view.scroller, 'pointerdown', 1, 400, 300); touch(view.scroller, 'pointerdown', 2, 600, 300);
+    touch(view.scroller, 'pointermove', 2, 800, 300); touch(view.scroller, 'pointerup', 1, 400, 300); touch(view.scroller, 'pointerup', 2, 800, 300);
+    view.scroller.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    expect(background).toHaveBeenCalledTimes(1);
+    pointer('pointerdown', 300); pointer('pointerup', 300);
+    view.scroller.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    expect(background).toHaveBeenCalledTimes(2);
+  } finally { view.app.unmount(); }
+});
+
+it.each(['graph', 'sequence', 'domain'])('clears %s inspection through a background click', async kind => {
+  const explanation = fixture as Explanation, selected = ref('');
+  const scenario = explanation.scenarios[0]!, diagram = explanation.diagrams.find(diagram => diagram.id === scenario.diagramId)!;
+  const onSelect = (id: string) => { selected.value = id; };
+  const sequence = explanation.diagrams.find(diagram => diagram.kind === 'sequence')!;
+  const sequenceScenario = explanation.scenarios.find(scenario => scenario.diagramId === sequence.id)!;
+  const initial = kind === 'domain' ? explanation.domain!.entities[0]!.id : kind === 'sequence' ? sequence.nodes[0]!.id : diagram.nodes[0]!.id;
+  selected.value = initial;
+  const view = await mountViewport(() => kind === 'graph'
+    ? h(GraphView, { layout: diagramLayout(diagram), title: diagram.title, interactive: true, inspectedNodeId: selected.value, onSelect })
+    : kind === 'sequence'
+      ? h(SequenceView, { diagram: sequence, scenario: sequenceScenario, currentOccurrenceId: sequenceScenario.occurrences[0]!.id, inspectedNodeId: selected.value, onInspect: onSelect })
+      : h(DomainView, { domain: explanation.domain!, diagram, scenario, selectedEntityId: selected.value, onSelect }));
+  try {
+    expect(view.canvas.querySelectorAll('.inspected, .domain-entity.selected')).toHaveLength(1);
+    view.scroller.querySelector('.viewport-content > svg')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); await settle();
+    expect(selected.value).toBe('');
+    expect(view.canvas.querySelectorAll('.inspected, .domain-entity.selected')).toHaveLength(0);
+  } finally { view.app.unmount(); }
+});
 
 function touch(target: Element, type: string, id: number, x: number, y: number) {
   const event = new MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true });

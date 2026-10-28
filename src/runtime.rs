@@ -1,10 +1,8 @@
 use std::{
-    fs::{self, DirBuilder, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Component, Path, PathBuf},
-    process::Command,
     thread,
     time::{Duration, Instant},
 };
@@ -12,10 +10,19 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use std::process::Command;
+
+#[path = "runtime/files.rs"]
+pub(crate) mod files;
+#[cfg(any(target_os = "macos", windows, test))]
+#[path = "runtime/startup.rs"]
+mod startup;
+
+use files::{check_private_file, open_private};
 
 const DEFAULT_PORT: u16 = 38475;
-// Linux O_NOFOLLOW prevents a swapped final symlink from being opened.
-const O_NOFOLLOW: i32 = 0x20000;
+#[cfg(target_os = "linux")]
 const UNIT_MARKER: &str = "# Managed by lain setup.\n";
 
 pub struct Runtime {
@@ -34,21 +41,11 @@ impl Runtime {
         ensure!(port != Some(0), "port must be greater than zero");
         let home = home
             .or_else(|| std::env::var_os("LAIN_HOME").map(PathBuf::from))
-            .or_else(|| dirs::data_dir().map(|path| path.join("lain")))
+            .or_else(|| dirs::data_local_dir().map(|path| path.join("lain")))
             .context("cannot find data directory; pass --home")?;
         let home = absolute_path(&home)?;
         ensure_safe_ancestors(&home)?;
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&home)?;
-        let metadata = fs::symlink_metadata(&home)?;
-        ensure!(metadata.is_dir(), "runtime home must be a directory");
-        ensure!(
-            metadata.mode() & 0o7777 == 0o700,
-            "runtime home must have mode 0700: {}",
-            home.display()
-        );
+        files::create_private_directory(&home)?;
 
         let config_path = home.join("config.json");
         let initial_config = serde_json::to_string_pretty(&Config {
@@ -61,11 +58,20 @@ impl Runtime {
         for filename in ["lain.sqlite", "lain.sqlite-wal", "lain.sqlite-shm"] {
             let path = home.join(filename);
             match fs::symlink_metadata(&path) {
-                Ok(metadata) => ensure!(
-                    metadata.is_file() && metadata.nlink() == 1,
-                    "unsafe database file: {}",
-                    path.display()
-                ),
+                Ok(metadata) => {
+                    ensure!(
+                        metadata.is_file() && !files::is_link(&metadata),
+                        "unsafe database file: {}",
+                        path.display()
+                    );
+                    ensure!(
+                        files::link_count(&open_private(&path, false, false)?)? == 1,
+                        "unsafe database file: {}",
+                        path.display()
+                    );
+                    #[cfg(windows)]
+                    check_private_file(&open_private(&path, false, false)?, &path)?;
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
                 Err(error) => return Err(error.into()),
             }
@@ -86,26 +92,20 @@ impl Runtime {
 
     pub fn daemon_lock(&self) -> Result<File> {
         ensure_safe_ancestors(&self.home)?;
-        ensure!(
-            fs::symlink_metadata(&self.home)?.mode() & 0o7777 == 0o700,
-            "runtime home must have mode 0700: {}",
-            self.home.display()
-        );
+        files::check_private_directory(&self.home)?;
         let path = self.home.join("daemon.lock");
         match fs::symlink_metadata(&path) {
             Ok(metadata) => ensure!(metadata.is_file(), "unsafe daemon lock: {}", path.display()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
             Err(error) => return Err(error.into()),
         }
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(O_NOFOLLOW)
-            .open(&path)
-            .with_context(|| format!("cannot safely open daemon lock: {}", path.display()))?;
+        let file = match open_private(&path, true, true) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                open_private(&path, true, false)
+            }
+            result => result,
+        }
+        .with_context(|| format!("cannot safely open daemon lock: {}", path.display()))?;
         check_private_file(&file, &path)?;
         match file.try_lock() {
             Ok(()) => Ok(file),
@@ -120,10 +120,18 @@ impl Runtime {
 
     pub fn setup(&self, dry_run: bool) -> Result<()> {
         let executable = std::env::current_exe().context("cannot locate lain executable")?;
-        let unit = self.unit(&executable)?;
+        #[cfg(target_os = "linux")]
+        self.setup_linux(&executable, dry_run)?;
+        #[cfg(any(target_os = "macos", windows))]
+        startup::setup(self, &executable, dry_run)?;
+        self.print_client_instructions()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn setup_linux(&self, executable: &Path, dry_run: bool) -> Result<()> {
+        let unit = self.unit(executable)?;
         if dry_run {
             println!("{unit}");
-            self.print_client_instructions()?;
             return Ok(());
         }
 
@@ -133,7 +141,8 @@ impl Runtime {
             .context("cannot find user config directory")?;
         let unit_directory = absolute_path(&config_home)?.join("systemd/user");
         ensure_safe_ancestors(&unit_directory)?;
-        DirBuilder::new()
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(&unit_directory)?;
@@ -145,10 +154,10 @@ impl Runtime {
         run_systemctl(&["is-active", "--quiet", "lain.service"])?;
         self.persist_port()?;
         println!("Lain ready at {}", self.base_url());
-        self.print_client_instructions()?;
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
     fn unit(&self, executable: &Path) -> Result<String> {
         // Disable environment expansion so dollars stay literal in every path.
         Ok(format!(
@@ -173,9 +182,12 @@ impl Runtime {
         println!(
             "Agent instructions: Call get_context first for authoring guidance and the current explanation index. Discover the document schema through publish_explanation."
         );
+        #[cfg(target_os = "linux")]
         println!(
             "The user service starts at login. For pre-login startup, ask your administrator about loginctl enable-linger; setup does not enable it."
         );
+        #[cfg(not(target_os = "linux"))]
+        println!("The background viewer starts when you log in.");
         Ok(())
     }
 
@@ -189,7 +201,7 @@ impl Runtime {
             thread::sleep(Duration::from_millis(100));
         }
         bail!(
-            "service did not become ready; inspect systemctl --user status lain.service and journalctl --user -u lain.service"
+            "service did not become ready; inspect the user startup configuration or run lain serve"
         )
     }
 
@@ -201,26 +213,22 @@ impl Runtime {
         if current.port == self.port {
             return Ok(());
         }
-        let original = fs::symlink_metadata(&path)?;
+        let original = files::identity(&path)?;
         let temporary_path = self
             .home
             .join(format!(".config.{}.tmp", temporary_suffix()));
-        let mut temporary = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary_path)?;
+        let mut temporary = open_private(&temporary_path, true, true)?;
         let result = (|| -> Result<()> {
             serde_json::to_writer_pretty(&mut temporary, &Config { port: self.port })?;
             temporary.sync_all()?;
             read_private_file(&path, 4096)?;
-            let latest = fs::symlink_metadata(&path)?;
+            let latest = files::identity(&path)?;
             ensure!(
-                latest.dev() == original.dev() && latest.ino() == original.ino(),
+                latest == original,
                 "runtime config changed during setup; retry setup"
             );
-            fs::rename(&temporary_path, &path)?;
-            File::open(&self.home)?.sync_all()?;
+            files::replace_file(&temporary_path, &path)?;
+            files::sync_directory(&self.home)?;
             Ok(())
         })();
         if result.is_err() {
@@ -238,18 +246,28 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
             .any(|part| matches!(part, Component::ParentDir)),
         "paths containing '..' are unsafe"
     );
-    if path.is_absolute() {
-        Ok(path.to_owned())
+    let absolute = if path.is_absolute() {
+        path.to_owned()
     } else {
-        Ok(std::env::current_dir()?.join(path))
+        std::env::current_dir()?.join(path)
+    };
+    #[cfg(target_os = "macos")]
+    for alias in ["/var", "/tmp"] {
+        if let Ok(suffix) = absolute.strip_prefix(alias) {
+            let target = PathBuf::from(format!("/private{alias}"));
+            if fs::canonicalize(alias).ok().as_ref() == Some(&target) {
+                return Ok(target.join(suffix));
+            }
+        }
     }
+    Ok(absolute)
 }
 
 fn ensure_safe_ancestors(path: &Path) -> Result<()> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) => ensure!(
-                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                metadata.is_dir() && !files::is_link(&metadata),
                 "unsafe directory: {}",
                 ancestor.display()
             ),
@@ -260,28 +278,8 @@ fn ensure_safe_ancestors(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn check_private_file(file: &File, path: &Path) -> Result<()> {
-    let metadata = file.metadata()?;
-    ensure!(
-        metadata.is_file() && metadata.nlink() == 1,
-        "unsafe file: {}",
-        path.display()
-    );
-    ensure!(
-        metadata.mode() & 0o7777 == 0o600,
-        "file must have mode 0600: {}",
-        path.display()
-    );
-    Ok(())
-}
-
 fn load_or_create(path: &Path, initial: &str, limit: u64) -> Result<String> {
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-    {
+    match open_private(path, true, true) {
         Ok(mut file) => {
             file.write_all(initial.as_bytes())?;
             file.sync_all()?;
@@ -300,10 +298,7 @@ fn read_private_file(path: &Path, limit: u64) -> Result<String> {
         "unsafe file: {}",
         path.display()
     );
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
+    let file = open_private(path, false, false)
         .with_context(|| format!("cannot safely read {}", path.display()))?;
     check_private_file(&file, path)?;
     let mut text = String::new();
@@ -321,6 +316,7 @@ fn temporary_suffix() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+#[cfg(target_os = "linux")]
 fn systemd_quote(path: &Path) -> Result<String> {
     ensure!(path.is_absolute(), "service paths must be absolute");
     let path = path.to_str().context("systemd paths must be valid UTF-8")?;
@@ -338,14 +334,9 @@ fn systemd_quote(path: &Path) -> Result<String> {
     Ok(quoted)
 }
 
+#[cfg(target_os = "linux")]
 fn write_unit(path: &Path, unit: &str) -> Result<()> {
-    let mut file = match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-    {
+    let mut file = match open_private(path, true, true) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             ensure!(
@@ -353,11 +344,7 @@ fn write_unit(path: &Path, unit: &str) -> Result<()> {
                 "unsafe service unit: {}",
                 path.display()
             );
-            let mut file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .custom_flags(O_NOFOLLOW)
-                .open(path)?;
+            let mut file = open_private(path, true, false)?;
             check_private_file(&file, path)?;
             let mut marker = vec![0; UNIT_MARKER.len()];
             file.read_exact(&mut marker)
@@ -378,6 +365,7 @@ fn write_unit(path: &Path, unit: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn run_systemctl(arguments: &[&str]) -> Result<()> {
     let status = Command::new("systemctl")
         .arg("--user")
@@ -436,7 +424,7 @@ fn daemon_ready(address: SocketAddr) -> bool {
     check().unwrap_or(None) == Some(200)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 

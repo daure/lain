@@ -14,11 +14,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: ubuntu-24.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    permissions:
-      contents: write
+    defaults:
+      run:
+        shell: bash
     env:
       CARGO_TERM_COLOR: always
       CARGO_BUILD_JOBS: "2"
@@ -34,7 +47,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          python3 - <<'PY'
+          python - <<'PY'
           import os, pathlib, re, tomllib
           manifest = tomllib.loads(pathlib.Path("Cargo.toml").read_text())
           if os.environ["GITHUB_REF_TYPE"] == "tag":
@@ -64,43 +77,133 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
       - name: Check development launcher
+        if: runner.os == 'Linux'
         run: |
+          mkdir -p /tmp/opencode
           mkdir -p /tmp/opencode
           cargo install --locked --version 2.8.0 watchexec-cli
           node --test tests/dev*.test.mjs
       - name: Check release installer
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -W error -m unittest discover -s scripts/tests
+        if: runner.os == 'Linux'
+        run: PYTHONDONTWRITEBYTECODE=1 python -W error -m unittest discover -s scripts/tests
       - name: Install cargo-dist
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: runner.os != 'Windows'
         run: |
           curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh -o "$RUNNER_TEMP/install-dist.sh"
           sh "$RUNNER_TEMP/install-dist.sh"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Build distribution
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Install cargo-dist on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.ps1 -OutFile "$env:RUNNER_TEMP/install-dist.ps1"
+          & "$env:RUNNER_TEMP/install-dist.ps1"
+          "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build native distribution
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: dist build --artifacts=all --target=x86_64-unknown-linux-gnu --tag="$RELEASE_TAG"
-      - name: Add automatic user service setup to installer
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: python3 scripts/prepare_installer.py target/distrib/lain-installer.sh
-      - name: Verify archive and installed executable
-        if: startsWith(github.ref, 'refs/tags/v')
+          TARGET: ${{ matrix.target }}
         run: |
+          tag_args=()
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then tag_args+=(--tag="$RELEASE_TAG"); fi
+          dist build --artifacts=local --target="$TARGET" "${tag_args[@]}" --output-format=json > local-dist-manifest.json
+          cp local-dist-manifest.json "target/distrib/$TARGET-dist-manifest.json"
+      - name: Verify archive and installed executable
+        env:
+          LAIN_TEST_CHART_EXPORT: "1"
+        run: node scripts/verify-release.mjs "${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            target/distrib/lain-${{ matrix.target }}.*
+            target/distrib/${{ matrix.target }}-dist-manifest.json
+
+  installers:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: target/distrib
+          merge-multiple: true
+      - name: Install Rust and cargo-dist
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
+          rustup default 1.96.0
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh -o "$RUNNER_TEMP/install-dist.sh"
+          sh "$RUNNER_TEMP/install-dist.sh"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build and prepare universal installers
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          tag_args=()
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then tag_args+=(--tag="$RELEASE_TAG"); fi
+          dist build --artifacts=global "${tag_args[@]}"
+          python3 scripts/prepare_installer.py target/distrib/lain-installer.sh
+          python3 scripts/prepare_installer.py target/distrib/lain-installer.ps1
           cd target/distrib
-          sha256sum --check lain-x86_64-unknown-linux-gnu.tar.xz.sha256
-          mkdir smoke
-          tar -xJf lain-x86_64-unknown-linux-gnu.tar.xz -C smoke
-          cd ../..
-          node tests/release-smoke.mjs target/distrib/smoke/lain-x86_64-unknown-linux-gnu/lain
+          sha256sum lain-*.tar.xz lain-*.zip lain-installer.sh lain-installer.ps1 > sha256.sum
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            target/distrib/lain-*.tar.xz
+            target/distrib/lain-*.zip
+            target/distrib/lain-*.sha256
+            target/distrib/lain-installer.sh
+            target/distrib/lain-installer.ps1
+            target/distrib/sha256.sum
+
+  installer-smoke:
+    needs: installers
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, macos-15-intel, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: target/distrib
+      - name: Verify native release installer with isolated state
+        run: node tests/release-installer-smoke.mjs
+
+  publish:
+    needs: [build, installers, installer-smoke]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: target/distrib
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "$RELEASE_TAG"
           fi
-          gh release upload "$RELEASE_TAG" target/distrib/lain-x86_64-unknown-linux-gnu.tar.xz target/distrib/lain-x86_64-unknown-linux-gnu.tar.xz.sha256 target/distrib/lain-installer.sh --clobber
+          gh release upload "$RELEASE_TAG" target/distrib/* --clobber
           gh release edit "$RELEASE_TAG" --draft=false

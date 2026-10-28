@@ -3,7 +3,7 @@ export type ExportFormat = 'svg' | 'png' | 'pdf';
 export type ChartImage = { svg: string; width: number; height: number; title: string };
 
 const svgNamespace = 'http://www.w3.org/2000/svg';
-const stateClasses = ['current', 'visited', 'walked', 'step-active', 'highlighted', 'called', 'changed', 'created', 'removed', 'matched', 'interactive', 'inspected'];
+const stateClasses = ['current', 'visited', 'walked', 'step-active', 'highlighted', 'called', 'changed', 'created', 'removed', 'matched', 'interactive', 'inspected', 'preview-routed'];
 const presentationProperties = [
   'color', 'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity',
   'stroke-dasharray', 'stroke-dashoffset', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit',

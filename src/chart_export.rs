@@ -1,5 +1,4 @@
 use std::{
-    os::unix::fs::{DirBuilderExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -7,6 +6,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
+#[cfg(unix)]
 use nix::{
     sys::signal::{Signal, killpg},
     unistd::Pid,
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, Command},
+    process::Command,
     sync::Semaphore,
 };
 use tokio_tungstenite::{
@@ -25,9 +25,15 @@ use tokio_tungstenite::{
 
 use crate::{
     model::{Diagram, Domain, Explanation, Scenario, validate_id},
+    runtime::files,
     service::ServiceError,
     wiring::Wiring,
 };
+
+#[cfg(unix)]
+type RendererChild = tokio::process::Child;
+#[cfg(windows)]
+type RendererChild = Box<dyn process_wrap::tokio::ChildWrapper>;
 
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_EXPORT_BYTES: usize = 32 * 1024 * 1024;
@@ -265,17 +271,7 @@ impl ExportRenderer {
         base_url: &str,
         executable: &Path,
     ) -> Result<ChartDownload, ExportError> {
-        match std::fs::DirBuilder::new().mode(0o700).create(&self.home) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(anyhow::Error::from(error).into()),
-        }
-        let metadata = std::fs::symlink_metadata(&self.home).map_err(anyhow::Error::from)?;
-        if !metadata.is_dir() || metadata.permissions().mode() & 0o7777 != 0o700 {
-            return Err(ExportError::Unavailable(
-                "export directory must be a private directory with mode 0700",
-            ));
-        }
+        files::create_private_directory(&self.home).map_err(ExportError::Render)?;
         let profile = tempfile::Builder::new()
             .prefix("render-")
             .tempdir_in(&self.home)
@@ -300,12 +296,15 @@ pub fn chromium_executable() -> Option<PathBuf> {
         let path = PathBuf::from(path);
         return is_executable(&path).then_some(path);
     }
-    let paths = std::env::var_os("PATH")?;
+    let paths = std::env::var_os("PATH").unwrap_or_default();
     for name in [
         "google-chrome",
         "chromium",
         "chromium-browser",
         "microsoft-edge",
+        "chrome.exe",
+        "msedge.exe",
+        "chromium.exe",
     ] {
         for directory in std::env::split_paths(&paths) {
             let path = directory.join(name);
@@ -314,22 +313,69 @@ pub fn chromium_executable() -> Option<PathBuf> {
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    for application in [
+        "Google Chrome.app/Contents/MacOS/Google Chrome",
+        "Chromium.app/Contents/MacOS/Chromium",
+        "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    ] {
+        for directory in [
+            Some(PathBuf::from("/Applications")),
+            dirs::home_dir().map(|home| home.join("Applications")),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let path = directory.join(application);
+            if is_executable(&path) {
+                return Some(path);
+            }
+        }
+    }
+    #[cfg(windows)]
+    for variable in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"] {
+        if let Some(directory) = std::env::var_os(variable) {
+            for application in [
+                "Google/Chrome/Application/chrome.exe",
+                "Microsoft/Edge/Application/msedge.exe",
+                "Chromium/Application/chrome.exe",
+            ] {
+                let path = PathBuf::from(&directory).join(application);
+                if is_executable(&path) {
+                    return Some(path);
+                }
+            }
+        }
+    }
     None
 }
 
 fn is_executable(path: &Path) -> bool {
-    path.metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    path.metadata().is_ok_and(|metadata| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(windows)]
+        {
+            metadata.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        }
+    })
 }
 
 struct BrowserProcess {
-    child: Child,
+    child: RendererChild,
     drain: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl BrowserProcess {
     async fn start(executable: &Path, profile: &Path) -> anyhow::Result<(Self, DevTools)> {
-        let child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .args([
                 "--headless",
                 "--disable-gpu",
@@ -345,12 +391,22 @@ impl BrowserProcess {
             .env("TMPDIR", profile)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true)
-            .spawn()?;
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        let child = command.process_group(0).kill_on_drop(true).spawn()?;
+        #[cfg(windows)]
+        let child = {
+            use process_wrap::tokio::{CommandWrap, JobObject, KillOnDrop};
+            CommandWrap::from(command)
+                .wrap(KillOnDrop)
+                .wrap(JobObject)
+                .spawn()?
+        };
         let mut browser = BrowserProcess { child, drain: None };
+        #[cfg(unix)]
         let mut lines = BufReader::new(browser.child.stderr.take().unwrap()).lines();
+        #[cfg(windows)]
+        let mut lines = BufReader::new(browser.child.stderr().take().unwrap()).lines();
         let endpoint = loop {
             let line = lines
                 .next_line()
@@ -381,9 +437,12 @@ impl BrowserProcess {
 impl Drop for BrowserProcess {
     fn drop(&mut self) {
         // Each renderer owns its process group; cancellation must also stop Chromium children.
+        #[cfg(unix)]
         if let Some(id) = self.child.id() {
             let _ = killpg(Pid::from_raw(id as i32), Signal::SIGKILL);
         }
+        #[cfg(windows)]
+        let _ = self.child.start_kill();
         if let Some(drain) = &self.drain {
             drain.abort();
         }

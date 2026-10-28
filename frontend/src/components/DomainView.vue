@@ -139,7 +139,7 @@ onUnmounted(cancelNumberShortcut);
 </script>
 
 <template>
-  <DiagramViewport ref="canvas" :state-key="stateKey" :width="layout.width" :height="layout.height" title="Shared domain entity relationship diagram" :scenario-title="scenario.title" :focus-point="focusPoint" :focus-key="`${scenario.id}/${occurrence?.id ?? ''}`" scroll-class="domain-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" export-scenario>
+  <DiagramViewport ref="canvas" :state-key="stateKey" :width="layout.width" :height="layout.height" title="Shared domain entity relationship diagram" :scenario-title="scenario.title" :focus-point="focusPoint" :focus-key="`${scenario.id}/${occurrence?.id ?? ''}`" scroll-class="domain-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" export-scenario @background="selectedEntityId && selectEntity('')">
     <svg ref="svg" class="domain-erd" :viewBox="`0 0 ${layout.width} ${layout.height}`" :style="{ width: `${layout.width}px`, height: `${layout.height}px` }" role="group" aria-label="Domain entity definitions and relationships">
       <title>Shared domain · {{ scenario.title }}</title>
       <g v-for="group in layout.groups" :key="group.id" :data-group-id="group.id"

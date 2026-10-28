@@ -559,7 +559,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
 }
 
 function inspectNode(id: string) {
-  if (inspectedDiagramId.value === diagram.value?.id && inspectedNodeId.value === id) {
+  if (!id || (inspectedDiagramId.value === diagram.value?.id && inspectedNodeId.value === id)) {
     inspectedNodeId.value = ''; inspectedDiagramId.value = ''; pickedOccurrenceId.value = null;
     return;
   }

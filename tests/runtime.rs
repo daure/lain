@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
@@ -134,6 +136,7 @@ fn runtime_rejects_symlink_databases_and_sidecars() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn setup_preserves_unrelated_units_without_invoking_systemctl() {
     for symlink_unit in [false, true] {
         let temporary = TempDir::new().unwrap();
@@ -174,6 +177,7 @@ fn setup_preserves_unrelated_units_without_invoking_systemctl() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn dry_run_prints_escaped_unit_and_client_settings_without_installing() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state with spaces % $ \" quote");
@@ -263,6 +267,7 @@ fn status_checks_the_local_daemon_on_the_selected_port() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn successful_setup_atomically_saves_the_selected_port() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state");
@@ -302,6 +307,7 @@ fn successful_setup_atomically_saves_the_selected_port() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn setup_requires_an_active_unit_before_saving_port() {
     let temporary = TempDir::new().unwrap();
     let home = temporary.path().join("state");
@@ -463,6 +469,7 @@ fn cli_status(home: &Path, port: u16) -> Output {
         .unwrap()
 }
 
+#[cfg(target_os = "linux")]
 fn cli_setup(temporary: &Path, home: &Path, port: u16, active: bool) -> Output {
     let bin = temporary.join("bin");
     fs::create_dir(&bin).unwrap();

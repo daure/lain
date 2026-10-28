@@ -489,6 +489,13 @@ async function followGraphSteps() {
     return { fitted: element.dataset.fitted, scale: element.dataset.scale, left: scroll.scrollLeft, top: scroll.scrollTop };
   });
   await page.keyboard.press(';');
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector('.diagram-panel .viewport-enabled');
+    const scroll = canvas.querySelector('.viewport-scroll');
+    const content = canvas.querySelector('.viewport-content');
+    const scale = Math.min(1, (scroll.clientWidth - 40) / parseFloat(content.style.width), (scroll.clientHeight - 40) / parseFloat(content.style.height));
+    return canvas.dataset.fitted === 'true' && Math.abs(Number(canvas.dataset.scale) - scale) < 1e-9;
+  });
   const fitted = await framing();
   assert.equal(fitted.fitted, 'true');
   await page.keyboard.press('ArrowRight');

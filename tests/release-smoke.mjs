@@ -14,7 +14,8 @@ const sourceBinary = path.resolve(process.argv[2] || 'target/release/lain');
 const root = await mkdtemp(path.join(process.env.RUNNER_TEMP || tmpdir(), 'lain-release-'));
 const home = path.join(root, 'state');
 const binDir = path.join(root, 'bin');
-const binary = path.join(binDir, 'lain');
+const windows = process.platform === 'win32';
+const binary = path.join(binDir, windows ? 'lain.exe' : 'lain');
 const env = { ...process.env, XDG_CONFIG_HOME: path.join(root, 'config') };
 let daemon;
 let closed;
@@ -25,7 +26,9 @@ async function stop() {
   daemon.kill('SIGTERM');
   const timer = setTimeout(() => daemon.kill('SIGKILL'), 5000);
   try {
-    assert.deepEqual(await closed, [0, null], output);
+    const result = await closed;
+    if (windows) assert.ok(result[0] !== null || result[1] !== null, output);
+    else assert.deepEqual(result, [0, null], output);
   } finally {
     clearTimeout(timer);
     daemon = undefined;
@@ -33,8 +36,12 @@ async function stop() {
 }
 
 try {
-  const installer = fileURLToPath(new URL('../scripts/install.sh', import.meta.url));
-  await run('bash', [installer, '--binary', sourceBinary, '--bin-dir', binDir], { env });
+  const installer = fileURLToPath(new URL(windows ? '../scripts/install.ps1' : '../scripts/install.sh', import.meta.url));
+  if (windows) {
+    await run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-Binary', sourceBinary, '-BinDir', binDir], { env });
+  } else {
+    await run('bash', [installer, '--binary', sourceBinary, '--bin-dir', binDir], { env });
+  }
   assert.match((await run(binary, ['--version'], { env })).stdout, /^lain \d+\.\d+\.\d+/);
 
   const listener = net.createServer();
@@ -47,7 +54,8 @@ try {
   const base = `http://127.0.0.1:${port}`;
   const preview = await cli('setup', '--dry-run');
   assert.ok(preview.stdout.includes(binary));
-  assert.ok(preview.stdout.includes(`--port ${port} serve`));
+  if (process.platform === 'darwin') assert.ok(preview.stdout.includes(`<string>${port}</string><string>serve</string>`));
+  else assert.ok(preview.stdout.includes(`--port ${port} serve`));
 
   async function start() {
     output = '';
@@ -91,6 +99,12 @@ try {
   }
   const viewer = new URL((await cli('open', '--print-url')).stdout.trim());
   assert.equal(viewer.href, `${base}/`);
+  if (process.env.LAIN_TEST_CHART_EXPORT === '1') {
+    const diagram = saved.document.diagrams[0].id;
+    const response = await fetch(`${base}/api/explanations/order-lifecycle/diagrams/${diagram}/export?format=svg`, { signal: AbortSignal.timeout(35000) });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.match(await response.text(), /<svg[\s>]/);
+  }
   await stop();
   await start();
   await cli('status');

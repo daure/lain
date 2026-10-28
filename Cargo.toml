@@ -1,6 +1,6 @@
 [package]
 name = "lain"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 description = "A local viewer for agent-published software explanations"
 license = "MIT"
@@ -14,7 +14,6 @@ clap = { version = "4", features = ["derive", "env"] }
 dirs = "6"
 futures-util = "0.3"
 mime_guess = "2"
-nix = { version = "0.31", features = ["signal", "process"] }
 percent-encoding = "2"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -30,6 +29,13 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 tokio-tungstenite = "0.29"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["signal", "process", "fs", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 http-body-util = "0.1"

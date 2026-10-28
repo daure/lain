@@ -2,9 +2,10 @@
 import { computed, nextTick, ref, shallowRef, useId, watch, type ComponentPublicInstance } from 'vue';
 import DiagramViewport from './DiagramViewport.vue';
 import WiringDetails from './WiringDetails.vue';
+import WiringConnectionPreview from './WiringConnectionPreview.vue';
 import type { Occurrence, Scenario, Wiring } from '../model';
 import { qualifiedId, wiringElement, wiringKindLabels, wiringPlayback, wiringStateLabels, type WiringScope, type WiringSelection } from '../wiring';
-import { compactLines, wiringFocusBounds, wiringLayout, wiringPort, type WiringLayout } from '../wiring-layout';
+import { compactLines, wiringFocusBounds, wiringLayout, wiringPort, type WiringCard, type WiringLayout } from '../wiring-layout';
 import { wiringIcon } from '../wiring-icons';
 
 const props = withDefaults(defineProps<{ wiring: Wiring; scenarios: Scenario[]; scenario: Scenario; occurrence: Occurrence; stateKey: string; detailsVisible?: boolean }>(), { detailsVisible: true });
@@ -14,6 +15,7 @@ const details = ref<HTMLElement>();
 const selection = ref<WiringSelection>();
 const detailsOpen = ref(false);
 const onlyCurrentStep = ref(false);
+const previewRouted = ref(false);
 let opener: HTMLElement | SVGElement | undefined;
 const marker = `wiring-arrow-${useId().replace(/[^a-z0-9-]/gi, '')}`;
 const layout = shallowRef<WiringLayout>();
@@ -41,6 +43,9 @@ const visibleLayout = computed(() => {
   };
 });
 const currentBounds = computed(() => layout.value && wiringFocusBounds(layout.value, playback.value.current));
+const selectedConnection = computed(() => selection.value?.kind === 'connection' && visibleLayout.value?.connections.some(edge => edge.id === selection.value?.id)
+  ? props.wiring.connections.find(edge => edge.id === selection.value?.id) : undefined);
+const selectedEdge = computed(() => visibleLayout.value?.connections.find(edge => edge.id === selectedConnection.value?.id));
 const overviewNodes = computed(() => [...visibleLayout.value?.groups ?? [], ...visibleLayout.value?.components ?? []].map(item => ({
   x: item.x - item.width / 2, y: item.y - item.height / 2, width: item.width, height: item.height,
   active: playback.value.current.components.has(item.id) || playback.value.current.groups.has(item.id),
@@ -84,6 +89,17 @@ function browseDetails() {
   selection.value = undefined;
   inspect();
 }
+function deselect() {
+  if (!selection.value) return;
+  selection.value = undefined;
+  canvas.value?.region?.focus({ preventScroll: true });
+}
+async function navigateEndpoint(card: WiringCard) {
+  await canvas.value?.focusAt({ x: card.x, y: card.y });
+  const element = [...canvas.value?.region?.querySelectorAll<SVGElement>('[data-wiring-component-id]') ?? []]
+    .find(element => element.dataset.wiringComponentId === card.id);
+  element?.querySelector<SVGElement>('.wiring-heading')?.focus({ preventScroll: true });
+}
 watch(() => props.wiring, wiring => {
   if (selection.value && !wiringElement(wiring, selection.value)) { selection.value = undefined; closeDetails(false); }
 });
@@ -96,7 +112,10 @@ defineExpose({ canvas, detailsOpen, toggleDetails, closeDetails, async ready() {
     <div class="wiring-body">
       <p v-if="layoutError" role="alert">{{ layoutError }}</p>
       <p v-else-if="!layout" role="status">Laying out wiring…</p>
-      <DiagramViewport v-if="layout && !layoutError" ref="canvas" :state-key="stateKey" :width="layout.width" :height="layout.height" title="Shared wiring map" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :export-scenario="true" :export-step="true" :export-occurrence-id="currentBounds ? occurrence.id : undefined" :scenario-title="scenario.title" :focus-bounds="currentBounds ?? null" :focus-key="`${scenario.id}/${occurrence.id}`" initial-fit>
+      <DiagramViewport v-if="layout && !layoutError" ref="canvas" :state-key="stateKey" :width="layout.width" :height="layout.height" title="Shared wiring map" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :export-scenario="true" :export-step="true" :export-occurrence-id="currentBounds ? occurrence.id : undefined" :scenario-title="scenario.title" :focus-bounds="currentBounds ?? null" :focus-key="`${scenario.id}/${occurrence.id}`" initial-fit @background="deselect">
+        <template #overlay="{ view, scale, offset }">
+          <WiringConnectionPreview v-if="selectedConnection && selectedEdge" :connection="selectedConnection" :edge="selectedEdge" :components="visibleLayout?.components ?? []" :view="view" :scale="scale" :offset="offset" @navigate="navigateEndpoint" @routed="previewRouted = $event" />
+        </template>
         <template #controls>
           <button type="button" aria-label="Only current step" title="Only current step" :aria-pressed="onlyCurrentStep" @click="onlyCurrentStep = !onlyCurrentStep"><i class="pi pi-filter" aria-hidden="true" /></button>
         </template>
@@ -105,7 +124,7 @@ defineExpose({ canvas, detailsOpen, toggleDetails, closeDetails, async ready() {
           <g v-for="group in visibleLayout?.groups" :key="group.id" :data-wiring-group-id="group.id" :class="['wiring-group', state('groups', group.id)]" :transform="`translate(${group.x - group.width / 2},${group.y - group.height / 2})`" role="group" :aria-label="description(group.label, 'groups', group.id)">
             <rect :width="group.width" :height="group.height" rx="8" /><path :d="`M0 ${group.headerHeight} H${group.width}`" /><text :x="group.width / 2" y="24" text-anchor="middle"><tspan v-for="(line, index) in group.lines" :key="index" :x="group.width / 2" :dy="index ? 20 : 0">{{ line }}</tspan></text>
           </g>
-          <g v-for="edge in visibleLayout?.connections" :key="edge.id" :data-wiring-connection-id="edge.id" :class="['wiring-connection', edge.kind, edge.status, state('connections', edge.id), { inspected: selected('connection', edge.id) }]" tabindex="0" role="button" :aria-label="`${description(edge.label, 'connections', edge.id)} · ${edge.status} · ${edge.gaps} field gaps`" :aria-pressed="selected('connection', edge.id)" @click="inspect({ kind: 'connection', id: edge.id }, $event)" @keydown.enter.stop.prevent="inspect({ kind: 'connection', id: edge.id }, $event)" @keydown.space.stop.prevent="inspect({ kind: 'connection', id: edge.id }, $event)">
+          <g v-for="edge in visibleLayout?.connections" :key="edge.id" :data-wiring-connection-id="edge.id" :class="['wiring-connection', edge.kind, edge.status, state('connections', edge.id), { inspected: selected('connection', edge.id), 'preview-routed': previewRouted && selected('connection', edge.id) }]" tabindex="0" role="button" :aria-label="`${description(edge.label, 'connections', edge.id)} · ${edge.status} · ${edge.gaps} field gaps`" :aria-pressed="selected('connection', edge.id)" @click="inspect({ kind: 'connection', id: edge.id }, $event)" @keydown.enter.stop.prevent="inspect({ kind: 'connection', id: edge.id }, $event)" @keydown.space.stop.prevent="inspect({ kind: 'connection', id: edge.id }, $event)">
             <defs><marker :id="`${marker}-${edge.id}`" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="currentColor" /></marker></defs>
             <title>{{ edge.label }} · {{ edge.kind }} · {{ edge.status }} · {{ edge.gaps }} field gaps</title>
             <path class="connection-hit" :d="edge.path" /><path class="connection-line" :d="edge.path" :marker-end="`url(#${marker}-${edge.id})`" />
@@ -146,7 +165,8 @@ defineExpose({ canvas, detailsOpen, toggleDetails, closeDetails, async ready() {
 .wiring-card.inspected .card-surface{stroke:var(--inspection);stroke-width:2.5}.heading-selection{fill:var(--inspection-surface);pointer-events:none}.wiring-card.inspected .wiring-heading{opacity:1}
 .wiring-row.inspected rect{fill:var(--inspection-surface);stroke:var(--inspection);stroke-width:2}
 .wiring-row.inspected text{opacity:1}.wiring-row.inspected:not(.current) text,.wiring-row.inspected:not(.current) .port-description{fill:var(--inspection)!important}
-.wiring-connection.inspected{opacity:1}.wiring-connection.inspected .wire-caption{stroke:var(--inspection);stroke-width:2;fill:var(--inspection-surface);fill-opacity:1}
-.wiring-connection.inspected:not(.current) text,.wiring-connection.inspected:not(.current) .wire-kind{fill:var(--inspection)!important}
+.wiring-connection.inspected{color:var(--inspection);opacity:1}.wiring-connection.inspected .wire-caption{stroke:var(--inspection);stroke-width:2;fill:var(--inspection-surface);fill-opacity:1}
+.wiring-connection.inspected text,.wiring-connection.inspected .wire-kind{fill:var(--inspection)!important}
+.wiring-connection.preview-routed .connection-line,.wiring-connection.preview-routed .connection-hit{visibility:hidden}
 @media(max-width:1000px){.wiring-details-slot{position:absolute;inset:0 0 0 auto;width:min(420px,100%);z-index:6;box-shadow:-8px 0 24px #0002}}
 </style>

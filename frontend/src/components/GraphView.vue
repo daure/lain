@@ -90,7 +90,7 @@ function edgeMarker(id: string) {
 </script>
 
 <template>
-  <DiagramViewport ref="canvas" v-slot="{ stickyLeft }" :state-key="stateKey" :width="layout.width" :height="layout.height" :title="title" :scenario-title="scenarioTitle" :enabled="interactive === true" :focus-point="focusPoint" :focus-key="currentOccurrenceId" scroll-class="graph-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :export-scenario="scenarioNodeIds !== undefined || scenarioEdgeIds !== undefined">
+  <DiagramViewport ref="canvas" v-slot="{ stickyLeft }" :state-key="stateKey" :width="layout.width" :height="layout.height" :title="title" :scenario-title="scenarioTitle" :enabled="interactive === true" :focus-point="focusPoint" :focus-key="currentOccurrenceId" scroll-class="graph-scroll" :overview-nodes="overviewNodes" :overview-edges="overviewEdges" :export-scenario="scenarioNodeIds !== undefined || scenarioEdgeIds !== undefined" @background="inspectedNodeId && emit('select', '')">
     <svg :class="['graph', { 'scenario-path': scenarioNodeIds !== undefined || scenarioEdgeIds !== undefined }]" :viewBox="`0 0 ${layout.width} ${layout.height}`" :style="interactive ? { width: `${layout.width}px`, height: `${layout.height}px` } : { minWidth: `${Math.min(layout.width, 1000)}px` }" :role="interactive ? 'group' : 'img'" :aria-label="title">
       <title>{{ title }}</title>
       <defs>

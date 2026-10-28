@@ -17,7 +17,9 @@ Step through recorded scenarios in the browser and inspect the data behind each 
 
 ## Install
 
-**x86_64 Linux, glibc 2.39+** (Ubuntu 24.04+). Requires `curl` and `tar`.
+**Linux x64** (glibc 2.39+, Ubuntu 24.04+), **macOS Intel/Apple Silicon**, and **Windows x64**.
+
+Linux and macOS (`curl` and `tar` required):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -28,8 +30,15 @@ lain demo
 lain
 ```
 
-The installer creates a systemd user service on first install. Without user systemd, [run in the foreground](docs/reference.md#install-a-release).
-Keep `~/.local/bin` on your PATH.
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/daure/lain/releases/latest/download/lain-installer.ps1 | iex
+```
+
+The installer adds a per-user background viewer: systemd on Linux, launchd on macOS, or a scheduled task on Windows.
+Keep `~/.local/bin` on your PATH; the Windows installer updates your user PATH.
+See [installation and foreground use](docs/reference.md#install-a-release).
 
 ## Try an explanation
 
@@ -54,7 +63,7 @@ See [client configuration](docs/reference.md#agent-connection) and [authoring gu
 
 ## Local data and security
 
-Explanations live in SQLite under `LAIN_HOME` (default `~/.local/share/lain`).
+Explanations live in SQLite under `LAIN_HOME` (defaults follow the [platform's local data directory](docs/reference.md#commands)).
 The daemon is loopback-only, but any local process can read or change explanations.
 Redact sensitive data before publishing. See [security and scope](docs/reference.md#security-and-scope).
 

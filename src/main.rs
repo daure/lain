@@ -5,6 +5,8 @@ use clap::{Parser, Subcommand};
 use lain::{http, runtime::Runtime, service::AppService};
 use reqwest::Client;
 
+mod shutdown;
+
 #[derive(Parser)]
 #[command(
     version,
@@ -28,7 +30,7 @@ enum Commands {
         #[arg(long)]
         print_url: bool,
     },
-    /// Install and start the systemd user service.
+    /// Install and start the per-user background viewer.
     Setup {
         #[arg(long)]
         dry_run: bool,
@@ -72,16 +74,10 @@ async fn serve(runtime: Runtime) -> Result<()> {
                 runtime.port
             )
         })?;
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let shutdown = shutdown::signal()?;
     println!("Lain listening on http://127.0.0.1:{}", runtime.port);
     axum::serve(listener, http::router(service, runtime.port))
-        .with_graceful_shutdown(async move {
-            tokio::select! {
-                _ = interrupt.recv() => (),
-                _ = terminate.recv() => (),
-            }
-        })
+        .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
 }
@@ -116,7 +112,14 @@ async fn open(runtime: &Runtime, print_url: bool) -> Result<()> {
         return Ok(());
     }
     status(runtime).await?;
+    #[cfg(target_os = "linux")]
     let opened = Command::new("xdg-open").arg(&url).status();
+    #[cfg(target_os = "macos")]
+    let opened = Command::new("open").arg(&url).status();
+    #[cfg(windows)]
+    let opened = Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .status();
     match opened {
         Ok(status) if status.success() => Ok(()),
         _ => bail!(

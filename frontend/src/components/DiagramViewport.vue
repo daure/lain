@@ -27,7 +27,7 @@ const props = withDefaults(defineProps<{
   initialFit?: boolean;
   autoFollow?: boolean;
 }>(), { enabled: true, overviewNodes: () => [], overviewEdges: () => [], exportEnabled: true, initialFit: false, autoFollow: true });
-const emit = defineEmits<{ change: [] }>();
+const emit = defineEmits<{ change: []; background: [] }>();
 const root = ref<HTMLElement>();
 const region = ref<HTMLElement>();
 const scale = ref(1);
@@ -73,6 +73,7 @@ type Point = { x: number; y: number };
 const touches = new Map<number, Point>();
 let pinch: { distance: number; scale: number; anchor: Point } | undefined;
 let suppressPinchClick = false;
+let suppressDragClick = false;
 let pendingZoomPan: { left: number; top: number } | undefined;
 
 function track() {
@@ -311,7 +312,7 @@ function resize() {
 
 function startCanvasDrag(event: PointerEvent) {
   if (!props.enabled || event.button !== 0) return;
-  if (!touches.size) suppressPinchClick = false;
+  if (!touches.size) { suppressPinchClick = false; suppressDragClick = false; }
   if (event.pointerType === 'touch') {
     touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (touches.size >= 2) {
@@ -346,6 +347,7 @@ function moveCanvas(event: PointerEvent) {
     }
   }
   if (canvasDrag?.id !== event.pointerId) return;
+  if (Math.hypot(canvasDrag.x - event.clientX, canvasDrag.y - event.clientY) > 5) suppressDragClick = true;
   pan(canvasDrag.left + canvasDrag.x - event.clientX, canvasDrag.top + canvasDrag.y - event.clientY);
 }
 
@@ -356,9 +358,14 @@ function endCanvasDrag(event: PointerEvent) {
 }
 
 function onCanvasClick(event: MouseEvent) {
-  if (!suppressPinchClick || event.detail === 0) return;
-  event.preventDefault();
-  event.stopPropagation();
+  if ((suppressPinchClick || suppressDragClick) && event.detail !== 0) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (!props.enabled || event.defaultPrevented) return;
+  if (event.target instanceof Element && event.target.closest('[role="button"], button, a, [data-wiring-component-id]')) return;
+  emit('background');
 }
 
 function mapPoint(event: PointerEvent) {
@@ -476,6 +483,7 @@ defineExpose({ region, scale, offset, fit, toggleFit, zoom, actualSize, focusAt,
       </div>
       <template v-else><slot name="sticky" /><slot :sticky-left="0" /></template>
     </div>
+    <slot v-if="enabled" name="overlay" :view="view" :scale="scale" :offset="offset" />
     <div v-if="enabled" class="viewport-tools" @pointerdown.stop>
       <svg class="diagram-minimap" :viewBox="`0 0 ${width} ${height}`" role="group" aria-label="Diagram overview. Drag the viewport to pan; Up/Down pan, Home fits the diagram." tabindex="0"
            @pointerdown="startMapDrag" @pointermove="moveMap" @pointerup="endDrag" @pointercancel="endDrag" @lostpointercapture="endDrag" @keydown="onMapKeydown">
