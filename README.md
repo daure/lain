@@ -1,24 +1,23 @@
 # Lain
 
-**Turn software explanations into diagrams you can walk through.**
+Local, interactive software explanations published by coding agents.
 
 [![Release](https://img.shields.io/github/v/release/daure/lain)](https://github.com/daure/lain/releases/latest)
 [![Build](https://github.com/daure/lain/actions/workflows/release.yml/badge.svg)](https://github.com/daure/lain/actions/workflows/release.yml)
 
 [Install](#install) · [Try it](#try-an-explanation) · [MCP](#connect-an-agent) · [Reference](docs/reference.md)
 
-Lain is a local web viewer for agent-published software explanations. Explore a domain model, follow recorded scenarios through behavioral diagrams, and inspect the values before and after each event.
+Step through recorded scenarios in the browser and inspect the data behind each event.
 
-## What you get
+## Features
 
-- **Concrete walkthroughs:** step through recorded paths, including repeated visits and failure cases.
-- **Connected views:** switch between scenario playback, full diagrams, and a domain ERD.
-- **Comparable behavior:** explore related scenarios with before/after data and recorded calls.
+- Flow, state, and sequence diagrams with scenario playback.
+- Domain models and before/after data for each recorded step.
+- Related scenarios for comparing success paths, retries, and failures.
 
 ## Install
 
-Prebuilt binaries support **x86_64 Linux with glibc 2.39+** (Ubuntu 24.04+).
-Requires `curl` and `tar`; Rust, Node, and a database server are not required.
+**x86_64 Linux, glibc 2.39+** (Ubuntu 24.04+). Requires `curl` and `tar`.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -29,45 +28,42 @@ lain demo
 lain
 ```
 
-On first installation, the installer sets up a systemd user service. Without user systemd, follow the installer's manual instructions or [run in the foreground](docs/reference.md#install-a-release).
-Keep `~/.local/bin` on your shell's PATH.
+The installer creates a systemd user service on first install. Without user systemd, [run in the foreground](docs/reference.md#install-a-release).
+Keep `~/.local/bin` on your PATH.
 
 ## Try an explanation
 
-1. Run `lain demo` to publish the bundled order lifecycle, release approval, and incident recovery examples.
-2. Run `lain` to open the viewer, then choose an explanation and a scenario.
-3. Step through events with `h` / `l`; open the data inspector with `n` to compare Changes, Before, After, and Calls.
+1. Run `lain demo` to load the bundled examples.
+2. Run `lain` and select an explanation and scenario.
+3. Use `h` / `l` to step through events and `n` to inspect Changes, Before, After, and Calls.
 
-The viewer supports light and dark themes. See the [viewer guide](docs/reference.md#viewer) for diagrams, comparisons, keyboard actions, and chart exports.
+See the [viewer guide](docs/reference.md#viewer) for comparisons, themes, shortcuts, and exports.
 
 ## Connect an agent
 
-Connect a local Streamable HTTP MCP client to:
+Point a local Streamable HTTP MCP client at:
 
 ```text
 http://127.0.0.1:38475/mcp
 ```
 
-The agent calls `get_context` for authoring guidance, then `publish_explanation` to publish a document.
-Ask it to explain a workflow with a domain model and concrete success and failure scenarios.
-The browser updates when an explanation is published.
+The agent calls `get_context`, then `publish_explanation`. The viewer updates automatically.
+Ask for a workflow explanation with concrete success and failure scenarios.
 
-See [agent connection and client configuration](docs/reference.md#agent-connection) and the [authoring guide](agent-instructions.md).
+See [client configuration](docs/reference.md#agent-connection) and [authoring guidance](agent-instructions.md).
 
 ## Local data and security
 
-Data stays in a local SQLite database under `LAIN_HOME` (default `~/.local/share/lain`).
-The daemon listens on loopback; any local process can read or change explanations.
-Publish only redacted data. See [security and scope](docs/reference.md#security-and-scope) before sharing explanations.
+Explanations live in SQLite under `LAIN_HOME` (default `~/.local/share/lain`).
+The daemon is loopback-only, but any local process can read or change explanations.
+Redact sensitive data before publishing. See [security and scope](docs/reference.md#security-and-scope).
 
 ## Documentation and contributing
 
-- [Installation, updates, and manual setup](docs/reference.md#install-a-release)
-- [Commands and data storage](docs/reference.md#commands)
-- [Viewer and keyboard actions](docs/reference.md#viewer)
-- [Build from source](docs/reference.md#build-from-source) · [Development](docs/reference.md#development) — Rust 1.96+, Node 24+, and npm
-- [Architecture](architecture.md) · [Verification](docs/reference.md#verify) · [Releasing](docs/reference.md#release)
-- [Report a bug or request a feature](https://github.com/daure/lain/issues)
+- [Installation and updates](docs/reference.md#install-a-release) · [Commands and storage](docs/reference.md#commands)
+- [Build and development](docs/reference.md#build-from-source) — Rust 1.96+, Node 24+, npm
+- [Architecture](architecture.md) · [Verification](docs/reference.md#verify) · [Releases](docs/reference.md#release)
+- [Issues](https://github.com/daure/lain/issues)
 
 ## License
 
