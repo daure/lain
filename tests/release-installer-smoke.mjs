@@ -30,6 +30,10 @@ const env = {
   XDG_CONFIG_HOME: path.join(root, 'config'),
   LOCALAPPDATA: path.join(root, 'local-app-data'),
 };
+if (windows) {
+  // Windows PowerShell must build its own paths instead of loading inherited PowerShell 7 modules.
+  for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
+}
 
 async function install() {
   const args = windows
