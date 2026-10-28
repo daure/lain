@@ -43,6 +43,13 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     let cli = Cli::parse();
     let runtime = Runtime::load(cli.home, cli.port)?;
     match cli.command.unwrap_or(Commands::Open { print_url: false }) {

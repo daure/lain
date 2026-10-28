@@ -370,10 +370,16 @@ fn is_executable(path: &Path) -> bool {
 struct BrowserProcess {
     child: RendererChild,
     drain: Option<tokio::task::JoinHandle<()>>,
+    #[cfg(unix)]
+    _socket_directory: tempfile::TempDir,
 }
 
 impl BrowserProcess {
     async fn start(executable: &Path, profile: &Path) -> anyhow::Result<(Self, DevTools)> {
+        #[cfg(unix)]
+        let socket_directory = tempfile::Builder::new()
+            .prefix("lain-chrome-")
+            .tempdir_in("/tmp")?;
         let mut command = Command::new(executable);
         command
             .args([
@@ -388,10 +394,11 @@ impl BrowserProcess {
                 "--remote-debugging-port=0",
             ])
             .arg(format!("--user-data-dir={}", profile.display()))
-            .env("TMPDIR", profile)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
+        #[cfg(unix)]
+        command.env("TMPDIR", socket_directory.path());
         #[cfg(unix)]
         let child = command.process_group(0).kill_on_drop(true).spawn()?;
         #[cfg(windows)]
@@ -402,7 +409,12 @@ impl BrowserProcess {
                 .wrap(JobObject)
                 .spawn()?
         };
-        let mut browser = BrowserProcess { child, drain: None };
+        let mut browser = BrowserProcess {
+            child,
+            drain: None,
+            #[cfg(unix)]
+            _socket_directory: socket_directory,
+        };
         #[cfg(unix)]
         let mut lines = BufReader::new(browser.child.stderr.take().unwrap()).lines();
         #[cfg(windows)]

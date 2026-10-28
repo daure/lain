@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 const sourceBinary = path.resolve(process.argv[2] || 'target/release/lain');
 const root = await mkdtemp(path.join(process.env.RUNNER_TEMP || tmpdir(), 'lain-release-'));
-const home = path.join(root, 'state');
+const home = path.join(root, 'state with a long path for Chromium socket isolation');
 const binDir = path.join(root, 'bin');
 const windows = process.platform === 'win32';
 const binary = path.join(binDir, windows ? 'lain.exe' : 'lain');

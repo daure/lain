@@ -348,6 +348,30 @@ fn daemon_lock_releases_on_drop_and_preserves_private_lock_file() {
 }
 
 #[test]
+fn daemon_lock_drop_releases_ownership_while_a_forked_child_holds_the_descriptor() {
+    use std::os::fd::AsRawFd;
+
+    let temporary = TempDir::new().unwrap();
+    let runtime = Runtime::load(Some(temporary.path().join("state")), None).unwrap();
+    let first = runtime.daemon_lock().unwrap();
+    let (reader, writer) = nix::unistd::pipe().unwrap();
+    // The child uses only async-signal-safe calls before exiting.
+    let child = match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => unsafe {
+            let mut byte = 0_u8;
+            nix::libc::read(reader.as_raw_fd(), (&mut byte as *mut u8).cast(), 1);
+            nix::libc::_exit(0);
+        },
+        nix::unistd::ForkResult::Parent { child } => child,
+    };
+    drop(first);
+    let second = runtime.daemon_lock();
+    nix::unistd::write(&writer, b"x").unwrap();
+    nix::sys::wait::waitpid(child, None).unwrap();
+    assert!(second.is_ok(), "{second:?}");
+}
+
+#[test]
 fn daemon_lock_rejects_unsafe_files_without_changing_them() {
     for unsafe_kind in ["symlink", "hardlink", "permissions"] {
         let temporary = TempDir::new().unwrap();

@@ -30,6 +30,15 @@ pub struct Runtime {
     pub port: u16,
 }
 
+#[derive(Debug)]
+pub struct DaemonLock(File);
+
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
@@ -90,7 +99,7 @@ impl Runtime {
         format!("http://127.0.0.1:{}", self.port)
     }
 
-    pub fn daemon_lock(&self) -> Result<File> {
+    pub fn daemon_lock(&self) -> Result<DaemonLock> {
         ensure_safe_ancestors(&self.home)?;
         files::check_private_directory(&self.home)?;
         let path = self.home.join("daemon.lock");
@@ -108,7 +117,7 @@ impl Runtime {
         .with_context(|| format!("cannot safely open daemon lock: {}", path.display()))?;
         check_private_file(&file, &path)?;
         match file.try_lock() {
-            Ok(()) => Ok(file),
+            Ok(()) => Ok(DaemonLock(file)),
             Err(fs::TryLockError::WouldBlock) => bail!(
                 "another Lain daemon already owns {}; stop it before running serve for this home",
                 self.home.display()
