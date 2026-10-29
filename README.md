@@ -15,6 +15,24 @@ Step through recorded scenarios in the browser and inspect the data behind each 
 - Domain models and before/after data for each recorded step.
 - Related scenarios for comparing success paths, retries, and failures.
 
+## Screenshots
+
+![Wiring view with an active connection and its API response schema](docs/screenshots/wiring.png)
+
+<sub>Wiring — trace a connection from the storefront to the API and inspect its contract.</sub>
+
+![Payment callback sequence with the current message highlighted](docs/screenshots/sequence.png)
+
+<sub>Sequence — follow payment callbacks across services, including retries and alternate outcomes.</sub>
+
+![Shipment state diagram with the parcel-packed state highlighted](docs/screenshots/state.png)
+
+<sub>State — step through a parcel's lifecycle with the current state highlighted.</sub>
+
+![Domain ERD showing Order, Fulfillment, and Shipment relationships](docs/screenshots/erd.png)
+
+<sub>ERD — inspect domain relationships and the fields involved in the current step.</sub>
+
 ## Install
 
 **Linux x64** (glibc 2.39+, Ubuntu 24.04+), **macOS Intel/Apple Silicon**, and **Windows x64**.
