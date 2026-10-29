@@ -1,13 +1,13 @@
 # Lain
 
-Local, interactive software explanations published by coding agents.
+Local, MCP-driven software explanations with interactive scenario playback.
 
 [![Release](https://img.shields.io/github/v/release/daure/lain)](https://github.com/daure/lain/releases/latest)
 [![Build](https://github.com/daure/lain/actions/workflows/release.yml/badge.svg)](https://github.com/daure/lain/actions/workflows/release.yml)
 
 [Install](#install) · [Try it](#try-an-explanation) · [MCP](#connect-an-agent) · [Reference](docs/reference.md)
 
-Step through recorded scenarios in the browser and inspect the data behind each event.
+Agents use Model Context Protocol (MCP) to query, publish, update, and delete explanations, including their diagrams, scenarios, and recorded data. Step through those scenarios in the browser and inspect the data behind each event.
 
 ## Features
 
